@@ -1,9 +1,14 @@
 (define-module (ice-9 peg)
-  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm peg-find get-code define-grammar)
+  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
   :export-syntax (until-works string-collapse single? push-not-null! single-filter push!)
   :use-module (ice-9 pretty-print))
+(define (eeval exp)
+  (eval exp (interaction-environment)))
 
 (use-modules (ice-9 pretty-print))
+(use-modules (language tree-il))
+
+(eval-when (compile load eval)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; CONVENIENCE MACROS
@@ -120,7 +125,7 @@
          `(list ,at '()))
         (#t
          (begin
-           (pretty-print `(cg-generic-ret-error ,str ,strlen ,at ,code))
+           (pretty-print `(cg-generic-ret-error ,accum ,name ,body-uneval ,at))
            (pretty-print "Defaulting to accum of none.\n")
            `(list ,at '())))))))
 (define cggr cg-generic-ret)
@@ -195,7 +200,9 @@
     ((eq? (car match) 'ignore) ;; match but don't parse
      (cg-match-func (cadr match) 'none))
     ((eq? (car match) 'capture) ;; parse
-     (cg-match-func (cadr match) 'all))
+     (cg-match-func (cadr match) 'body))
+    ((eq? (car match) 'peg)
+     (pattern-builder (cadr match) (baf accum)))
     ((eq? (car match) 'and) (cg-and (cdr match) (baf accum)))
     ((eq? (car match) 'or) (cg-or (cdr match) (baf accum)))
     ((eq? (car match) 'body)
@@ -631,8 +638,11 @@ sp <- [ \t\n]*
 (define peg-parse parse)
 
 ;; define-nonterm
+;; define-nonterm-f
 
 (define-macro (peg-find peg-matcher pattern)
+  (peg-find-f peg-matcher pattern))
+(define-macro (peg-match peg-matcher pattern)
   (peg-find-f peg-matcher pattern))
 (define (peg-find-f peg-matcher pattern)
   (safe-bind
@@ -652,11 +662,13 @@ sp <- [ \t\n]*
                     (,match (cadr ,ret)))
                 (list ,at ,end (string-collapse ,match)))))))))
 
+
 (define-macro (define-grammar str)
   (peg-parser str))
+(define define-grammar-f peg-parser)
 
 (define-macro (tst x)
-  (macroexpand (* x 2)))
+  (compile (macroexpand (* x 2)) #:from 'tree-il))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; OLD CODE
@@ -823,3 +835,4 @@ sp <- [ \t\n]*
 ;; (define-nonterm c-a (and "a" (body lit c-a ?) "b"))
 ;; (define-nonterm c-b (and "b" (body lit c-b ?) "c"))
 
+)
