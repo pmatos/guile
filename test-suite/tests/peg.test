@@ -140,7 +140,7 @@ Expr <- Sum")
   "cfunc <-- cSP ctype cSP cname cSP cargs cLB cSP cbody cRB
 ctype <-- cidentifier
 cname <-- cidentifier
-cargs <-- cLP (! (cSP cRB) carg cSP (cCOMMA / cRP) cSP)* cSP
+cargs <-- cLP (! (cSP cRP) carg cSP (cCOMMA / cRP) cSP)* cSP
 carg <-- cSP ctype cSP cname
 cbody <-- cstatement *
 cidentifier <- [a-zA-z][a-zA-Z0-9_]*
@@ -194,3 +194,10 @@ int mod(int a, int b) {
 (if (assert (peg-parse itl "b")) (pretty-print "Test passed, no worries!"))
 
 ;; (pretty-print "\n***\nAll tests passed!\n***\n")
+
+(define-grammar
+  "Begin <- '(*'
+End <- '*)
+C <- Begin N* End
+N <- C / (!Begin !End Z)
+Z <- .")

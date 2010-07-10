@@ -1,0 +1,400 @@
+@c -*-texinfo-*-
+@c This is part of the GNU Guile Reference Manual.
+@c Copyright (C) 2006, 2010
+@c   Free Software Foundation, Inc.
+@c See the file guile.texi for copying conditions.
+
+@node Parsing Expression Grammars
+@section Parsing Expression Grammars
+
+Parsing expression grammars (hereafter PEGs) are a particular way of specifying formal languages for string processing.  They can be used either for text matching (think regular expressions) or for building recursive descent parsers (think lex/yacc).  Guile uses a slightly modified superset of PEG syntax that allows more control over what information is preserved during parsing.
+
+Wikipedia has a clear and concise introduction to PEGs if you want to familiarize yourself with the syntax: http://en.wikipedia.org/wiki/Parsing_expression_grammar.
+
+The module works by compiling PEGs down to lambda expressions.  These can either be stored in variables at compile-time by the define macros (@code{define-nonterm} and @code{define-grammar}) or calculated explicitly at runtime with the compile functions (@code{peg-sexp-compile} and @code{peg-string-compile}).
+
+They can then be used for either parsing (@code{peg-parse}) or matching (@code{peg-match}).  For convenience, @code{peg-match} will also take pattern literals in case you want to inline a simple search (people often use regular expressions this way).
+
+The rest of this documentation consists of a syntax reference, an API reference, and a tutorial.
+
+@menu
+* PEG Syntax Reference::
+* PEG API Reference::
+* PEG Tutorial::
+@end menu
+
+@node PEG Syntax Reference
+@subsection PEG Syntax Reference
+
+@subsubheading Normal PEG Syntax:
+
+@example
+Format:
+<choice type> <variables>:
+<string syntax>
+<S-expression syntax>
+
+Sequence a b:
+"a b"
+(and a b)
+
+Ordered Choice a b:
+"a/b"
+(or a b)
+
+Zero or more a:
+"a*"
+(body lit a *)
+
+One or more a:
+"a+"
+(body lit a +)
+
+Optional a:
+"e?"
+(body lit a ?)
+
+And predicate a:
+"&a"
+(body & a 1)
+
+Not predicate a:
+"!a"
+(body ! a 1)
+
+Any character:
+"."
+peg-any
+
+Range of characters a to z:
+"[a-z]"
+(range #\a #\z)
+
+String literal abc:
+"'abc'"
+"abc"
+@end example
+
+Example: @*
+@code{"(a !b / c &d*) 'e'+"} @*
+Would be:
+@lisp
+(and
+ (or
+  (and a (body ! b 1))
+  (and c (body & d *)))
+ (body lit "e" +))
+@end lisp
+
+@subsubheading Extended Syntax:
+@example
+Format:
+<choice type> <variables>:
+<S-expression syntax>
+
+Ignore the text matching a:
+(ignore a)
+
+Capture the text matching a:
+(capture a)
+
+Embed the PEG pattern a:
+(peg a)
+@end example
+
+Example: @*
+@code{"!a / 'b'"} @*
+Would be:
+@lisp
+(or (peg "!a") "b")
+@end lisp
+
+@node PEG API Reference
+@subsection PEG API Reference
+
+@subsubheading Define Macros
+
+The most straightforward way to define a PEG is by using one of the define macros (both of these macroexpand into @code{define} expressions).  More complicated (and perhaps enlightening) examples can be found in the tutorial.
+
+@deffn {Scheme Macro} define-grammar peg-string
+Defines all the nonterminals in the PEG grammar @var{peg-string}.  More precisely, @code{define-grammar} takes a superset of PEG grammars.  A normal PEG grammar has a ``<-'' between the nonterminal and the pattern.  @code{define-grammar} uses this symbol to determine what information it should propogate up the parse tree.  The normal ``<-'' propagates the matched text up the parse tree, ``<--'' propogates the matched text up the parse tree tagged with the name of the nonterminal, and ``<'' discards that matched text and propagates nothing up the parse tree.
+
+For example, if we:
+@lisp
+(define-grammar 
+  "as <- 'a'+
+bs <- 'b'+
+asORbs <- as/bs")
+(define-grammar 
+  "asTAG <-- 'a'+
+bsTAG <-- 'b'+
+asORbsTAG <-- asTAG/bsTAG")
+@end lisp
+Then:
+@lisp
+(peg-parse asORbs "aabbcc") @result{} (2 "aa")
+(peg-parse asORbsTAG "aabbcc") @result{} (2 (asORbsTAG (asTAG "aa")))
+@end lisp
+
+Note that in doing this, we have bound 6 variables at the toplevel (@var{as}, @var{bs}, @var{asORbs}, @var{asTAG}, @var{bsTAG}, and @var{asORbsTAG}).
+@end deffn
+
+@deffn {Scheme Macro} define-nonterm name capture-type peg-sexp
+Defines a single nonterminal @var{name}.  @var{capture-type} determines how much information is passed up the parse tree.  @var{peg-sexp} is a PEG in S-expression form.
+
+Possible values for capture-type: @*
+@code{all}: passes the matched text up the parse tree tagged with the name of the nonterminal. @*
+@code{body}: passes the matched text up the parse tree. @*
+@code{none}: passes nothing up the parse tree.
+
+For Example, if we:
+@lisp
+(define-nonterm as body (body lit "a" +))
+(define-nonterm bs body (body lit "b" +))
+(define-nonterm asORbs body (or as bs))
+(define-nonterm asTAG all (body lit "a" +))
+(define-nonterm bsTAG all (body lit "b" +))
+(define-nonterm asORbsTAG all (or asTAG bsTAG))
+@end lisp
+Then:
+@lisp
+(peg-parse asORbs "aabbcc") @result{} (2 "aa")
+(peg-parse asORbsTAG "aabbcc") @result{} (2 (asORbsTAG (asTAG "aa")))
+@end lisp
+
+Note that in doing this, we have bound 6 variables at the toplevel (@var{as}, @var{bs}, @var{asORbs}, @var{asTAG}, @var{bsTAG}, and @var{asORbsTAG}).
+@end deffn
+
+These are macros, with all that entails.  If you've built up a list at runtime and want to define a new PEG from it, you should e.g.:
+@lisp
+(define exp '(body lit "a" +))
+(eval `(define-nonterm as body ,exp) (interaction-environment))
+@end lisp
+The @code{eval} function has a bad reputation for efficiency, but this is mostly because of the extra work that has to be done compiling the expressions, which has to be done anyway when compiling the PEGs at runtime.
+
+@subsubheading Compile Functions
+It is sometimes useful to be able to compile anonymous PEG patterns at runtime.  These functions let you do that using either syntax.
+
+@deffn {Scheme Procedure} peg-string-compile peg-string capture-type
+Compiles the PEG pattern in @var{peg-string} propagating according to @var{capture-type} (capture-type can be any of the values from @code{define-nonterm}).
+@end deffn
+
+
+@deffn {Scheme Procedure} peg-sexp-compile peg-sexp capture-type
+Compiles the PEG pattern in @var{peg-sexp} propagating according to @var{capture-type} (capture-type can be any of the values from @code{define-nonterm}).
+@end deffn
+
+
+@subsubheading Parsing & Matching Functions
+
+For our purposes, ``parsing'' means parsing a string into a tree starting from the first character, while ``matching'' means searching through the string for a substring.  In practice, the only difference between the two functions is that @code{peg-parse} gives up if it can't find a valid substring starting at index 0 and @code{peg-match} keeps looking.  They are both equally capable of ``parsing'' and ``matching'' given those constraints.
+
+@deffn {Scheme Procedure} peg-parse nonterm string 
+Parses @var{string} using the PEG stored in @var{nonterm}.  If no match was found, @code{peg-parse} returns @code{#f}.  If a match was found, the ending index and parse tree of the match are returned in a list.
+
+The capture-type argument to define-nonterm allows you to choose what information to hold on to while parsing.  The options are:
+@code{all}: tag the matched text with the nonterminal
+@code{body}: just the matched text
+@code{none}: nothing
+
+@lisp
+(define-nonterm as all (body lit "a" +))
+(peg-parse as "aabbcc") @result{} (2 (as "aa"))
+
+(define-nonterm as body (body lit "a" +))
+(peg-parse as "aabbcc") @result{} (2 "aa")
+
+(define-nonterm as none (body lit "a" +))
+(peg-parse as "aabbcc") @result{} (2 ())
+
+(define-nonterm bs body (body lit "b" +))
+(peg-parse bs "aabbcc") @result{} #f
+@end lisp
+@end deffn
+
+@deffn {Scheme Macro} peg-match nonterm-or-peg string
+Searches through @var{string} looking for a matching subexpression.  @var{nonterm-or-peg} can either be a nonterminal or a literal PEG pattern.  When a literal PEG pattern is provided, @code{peg-match} works very similarly to the regular expression searches many programmars are used to.  If no match was found, @code{peg-match} returns false.  If a match was found, the starting index, ending index, and parse tree of the match are returned in a list.
+
+@lisp
+(define-nonterm as body (body lit "a" +))
+(peg-match as "aabbcc") @result{} (0 2 "aa")
+(peg-match (body lit "a" +) "aabbcc") @result{} (0 2 "aa")
+(peg-match "'a'+" "aabbcc") @result{} (0 2 "aa")
+
+(define-nonterm as all (body lit "a" +))
+(peg-match as "aabbcc") @result{} (0 2 (as "aa"))
+
+(define-nonterm bs body (body lit "b" +))
+(peg-match bs "aabbcc") @result{} (2 4 "bb")
+(peg-match (body lit "b" +) "aabbcc") @result{} (2 4 "bb")
+(peg-match "'b'+" "aabbcc") @result{} (2 4 "bb")
+
+(define-nonterm zs body (body lit "z" +))
+(peg-match zs "aabbcc") @result{} #f
+(peg-match (body lit "z" +) "aabbcc") @result{} #f
+(peg-match "'z'+" "aabbcc") @result{} #f
+@end lisp
+@end deffn
+
+@subsubheading Miscellaneous
+
+@deffn {Scheme Procedure} context-flatten tst lst
+Takes a predicate @var{tst} and a list @var{lst}.  Flattens @var{lst} until all elements are either atoms or satisfy @var{tst}.  If @var{lst} itself satisfies @var{tst}, @code{list lst} is returned (this is a flat list whose only element satisfies @var{tst}).
+
+@lisp
+(context-flatten (lambda (x) (and (number? (car x)) (= (car x) 1))) '(2 2 (1 1 (2 2)) (2 2 (1 1)))) @result{} (2 2 (1 1 (2 2)) 2 2 (1 1))
+(context-flatten (lambda (x) (and (number? (car x)) (= (car x) 1))) '(1 1 (1 1 (2 2)) (2 2 (1 1)))) @result{} ((1 1 (1 1 (2 2)) (2 2 (1 1))))
+@end lisp
+
+If you're wondering why this is here, take a look at the tutorial.
+@end deffn
+
+@node PEG Tutorial
+@section PEG Tutorial
+
+Right now this only contains a few examples and a small explanation of @code{context-flatten}.
+
+We can parse simple mathematical expressions with a PEG from Wikipedia:
+
+@lisp
+(define-grammar
+  "Value <-- [0-9]+ / '(' Expr ')'
+Product <-- Value (('*' / '/') Value)*
+Sum <-- Product (('+' / '-') Product)*
+Expr <- Sum")
+@end lisp
+
+Then:
+@lisp
+(peg-parse Value "1+1/2+(1+1)/2") @result{}
+(13
+ (Sum (Product (Value "1"))
+      (("+" (Product (Value "1") ("/" (Value "2"))))
+       ("+"
+        (Product
+          (Value "("
+                 (Sum (Product (Value "1"))
+                      ("+" (Product (Value "1"))))
+                 ")")
+          ("/" (Value "2")))))))
+@end lisp
+
+Notice that the lists aren't completely flat.  The PEG parser flattens the lists and concatenates the strings as much as it can for you without losing information (it may not be obvious looking at the flattened list, but this is what you want---otherwise the parsed expressions end up almost unusable).
+
+One unfortunate side-effect of this is that sometimes more information than you want is preserved.  
+For instance:
+
+@lisp
+(peg-parse Sum "1+1") @result{}
+(3
+ (Sum (Product (Value "1"))
+      ("+" (Product (Value "1")))))
+@end lisp
+But:
+@lisp
+(peg-parse Sum "1+1+1") @result{}
+(5
+ (Sum (Product (Value "1"))
+      (("+" (Product (Value "1")))
+       ("+" (Product (Value "1"))))))
+@end lisp
+
+In the second example, the parser has to decide whether or not to discard the information that both of the @code{("+" (Product (Value "1")))} forms are part of the same @code{"(('+' / '-') Product)*"} term of the PEG.  It errs on the side of caution and preserves the nesting.
+
+However, in this case we don't care about that nesting information---the distinction between the first @code{Product} and all the others is a meaningless artifact of the PEG's structure.  One straightforward solution is the @code{context-flatten} function.
+
+@lisp
+(context-flatten
+ (lambda (x) (not (list? (car x))))
+ (cdr '(Sum (Product (Value "1"))
+            (("+" (Product (Value "1")))
+             ("+" (Product (Value "1"))))))) @result{}
+((Product (Value "1"))
+ ("+" (Product (Value "1")))
+ ("+" (Product (Value "1"))))
+@end lisp
+
+If you're ever uncertain about the potential results of parsing something, remember the two absolute rules: @*
+1. No parsing information will ever be discarded. @*
+2. There will never be any lists with fewer than 2 elements.
+
+For the purposes of (1), "parsing information" means things tagged with the @code{any} keyword or the ``<--'' symbol.  Plain strings will be concatenated for readability.
+
+For example, consider the following PEG which parses comments (also from wikipedia):
+@lisp
+(define-grammar
+  "Begin <- '(*'
+End <- '*)'
+C <- Begin N* End
+N <- C / (!Begin !End Z)
+Z <- .")
+
+(peg-parse C "(*abc(*def*)*)(*second*)") @result{} (14 "(*abc(*def*)*)")
+@end lisp
+
+But if we change @code{Begin} and @code{End} to capture nonterminals (equivalent to the @code{any} keyword in S-expression syntax):
+
+@lisp
+(define-grammar
+  "Begin <-- '(*'
+End <-- '*)'
+C <- Begin N* End
+N <- C / (!Begin !End Z)
+Z <- .")
+
+(peg-parse C "(*abc(*def*)*)(*second*)") @result{}
+(14
+ ((Begin "(*")
+  ("abc" ((Begin "(*") "def" (End "*)")))
+  (End "*)")))
+@end lisp
+
+Since the @code{Begin} and @code{End} nonterminals are now capture nonterminals, the parser won't discard information about what they matched.  @code{Z}, however, is still a normal nonterminal, so when it matched "d" "e" and "f" in a row the parser combines these into "def".
+
+The short version is that 95% of the time the parser does what you want it to, and if you want to discard information about an expression that can match more than one capture nonterminal (e.g. @code{"(('+' / '-') Product)*"}) you need to call @code{context-flatten} with the test you want.  If this seems annoying, another solution is presented in the extended example below.
+
+@subsubheading Extended Example
+
+For a longer example, consider the following grammar that parses (highly) simplified C functions:
+@lisp
+(define-grammar
+  "cfunc <-- cSP ctype cSP cname cSP cargs cLB cSP cbody cRB
+ctype <-- cidentifier
+cname <-- cidentifier
+cargs <-- cLP (! (cSP cRP) carg cSP (cCOMMA / cRP) cSP)* cSP
+carg <-- cSP ctype cSP cname
+cbody <-- cstatement *
+cidentifier <- [a-zA-z][a-zA-Z0-9_]*
+cstatement <-- (!';'.)*cSC cSP
+cSC < ';'
+cCOMMA < ','
+cLP < '('
+cRP < ')'
+cLB < '@{'
+cRB < '@}'
+cSP < [ \t\n]*")
+@end lisp
+
+Then:
+@lisp
+(peg-parse cfunc "int square(int a) @{ return a*a;@}") @result{}
+(32
+ (cfunc (ctype "int")
+        (cname "square")
+        (cargs (carg (ctype "int") (cname "a")))
+        (cbody (cstatement "return a*a"))))
+@end lisp
+
+And:
+@lisp
+(peg-parse cfunc "int mod(int a, int b) @{ int c = a/b;return a-b*c; @}") @result{}
+(52
+ (cfunc (ctype "int")
+        (cname "mod")
+        (cargs (carg (ctype "int") (cname "a"))
+               (carg (ctype "int") (cname "b")))
+        (cbody (cstatement "int c = a/b")
+               (cstatement "return a- b*c"))))
+@end lisp
+
+By wrapping all the @code{carg} nonterminals in a @code{cargs} nonterminal, we were able to remove any ambiguity in the parsing structure and avoid having to call @code{context-flatten} on the output of @code{peg-parse}.  We used the same trick with the @code{cstatement} nonterminals, wrapping them in a @code{cbody} nonterminal.

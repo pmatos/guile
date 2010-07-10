@@ -302,6 +302,7 @@ available through both Scheme and C interfaces.
 * Control Mechanisms::          Controlling the flow of program execution.
 * Input and Output::            Ports, reading and writing.
 * LALR(1) Parsing::             Generating LALR(1) parsers.		
+* PEG Parsing::                 Parsing Expression Grammars.
 * Read/Load/Eval/Compile::      Reading and evaluating Scheme code.
 * Memory Management::           Memory management and garbage collection.
 * Objects::                     Low level object orientation support.
@@ -330,6 +331,7 @@ available through both Scheme and C interfaces.
 @include api-control.texi
 @include api-io.texi
 @include api-lalr.texi
+@include api-peg.texi
 @include api-evaluation.texi
 @include api-memory.texi
 @include api-modules.texi

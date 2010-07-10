@@ -407,6 +407,10 @@
         (if (single? res) (car res) res))
       lst))
 
+;; Makes sure LST is a list.
+(define (mklst lst)
+  (if (not (list? lst)) (list lst) lst))
+
 ;; Takes a list and "flattens" it, using tst to know when to stop instead of
 ;; terminating on atoms.
 (define (flatmaster tst lst)
@@ -414,7 +418,7 @@
       lst
       (if (tst lst)
           (list lst)
-          (apply append (map (lambda (x) (flatmaster tst x)) lst)))))
+          (apply append (map (lambda (x) (mklst (flatmaster tst x)) lst))))))
 
 ;; Gets the left-hand depth of a list.
 (define (depth lst)
