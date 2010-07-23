@@ -48,21 +48,32 @@
 
 ;; If TST is true, evaluate BODY and try again.
 ;; (turns out this is built-in, so I don't export it)
-(define-macro (while tst . body)
-  `(do () ((not ,tst))
-     ,@body))
+;;;;;Old Def:
+;; (define-macro (while tst . body)
+;;   `(do () ((not ,tst))
+;;      ,@body))
+
 
 ;; perform ACTION
 ;; if it succeeded, return its return value
 ;; if it failed, run IF_FAILS and try again
-(define-macro (until-works action if-fails)
-  (safe-bind
-   (retval)
-   `(let ((,retval ,action))
-      (while (not ,retval)
-             ,if-fails
-             (set! ,retval ,action))
-      ,retval)))
+;;;;;Old Def:
+;; (define-macro (until-works action if-fails)
+;;   (safe-bind
+;;    (retval)
+;;    `(let ((,retval ,action))
+;;       (while (not ,retval)
+;;              ,if-fails
+;;              (set! ,retval ,action))
+;;       ,retval)))
+(define-syntax until-works
+  (lambda (x)
+    (syntax-case x ()
+      ((_ action if-fails)
+       #'(let ((retval action))
+           (while (not retval)
+                  if-fails
+                  (set! retval action)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; GENERIC LIST-PROCESSING MACROS
@@ -70,12 +81,24 @@
 
 ;; return #t if the list has only one element
 ;; (calling length all the time on potentially long lists was really slow)
-(define-macro (single? lst)
-  `(and (list? ,lst) (not (null? ,lst)) (null? (cdr ,lst))))
+;;;;;Old Def:
+;; (define-macro (single? lst)
+;;   `(and (list? ,lst) (not (null? ,lst)) (null? (cdr ,lst))))
+(define-syntax single?
+  (lambda (x)
+    (syntax-case x ()
+      ((_ lst)
+       #'(and (list? lst) (not (null? lst)) (null? (cdr lst)))))))
 
 ;; push an object onto a list
-(define-macro (push! lst obj)
-  `(set! ,lst (cons ,obj ,lst)))
+;;;;;Old Def:
+;; (define-macro (push! lst obj)
+;;   `(set! ,lst (cons ,obj ,lst)))
+(define-syntax push!
+  (lambda (x)
+    (syntax-case x ()
+      ((_ lst obj)
+       #'(set! lst (cons obj lst))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; CODE GENERATORS
@@ -418,7 +441,7 @@
       lst
       (if (tst lst)
           (list lst)
-          (apply append (map (lambda (x) (mklst (flatmaster tst x)) lst))))))
+          (apply append (map (lambda (x) (mklst (flatmaster tst x))) lst)))))
 
 ;; Gets the left-hand depth of a list.
 (define (depth lst)
@@ -840,3 +863,32 @@ sp <- [ \t\n]*
 ;; (define-nonterm c-b (and "b" (body lit c-b ?) "c"))
 
 )
+
+(peg-match "'a'+" "bbaa")
+
+(define-syntax inc-sc
+  (lambda (x)
+    (syntax-case x ()
+      ((_ a)
+       #`(lambda (y) #,(datum->syntax x (inc-builder 'y 'a)))))))
+
+(define-syntax inc-sc
+  (lambda (x)
+    (syntax-case x ()
+      ((_ a)
+       (with-syntax ((inc-body (datum->syntax x (inc-builder 'y 'a))))
+                    #`(lambda (y) #,inc-body))))))
+
+(define-syntax inc-sc
+  (lambda (x)
+    (syntax-case x ()
+      ((_ a)
+       (with-syntax ((y (datum->syntax x 'y)))
+                    #`(lambda (y) #,(inc-body 'a 'y)))))))
+
+(define-macro (inc-dm num)
+  (let ((arg (gensym "arg")))
+    `(lambda (,arg) ,(inc-builder arg num))))
+
+(define (inc-builder varsym incsym)
+  `(+ ,varsym ,incsym))

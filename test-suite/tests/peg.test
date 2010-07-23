@@ -33,44 +33,43 @@
 	     (pretty-print '(,try failed))
 	     ,(apply assert-f (cdr tests))))))
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;; Basic Character Classes
 (pretty-print "Testing basic character classes.")
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (let ((str (sa num up low)))
-  (let ((res (peg-find "[a-z]" str)))
+  (let ((res (peg-match "[a-z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\a))
       (= (- (cadr res) (car res)) 1)
       (string=? (caddr res) (string #\a)))))
-  (let ((res (peg-find "[b-z]" str)))
+  (let ((res (peg-match "[b-z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\b))
       (= (- (cadr res) (car res)) 1)
       (string=? (caddr res) (string #\b)))))
-  (let ((res (peg-find "[c-z]" str)))
+  (let ((res (peg-match "[c-z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\c))
       (= (- (cadr res) (car res)) 1)
       (string=? (caddr res) (string #\c)))))
-  (let ((res (peg-find "[A-Z]" str)))
+  (let ((res (peg-match "[A-Z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\A))
       (= (- (cadr res) (car res)) 1)
       (string=? (caddr res) (string #\A)))))
-  (let ((res (peg-find "[B-Z]" str)))
+  (let ((res (peg-match "[B-Z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\B))
       (= (- (cadr res) (car res)) 1)
       (string=? (caddr res) (string #\B)))))
-  (let ((res (peg-find "[C-Z]" str)))
+  (let ((res (peg-match "[C-Z]" str)))
     (assert
      (and
       (= (car res) (string-index str #\C))
