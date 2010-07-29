@@ -1,12 +1,9 @@
 (define-module (ice-9 peg)
   :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
-  :export-syntax (until-works string-collapse single? push-not-null! single-filter push!)
+  :autoload (ice-9 pretty-print) (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
   :use-module (ice-9 pretty-print))
-(define (eeval exp)
-  (eval exp (interaction-environment)))
 
 (use-modules (ice-9 pretty-print))
-(use-modules (language tree-il))
 
 (eval-when (compile load eval)
 
@@ -73,7 +70,8 @@
        #'(let ((retval action))
            (while (not retval)
                   if-fails
-                  (set! retval action)))))))
+                  (set! retval action))
+           retval)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; GENERIC LIST-PROCESSING MACROS
@@ -142,7 +140,7 @@
            `(list ,at ,body))
           (#t `(list ,at
                      (cond
-                      ((single? ,body) (car ,body))
+                      (((@@ (ice-9 peg) single?) ,body) (car ,body))
                       (#t ,body))))))
         ((eq? accum 'none)
          `(list ,at '()))
@@ -235,9 +233,21 @@
     (#t (error-val `(cg-match-func-error-3 ,match ,accum)))))
 
 ;;;;; Convenience macros for making sure things come out in a readable form.
-(define-macro (single-filter sym) `(if (single? ,sym) (car ,sym) ,sym))
-(define-macro (push-not-null! lst obj)
-  `(if (not (null? ,obj)) (push! ,lst ,obj)))
+;;;;;Old Def:
+;; (define-macro (single-filter sym) `(if (single? ,sym) (car ,sym) ,sym))
+(define-syntax single-filter
+  (lambda (x)
+    (syntax-case x ()
+      ((_ sym)
+       #'(if (single? sym) (car sym) sym)))))
+;;;;;Old Def:
+;; (define-macro (push-not-null! lst obj)
+;;   `(if (not (null? ,obj)) (push! ,lst ,obj)))
+(define-syntax push-not-null!
+  (lambda (x)
+    (syntax-case x ()
+      ((_ lst obj)
+       #'(if (not (null? obj)) (push! lst obj))))))
 
 ;; Top-level function builder for AND.
 (define (cg-and arglst accum)
@@ -261,7 +271,7 @@
                 (let ((,newat (car ,res))
                       (,newbody (cadr ,res)))
                   (set! ,at ,newat)
-                  (push-not-null! ,body (single-filter ,newbody))
+                  ((@@ (ice-9 peg) push-not-null!) ,body ((@@ (ice-9 peg) single-filter) ,newbody))
                   ,(cg-and-int (cdr arglst) accum str strlen at body))))))))
 
 ;; Top-level function builder for OR.
@@ -295,7 +305,9 @@
             (let ((,at2 (car ,at2-body2))
                   (,body2 (cadr ,at2-body2)))
               (set! ,at ,at2)
-              (push-not-null! ,body (single-filter ,body2))
+              ((@@ (ice-9 peg) push-not-null!)
+               ,body
+               ((@@ (ice-9 peg) single-filter) ,body2))
               #t))))))
 
 ;; Returns a block of code that sees whether NUM wants us to try and match more
@@ -347,43 +359,77 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Defines a new nonterminal symbol accumulating with ACCUM.
-(define-macro (define-nonterm sym accum match)
-  (define-nonterm-f sym accum match))
-(define (define-nonterm-f sym accum match)
-  (safe-bind
-   (res str strlen at body)
-   
-   ;; (let ((match (if (string? match)
-   ;;                  (pattern-builder match accum)
-   ;;                  (cg-match-func match accum))))
-
-     (let ((match (cg-match-func match accum)))
-     
-     (let ((code
-            `(lambda (,str ,strlen ,at)
-               (let ((,res (,match ,str ,strlen ,at)))
-                 (if ,res
-                     (let ((,at (car ,res))
-                           (,body (cadr ,res)))
-                       ,(cond
-                         ((eq? accum 'name)
-                          `(list ,at ',sym))
-                         ((eq? accum 'all)
-                          `(list (car ,res)
-                                 (cond
-                                  ((not (list? ,body)) (list ',sym ,body))
-                                  ((null? ,body) ',sym)
-                                  ((symbol? (car ,body)) (list ',sym ,body))
-                                  (#t (cons ',sym ,body)))))
-                         ((eq? accum 'none) `(list (car ,res) '()))
-                         (#t (begin `,res))))
-                     #f)))))
-       (set-symbol-property! sym 'code code)
-       `(define ,sym ,code)))))
+;;;;;Old Def:
+;; (define-macro (define-nonterm sym accum match)
+;;   (define-nonterm-f sym accum match))
+;; (define (define-nonterm-f sym accum match)
+;;   (safe-bind
+;;    (res str strlen at body)
+;;    (let ((match (cg-match-func match accum)))
+;;      (let ((code
+;;             `(lambda (,str ,strlen ,at)
+;;                (let ((,res (,match ,str ,strlen ,at)))
+;;                  (if ,res
+;;                      (let ((,at (car ,res))
+;;                            (,body (cadr ,res)))
+;;                        ,(cond
+;;                          ((eq? accum 'name)
+;;                           `(list ,at ',sym))
+;;                          ((eq? accum 'all)
+;;                           `(list (car ,res)
+;;                                  (cond
+;;                                   ((not (list? ,body)) (list ',sym ,body))
+;;                                   ((null? ,body) ',sym)
+;;                                   ((symbol? (car ,body)) (list ',sym ,body))
+;;                                   (#t (cons ',sym ,body)))))
+;;                          ((eq? accum 'none) `(list (car ,res) '()))
+;;                          (#t (begin `,res))))
+;;                      #f)))))
+;;        (set-symbol-property! sym 'code code)
+;;        `(define ,sym ,code)))))
+(define-syntax define-nonterm
+  (lambda (x)
+    (syntax-case x ()
+      ((_ sym accum match)
+       (let ((matchf (cg-match-func (syntax->datum #'match)
+                                    (syntax->datum #'accum)))
+             (symsym (syntax->datum #'sym))
+             (accumsym (syntax->datum #'accum)))
+         (let ((code
+                (safe-bind
+                 (str strlen at res body)
+                `(lambda (,str ,strlen ,at)
+                   (let ((,res (,matchf ,str ,strlen ,at)))
+                     (if ,res
+                         (let ((,at (car ,res))
+                               (,body (cadr ,res)))
+                           ,(cond
+                             ((eq? accumsym 'name)
+                              `(list ,at ',symsym))
+                             ((eq? accumsym 'all)
+                              `(list (car ,res)
+                                     (cond
+                                      ((not (list? ,body)) (list ',symsym ,body))
+                                      ((null? ,body) ',symsym)
+                                      ((symbol? (car ,body)) (list ',symsym ,body))
+                                      (#t (cons ',symsym ,body)))))
+                             ((eq? accumsym 'none) `(list (car ,res) '()))
+                             (#t (begin res))))
+                         #f))))))
+           #`(begin
+               (set-symbol-property!
+                'sym 'code #,(datum->syntax x (list 'quote code)))
+               (define sym #,(datum->syntax x code)))))))))
 
 ;; Gets the code corresponding to NONTERM
-(define-macro (get-code nonterm)
-  `(pretty-print (symbol-property ',nonterm 'code)))
+;;;;;Old Def:
+;; (define-macro (get-code nonterm)
+;;   `(pretty-print (symbol-property ',nonterm 'code)))
+(define-syntax get-code
+  (lambda (x)
+    (syntax-case x ()
+      ((_ nonterm)
+       #`(pretty-print (symbol-property 'nonterm 'code))))))
 
 ;; Parses STRING using NONTERM
 (define (parse nonterm string)
@@ -667,228 +713,59 @@ sp <- [ \t\n]*
 ;; define-nonterm
 ;; define-nonterm-f
 
-(define-macro (peg-find peg-matcher pattern)
-  (peg-find-f peg-matcher pattern))
-(define-macro (peg-match peg-matcher pattern)
-  (peg-find-f peg-matcher pattern))
-(define (peg-find-f peg-matcher pattern)
-  (safe-bind
-   (at strlen ret end match)
-   (let ((cg-match-func
-          (if (string? peg-matcher)
-              (pattern-builder peg-matcher 'body)
-              (cg-match-func peg-matcher 'body))))
-     `(let ((,strlen (string-length ,pattern))
-            (,at 0))
-        (let ((,ret (until-works (or (>= ,at ,strlen)
-                                     (,cg-match-func ,pattern ,strlen ,at))
-                                 (set! ,at (+ ,at 1)))))
-          (if (eq? ,ret #t)
-              #f
-              (let ((,end (car ,ret))
-                    (,match (cadr ,ret)))
-                (list ,at ,end (string-collapse ,match)))))))))
+;; (define-macro (peg-find peg-matcher pattern)
+;;   (peg-find-f peg-matcher pattern))
+;; (define-macro (peg-match peg-matcher pattern)
+;;   (peg-find-f peg-matcher pattern))
+;; (define (peg-find-f peg-matcher pattern)
+;;   (safe-bind
+;;    (at strlen ret end match)
+;;    (let ((cg-match-func
+;;           (if (string? peg-matcher)
+;;               (pattern-builder peg-matcher 'body)
+;;               (cg-match-func peg-matcher 'body))))
+;;      `(let ((,strlen (string-length ,pattern))
+;;             (,at 0))
+;;         (let ((,ret (until-works (or (>= ,at ,strlen)
+;;                                      (,cg-match-func ,pattern ,strlen ,at))
+;;                                  (set! ,at (+ ,at 1)))))
+;;           (if (eq? ,ret #t)
+;;               #f
+;;               (let ((,end (car ,ret))
+;;                     (,match (cadr ,ret)))
+;;                 (list ,at ,end (string-collapse ,match)))))))))
 
+(define-syntax peg-match
+  (lambda (x)
+    (syntax-case x ()
+      ((_ peg-matcher string)
+       (let ((pmsym (syntax->datum #'peg-matcher)))
+         (let ((cg-match-func
+                (if (string? pmsym)
+                    (pattern-builder pmsym 'body)
+                    (cg-match-func pmsym 'body))))
+           #`(let ((strlen (string-length string))
+                   (at 0))
+               (let ((ret ((@@ (ice-9 peg) until-works)
+                           (or (>= at strlen)
+                               (#,(datum->syntax x cg-match-func)
+                                string strlen at))
+                           (set! at (+ at 1)))))
+                 (if (eq? ret #t)
+                     #f
+                     (let ((end (car ret))
+                           (match (cadr ret)))
+                       (list at end (string-collapse match))))))))))))
 
-(define-macro (define-grammar str)
-  (peg-parser str))
+(define-syntax define-grammar
+  (lambda (x)
+    (syntax-case x ()
+      ((_ str)
+       (datum->syntax x (peg-parser (syntax->datum #'str)))))))
 (define define-grammar-f peg-parser)
 
-(define-macro (tst x)
-  (compile (macroexpand (* x 2)) #:from 'tree-il))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;; OLD CODE
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; (define (match-func match accum)
-;;   (cond ((string? match)
-;;          (let ((len (string-length match)))
-;;            `(lambda (str strlen at)
-;;               (if (>= at strlen)
-;;                   #f
-;;                   (if (string=? (substring str at (min (+ at ,len) strlen))
-;;                                 ,match)
-;;                       (list (+ at ,len) ,match)
-;;                       #f)))))
-;;         ((symbol? match)
-;;          (cond
-;;           ((eq? match 'peg-any)
-;;            `(lambda (str strlen at)
-;;               (if (>= at strlen)
-;;                   #f
-;;                   (list (+ at 1) (substring str at (+ at 1))))))
-;;           ((eq? match 'peg-az)
-;;            (match-func '(range #\a #\z) accum))
-;;           ((eq? match 'peg-AZ)
-;;            (match-func '(range #\A #\Z) accum))
-;;           (#t match)))
-;;         ((or (not (list? match)) (null? match))
-;;          (begin
-;;            (pretty-print `(fail-match-func ,match ,accum))
-;;            `fail-match-func))
-;;         ((eq? (car match) 'range)
-;;          `(lambda (str strlen at)
-;;             (if (>= at strlen)
-;;                 #f
-;;                 (let ((c (string-ref str at)))
-;;                   (if (and (char>=? c ,(cadr match))
-;;                            (char<=? c ,(caddr match)))
-;;                       (list (+ at 1) (string c))
-;;                       #f)))))
-;;         ((eq? (car match) 'ignore)
-;;          `(lambda (str strlen at)
-;;             (let ((res (,(match-func (cadr match) accum) str strlen at)))
-;;               (if res
-;;                   (list (car res) '())
-;;                   #f))))
-;;         ((eq? (car match) 'and)
-;;          (build-and-top (cdr match)))
-;;         ((eq? (car match) 'or)
-;;          (build-or-top (cdr match)))
-;;         ((eq? (car match) 'body)
-;;          (if (not (= (length match) 4))
-;;              (begin
-;;                (pretty-print `(fail-match-func-2 ,match ,accum))
-;;                `fail-match-func-2)
-;;              (apply build-lambda (cdr match))))
-;;         (#t (begin
-;;               (pretty-print `(fail-match-func-3 ,match ,accum))
-;;               `fail-match-func-3))))
-
-;; (define (tst-func match strsym strlensym atsym bodysym)
-;;   (let ((at2-body2 (gensym))
-;;         (at2 (gensym))
-;;         (body2 (gensym)))
-;;     `(let ((,at2-body2 (,(match-func match #f) ,strsym ,strlensym ,atsym)))
-;;        (if ,at2-body2
-;;            (let ((,at2 (car ,at2-body2))
-;;                  (,body2 (cadr ,at2-body2)))
-;;              (begin
-;;                (set! ,atsym ,at2)
-;;                (if (not (null? ,body2))
-;;                    (push! ,bodysym
-;;                           (if (single? ,body2) (car ,body2) ,body2)))
-;;                #t))
-;;              #f))))
-
-;; (define (check-func num countsym)
-;;   (cond ((number? num) `(< ,countsym ,num))
-;;         ((eq? num '+) #t)
-;;         ((eq? num '*) #t)
-;;         ((eq? num '?) `(< ,countsym 1))
-;;         (#t `(check-func-error ,num ,countsym))))
-
-;; (define (success-check-func num countsym)
-;;   (cond ((number? num) `(= ,countsym ,num))
-;;         ((eq? num '+) `(>= ,countsym 1))
-;;         ((eq? num '*) #t)
-;;         ((eq? num '?) `(<= ,countsym 1))
-;;         (#t `(success-check-func-error ,num))))
-
-;; (define (ret-func type atsym at2sym bodysym)
-;;   `(lambda (success)
-;;      ,(cond ((eq? type '!)
-;;              `(if success #f (list ,atsym '())))
-;;             ((eq? type '&)
-;;              `(if success (list ,atsym '()) #f))
-;;             ((eq? type 'lit)
-;;              `(if success (list ,at2sym (reverse ,bodysym)) #f))
-;;             (#t `(ret-func-error ,type ,atsym ,at2sym ,bodysym)))))
-
-;; (define (build-lambda type match num)
-;;   (let ((tst (tst-func match 'str 'strlen 'at2 'body))
-;;         (check (check-func num 'count))
-;;         (ret (ret-func type 'at 'at2 'body))
-;;         (success-check (success-check-func num 'count)))
-;;     `(lambda (str strlen at)
-;;        (let ((at2 at) (count 0) (body '()))
-;;          (while (and ,tst
-;;                      (set! count (+ count 1))
-;;                      ,check))
-;;          (,ret ,success-check)))))
-
-;; (define (build-and-top arglst)
-;;   `(lambda (str strlen at)
-;;      (let ((body '()))
-;;        ,(build-and arglst 'str 'strlen 'at 'body))))
-
-;; (define (build-and arglst strsym strlensym atsym bodysym)
-;;   (if (null? arglst)
-;;       `(list ,atsym (reverse ,bodysym))
-;;       (let ((mf (match-func (car arglst) #f)))
-;;         `(let ((res (,mf ,strsym ,strlensym ,atsym)))
-;;            (if (not res)
-;;                #f
-;;                (begin
-;;                  (set! ,atsym (car res))
-;;                  (if (not (null? (cadr res)))
-;;                      (push! ,bodysym
-;;                             (if (single? (cadr res)) (caadr res) (cadr res))))
-;;                  ,(build-and (cdr arglst) strsym strlensym atsym bodysym)))))))
-
-;; (define (build-or-top arglst)
-;;   `(lambda (str strlen at)
-;;      (let ((body '()))
-;;        ,(build-or arglst 'str 'strlen 'at 'body))))
-
-;; (define (build-or arglst strsym strlensym atsym bodysym)
-;;   (if (null? arglst)
-;;       #f
-;;       (let ((mf (match-func (car arglst) #f)))
-;;         `(let ((res (,mf ,strsym ,strlensym ,atsym)))
-;;            (if res
-;;                (list (car res) (cadr res))
-;;                ,(build-or (cdr arglst) strsym strlensym atsym bodysym))))))
-
-;; (define-macro (quoter q) `',q)
-
-;; (define-nonterm abc (body lit "abc" 1))
-;; (define-nonterm def (body lit "def" 1))
-;; (define-nonterm abcplus (body lit abc +))
-;; ;; (pretty-print (match-func '(and (body lit "abc" 1) (body lit "def" 1))))
-;; (define-nonterm abcdef (and abc def))
-;; (define-nonterm abcordef (or abc def))
-
-;; (define-nonterm c-begin "(*")
-;; (define-nonterm c-end "*)")
-;; (define-nonterm c-c (and c-begin (body lit c-n *) c-end))
-;; (define-nonterm c-n (or c-c (and (body ! c-begin 1) (body ! c-end 1) c-z)))
-;; (define-nonterm c-z "a")
-
-;; (define-nonterm c-s (and (body & (and c-a "c") 1)
-;;                          (body lit "a" +)
-;;                          c-b
-;;                          (body ! (or "a" "b" "c") 1)))
-;; (define-nonterm c-a (and "a" (body lit c-a ?) "b"))
-;; (define-nonterm c-b (and "b" (body lit c-b ?) "c"))
+;; (define-macro (tst x)
+;;   (compile (macroexpand (* x 2)) #:from 'tree-il))
 
 )
 
-(peg-match "'a'+" "bbaa")
-
-(define-syntax inc-sc
-  (lambda (x)
-    (syntax-case x ()
-      ((_ a)
-       #`(lambda (y) #,(datum->syntax x (inc-builder 'y 'a)))))))
-
-(define-syntax inc-sc
-  (lambda (x)
-    (syntax-case x ()
-      ((_ a)
-       (with-syntax ((inc-body (datum->syntax x (inc-builder 'y 'a))))
-                    #`(lambda (y) #,inc-body))))))
-
-(define-syntax inc-sc
-  (lambda (x)
-    (syntax-case x ()
-      ((_ a)
-       (with-syntax ((y (datum->syntax x 'y)))
-                    #`(lambda (y) #,(inc-body 'a 'y)))))))
-
-(define-macro (inc-dm num)
-  (let ((arg (gensym "arg")))
-    `(lambda (,arg) ,(inc-builder arg num))))
-
-(define (inc-builder varsym incsym)
-  `(+ ,varsym ,incsym))
