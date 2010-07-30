@@ -1,5 +1,5 @@
 (define-module (ice-9 peg)
-  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
+  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f peg:start peg:end peg:string peg:tree peg:substring peg-record?)
   :autoload (ice-9 pretty-print) (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
   :use-module (ice-9 pretty-print))
 
@@ -417,9 +417,10 @@
                              (#t (begin res))))
                          #f))))))
            #`(begin
+               (define sym #,(datum->syntax x code))
                (set-symbol-property!
                 'sym 'code #,(datum->syntax x (list 'quote code)))
-               (define sym #,(datum->syntax x code)))))))))
+               sym)))))))
 
 ;; Gets the code corresponding to NONTERM
 ;;;;;Old Def:
@@ -433,7 +434,10 @@
 
 ;; Parses STRING using NONTERM
 (define (parse nonterm string)
-  (string-collapse (nonterm string (string-length string) 0)))
+  (let ((res (nonterm string (string-length string) 0)))
+    (if (not res)
+        #f
+        (make-prec 0 (car res) string (string-collapse (cadr res))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; POST-PROCESSING FUNCTIONS (TO CANONICALIZE MATCH TREES)
@@ -564,9 +568,9 @@
   (let ((parsed (parse peg-grammar str)))
     (if (not parsed)
         (begin
-          (pretty-print "Invalid PEG grammar!\n")
+          ;; (pretty-print "Invalid PEG grammar!\n")
           #f)
-        (let ((lst (cadr parsed)))
+        (let ((lst (peg:tree parsed)))
           (cond
            ((or (not (list? lst)) (null? lst))
             lst)
@@ -678,17 +682,17 @@
 
 ;; Grammar for PEGs in PEG grammar.
 (define peg-as-peg
-"grammar <- (nonterminal '<-' sp pattern)+
-pattern <- alternative ('/' sp alternative)*
-alternative <- ([!&]? sp suffix)+
-suffix <- primary ([*+?] sp)*
-primary <- '(' sp pattern ')' sp / '.' sp / literal / charclass / nonterminal !'<-'
-literal <- ['] (!['] .)* ['] sp
-charclass <- '[' (!']' (CCrange / CCsingle))* ']' sp
-CCrange <- . '-' .
-CCsingle <- .
-nonterminal <- [a-zA-Z]+ sp
-sp <- [ \t\n]*
+"grammar <-- (nonterminal ('<--' / '<-' / '<') sp pattern)+
+pattern <-- alternative ('/' sp alternative)*
+alternative <-- ([!&]? sp suffix)+
+suffix <-- primary ([*+?] sp)*
+primary <-- '(' sp pattern ')' sp / '.' sp / literal / charclass / nonterminal !'<-'
+literal <-- ['] (!['] .)* ['] sp
+charclass <-- '[' (!']' (CCrange / CCsingle))* ']' sp
+CCrange <-- . '-' .
+CCsingle <-- .
+nonterminal <-- [a-zA-Z]+ sp
+sp < [ \t\n]*
 ")
 
 ;; Convenience shortcut
@@ -699,6 +703,25 @@ sp <- [ \t\n]*
   (cg-match-func
    (compressor (peg-parse-pattern (cadr (parse peg-pattern str))))
    accum))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;; PMATCH STRUCTURE MUNGING
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define prec
+  (make-record-type "peg" '(start end string tree)))
+(define make-prec
+  (record-constructor prec '(start end string tree)))
+(define peg:start (record-accessor prec 'start))
+(define peg:end (record-accessor prec 'end))
+(define peg:string (record-accessor prec 'string))
+(define peg:tree (record-accessor prec 'tree))
+(define (peg:substring pm)
+  (substring
+   (peg:string pm)
+   (peg:start pm)
+   (peg:end pm)))
+(define peg-record? (record-predicate prec))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;; USER-VISIBLE FUNCTIONS
@@ -751,11 +774,13 @@ sp <- [ \t\n]*
                                (#,(datum->syntax x cg-match-func)
                                 string strlen at))
                            (set! at (+ at 1)))))
-                 (if (eq? ret #t)
+                 (if (eq? ret #t) ;; (>= at strlen) succeeded
                      #f
                      (let ((end (car ret))
                            (match (cadr ret)))
-                       (list at end (string-collapse match))))))))))))
+                       (make-prec
+                        at end string
+                        (string-collapse match))))))))))))
 
 (define-syntax define-grammar
   (lambda (x)

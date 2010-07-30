@@ -1,202 +1,256 @@
+(define-module (test-suite test-peg)
+  :use-module (test-suite lib)
+  :use-module (srfi srfi1)
+  :use-module (ice-9 peg)
+  :use-module (ice-9 pretty-print)
+
 (use-modules (ice-9 peg))
 (use-modules (ice-9 pretty-print))
+(use-modules (test-suite lib))
+(use-modules (language tree-il))
 
 (define (eeval exp)
   (eval exp (interaction-environment)))
 
-(define num "123")
-(define up "ABC")
-(define low "abc")
-(define (sa . args)
-  (if (null? args)
-      ""
-      (if (number? (car args))
-	  (let ((res (apply sa (cdr args))))
-	    (append-times (car args) res))
-	  (string-append (car args) (apply sa (cdr args))))))
-(define (append-times num str)
-  (if (<= num 0) "" (string-append str (append-times (- num 1) str))))
+(define grammar-mapping
+  '((grammar peg-grammar)
+    (pattern peg-pattern)
+    (alternative peg-alternative)
+    (suffix peg-suffix)
+    (primary peg-primary)
+    (literal peg-literal)
+    (charclass peg-charclass)
+    (CCrange charclass-range)
+    (CCsingle charclass-single)
+    (nonterminal peg-nonterminal)
+    (sp peg-sp)))
 
-(define-macro (safe-bind vals . actions)
-  (apply safe-bind-f (cons vals actions)))
-(define (safe-bind-f vals . actions)
-  `(let ,(map (lambda (val) `(,val (make-symbol ,(symbol->string val)))) vals)
-     ,@actions))
+(define (grammar-transform x)
+  (let ((res (assoc x grammar-mapping)))
+    (if res (cadr res) x)))
 
-(define-macro (assert . tests)
-  (apply assert-f tests))
-(define (assert-f . tests)
-  (if (null? tests)
-      #t
-      (let ((try (car tests)))
-	`(if (not ,try)
-	     (pretty-print '(,try failed))
-	     ,(apply assert-f (cdr tests))))))
+(define (tree-map fn lst)
+  (if (list? lst)
+      (if (null? lst)
+	  lst
+	  (cons (tree-map fn (car lst))
+		(tree-map fn (cdr lst))))
+      (fn lst)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;; Basic Character Classes
-(pretty-print "Testing basic character classes.")
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(eeval `(define-grammar ,(@@ (ice-9 peg) peg-as-peg)))
+  
+(equal?
+ (peg:tree (peg-parse (@@ (ice-9 peg) peg-grammar) (@@ (ice-9 peg) peg-as-peg)))
+ (tree-map
+  grammar-transform
+  (peg:tree (peg-parse grammar (@@ (ice-9 peg) peg-as-peg)))))
+ 
 
-(let ((str (sa num up low)))
-  (let ((res (peg-match "[a-z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\a))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\a)))))
-  (let ((res (peg-match "[b-z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\b))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\b)))))
-  (let ((res (peg-match "[c-z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\c))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\c)))))
-  (let ((res (peg-match "[A-Z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\A))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\A)))))
-  (let ((res (peg-match "[B-Z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\B))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\B)))))
-  (let ((res (peg-match "[C-Z]" str)))
-    (assert
-     (and
-      (= (car res) (string-index str #\C))
-      (= (- (cadr res) (car res)) 1)
-      (string=? (caddr res) (string #\C))))))
+;; (tree-map
+;;  (lambda (x)
+;;    (let ((res (assoc x mappi
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;; Arithmetic Expressions
-(pretty-print "Testing arithmetic expression grammar.")
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define-grammar
-  "Value <-- [0-9]+ / '(' Expr ')'
-Product <-- Value (('*' / '/') Value)*
-Sum <-- Product (('+' / '-') Product)*
-Expr <- Sum")
+;; (with-test-prefix "define-nonterm"
+;;   (pass-if
+;;    "abc"
+;;    (and (define-nonterm abc all "abc") #t))
+;;   (pass-if
+;;    "abcs"
+;;    (and (define-nonterm abcs all 
 
-(define (sum-parse lst)
-  (cons '+
-	(map
-	 (lambda (x)
-	   (if (eq? (car x) 'Product)
-	       (product-parse x)
-	       (list (string->symbol (car x)) (product-parse (cadr x)))))
-	 (context-flatten
-	  (lambda (x) (or (string? (car x)) (eq? (car x) 'Product)))
-	  (cdr lst)))))
+;; (define num "123")
+;; (define up "ABC")
+;; (define low "abc")
+;; (define (sa . args)
+;;   (if (null? args)
+;;       ""
+;;       (if (number? (car args))
+;; 	  (let ((res (apply sa (cdr args))))
+;; 	    (append-times (car args) res))
+;; 	  (string-append (car args) (apply sa (cdr args))))))
+;; (define (append-times num str)
+;;   (if (<= num 0) "" (string-append str (append-times (- num 1) str))))
 
-(define (product-parse lst)
-  (cons '*
-	(map
-	 (lambda (x)
-	   (if (eq? (car x) 'Value)
-	       (value-parse x)
-	       (list (string->symbol (car x)) (value-parse (cadr x)))))
-	 (context-flatten
-	  (lambda (x) (or (string? (car x)) (eq? (car x) 'Value)))
-	  (cdr lst)))))
+;; (define-macro (safe-bind vals . actions)
+;;   (apply safe-bind-f (cons vals actions)))
+;; (define (safe-bind-f vals . actions)
+;;   `(let ,(map (lambda (val) `(,val (make-symbol ,(symbol->string val)))) vals)
+;;      ,@actions))
 
-(define (value-parse lst)
-  (if (> (length lst) 2)
-      (sum-parse (caddr lst))
-      (string->number (cadr lst))))
+;; (define-macro (assert . tests)
+;;   (apply assert-f tests))
+;; (define (assert-f . tests)
+;;   (if (null? tests)
+;;       #t
+;;       (let ((try (car tests)))
+;; 	`(if (not ,try)
+;; 	     (pretty-print '(,try failed))
+;; 	     ,(apply assert-f (cdr tests))))))
 
-(define (eq-eval eq)
-  (eeval (sum-parse (cadr (peg-parse Expr eq)))))
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;;; Basic Character Classes
+;; (pretty-print "Testing basic character classes.")
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(assert
- (= (eq-eval "1+1") 2)
- (= (eq-eval "1+1*2") 3)
- (= (eq-eval "(1+1)*2") 4)
- (= (eq-eval "1+1/2") 3/2)
- (= (eq-eval "(1+1)/2") 1)
- (= (eq-eval "1-1") 0)
- (= (eq-eval "1-1*2") -1)
- (= (eq-eval "1-1/2") 1/2)
- (= (eq-eval "1+2+3") 6)
- (= (eq-eval "1+2-3") 0)
- (= (eq-eval "1-2+3") 2)
- (= (eq-eval "1+(2/(3+4)*5)-6*7+8") -221/7))
+;; (let ((str (sa num up low)))
+;;   (let ((res (peg-match "[a-z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\a))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\a)))))
+;;   (let ((res (peg-match "[b-z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\b))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\b)))))
+;;   (let ((res (peg-match "[c-z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\c))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\c)))))
+;;   (let ((res (peg-match "[A-Z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\A))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\A)))))
+;;   (let ((res (peg-match "[B-Z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\B))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\B)))))
+;;   (let ((res (peg-match "[C-Z]" str)))
+;;     (assert
+;;      (and
+;;       (= (car res) (string-index str #\C))
+;;       (= (- (cadr res) (car res)) 1)
+;;       (string=? (caddr res) (string #\C))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;; Parsing Simplified C Functions
-(pretty-print "Testing simplified C function grammar...")
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;; Arithmetic Expressions
+;; (pretty-print "Testing arithmetic expression grammar.")
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; (define-grammar
+;;   "Value <-- [0-9]+ / '(' Expr ')'
+;; Product <-- Value (('*' / '/') Value)*
+;; Sum <-- Product (('+' / '-') Product)*
+;; Expr <- Sum")
 
-(define-grammar
-  "cfunc <-- cSP ctype cSP cname cSP cargs cLB cSP cbody cRB
-ctype <-- cidentifier
-cname <-- cidentifier
-cargs <-- cLP (! (cSP cRP) carg cSP (cCOMMA / cRP) cSP)* cSP
-carg <-- cSP ctype cSP cname
-cbody <-- cstatement *
-cidentifier <- [a-zA-z][a-zA-Z0-9_]*
-cstatement <-- (!';'.)*cSC cSP
-cSC < ';'
-cCOMMA < ','
-cLP < '('
-cRP < ')'
-cLB < '{'
-cRB < '}'
-cSP < [ \t\n]*")
+;; (define (sum-parse lst)
+;;   (cons '+
+;; 	(map
+;; 	 (lambda (x)
+;; 	   (if (eq? (car x) 'Product)
+;; 	       (product-parse x)
+;; 	       (list (string->symbol (car x)) (product-parse (cadr x)))))
+;; 	 (context-flatten
+;; 	  (lambda (x) (or (string? (car x)) (eq? (car x) 'Product)))
+;; 	  (cdr lst)))))
 
-(define func-square
-  "
-int square(int a) {
-  return a*a;
-}")
+;; (define (product-parse lst)
+;;   (cons '*
+;; 	(map
+;; 	 (lambda (x)
+;; 	   (if (eq? (car x) 'Value)
+;; 	       (value-parse x)
+;; 	       (list (string->symbol (car x)) (value-parse (cadr x)))))
+;; 	 (context-flatten
+;; 	  (lambda (x) (or (string? (car x)) (eq? (car x) 'Value)))
+;; 	  (cdr lst)))))
 
-(define func-mod
-  "
-int mod(int a, int b) {
-  int c = a/b;
-  return a - b*c;
-}")
+;; (define (value-parse lst)
+;;   (if (> (length lst) 2)
+;;       (sum-parse (caddr lst))
+;;       (string->number (cadr lst))))
 
-;; (pretty-print (peg-parse cfunc func-square))
-;; (pretty-print (peg-parse cfunc func-mod))
+;; (define (eq-eval eq)
+;;   (eeval (sum-parse (cadr (peg-parse Expr eq)))))
 
-(assert
- (equal?
-  (cadr (peg-parse cfunc func-square))
-  '(cfunc (ctype "int")
-	  (cname "square")
-	  (cargs (carg (ctype "int") (cname "a")))
-	  (cbody (cstatement "return a*a"))))
- (equal?
-  (cadr (peg-parse cfunc func-mod))
-  '(cfunc (ctype "int")
-	  (cname "mod")
-	  (cargs (carg (ctype "int") (cname "a"))
-		 (carg (ctype "int") (cname "b")))
-	  (cbody (cstatement "int c = a/b")
-		 (cstatement "return a - b*c")))))
+;; (assert
+;;  (= (eq-eval "1+1") 2)
+;;  (= (eq-eval "1+1*2") 3)
+;;  (= (eq-eval "(1+1)*2") 4)
+;;  (= (eq-eval "1+1/2") 3/2)
+;;  (= (eq-eval "(1+1)/2") 1)
+;;  (= (eq-eval "1-1") 0)
+;;  (= (eq-eval "1-1*2") -1)
+;;  (= (eq-eval "1-1/2") 1/2)
+;;  (= (eq-eval "1+2+3") 6)
+;;  (= (eq-eval "1+2-3") 0)
+;;  (= (eq-eval "1-2+3") 2)
+;;  (= (eq-eval "1+(2/(3+4)*5)-6*7+8") -221/7))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;; Infinite Loop Tests
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;; Parsing Simplified C Functions
+;; (pretty-print "Testing simplified C function grammar...")
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define-nonterm itl all (body lit (body lit "a" *) *))
-(pretty-print "Running test that might freeze...")
-(if (assert (peg-parse itl "b")) (pretty-print "Test passed, no worries!"))
+;; (define-grammar
+;;   "cfunc <-- cSP ctype cSP cname cSP cargs cLB cSP cbody cRB
+;; ctype <-- cidentifier
+;; cname <-- cidentifier
+;; cargs <-- cLP (! (cSP cRP) carg cSP (cCOMMA / cRP) cSP)* cSP
+;; carg <-- cSP ctype cSP cname
+;; cbody <-- cstatement *
+;; cidentifier <- [a-zA-z][a-zA-Z0-9_]*
+;; cstatement <-- (!';'.)*cSC cSP
+;; cSC < ';'
+;; cCOMMA < ','
+;; cLP < '('
+;; cRP < ')'
+;; cLB < '{'
+;; cRB < '}'
+;; cSP < [ \t\n]*")
 
-;; (pretty-print "\n***\nAll tests passed!\n***\n")
+;; (define func-square
+;;   "
+;; int square(int a) {
+;;   return a*a;
+;; }")
 
-(define-grammar
-  "Begin <- '(*'
-End <- '*)
-C <- Begin N* End
-N <- C / (!Begin !End Z)
-Z <- .")
+;; (define func-mod
+;;   "
+;; int mod(int a, int b) {
+;;   int c = a/b;
+;;   return a - b*c;
+;; }")
+
+;; ;; (pretty-print (peg-parse cfunc func-square))
+;; ;; (pretty-print (peg-parse cfunc func-mod))
+
+;; (assert
+;;  (equal?
+;;   (cadr (peg-parse cfunc func-square))
+;;   '(cfunc (ctype "int")
+;; 	  (cname "square")
+;; 	  (cargs (carg (ctype "int") (cname "a")))
+;; 	  (cbody (cstatement "return a*a"))))
+;;  (equal?
+;;   (cadr (peg-parse cfunc func-mod))
+;;   '(cfunc (ctype "int")
+;; 	  (cname "mod")
+;; 	  (cargs (carg (ctype "int") (cname "a"))
+;; 		 (carg (ctype "int") (cname "b")))
+;; 	  (cbody (cstatement "int c = a/b")
+;; 		 (cstatement "return a - b*c")))))
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ;;;;; Infinite Loop Tests
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (define-nonterm itl all (body lit (body lit "a" *) *))
+;; (pretty-print "Running test that might freeze...")
+;; (if (assert (peg-parse itl "b")) (pretty-print "Test passed, no worries!"))
+
+;; ;; (pretty-print "\n***\nAll tests passed!\n***\n")
+
+;; (define-grammar
+;;   "Begin <- '(*'
+;; End <- '*)
+;; C <- Begin N* End
+;; N <- C / (!Begin !End Z)
+;; Z <- .")
