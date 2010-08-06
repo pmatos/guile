@@ -1,6 +1,6 @@
 (define-module (ice-9 peg)
-  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f peg:start peg:end peg:string peg:tree peg:substring peg-record?)
-  :autoload (ice-9 pretty-print) (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f)
+  :export (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f peg:start peg:end peg:string peg:tree peg:substring peg-record? keyword-flatten)
+  :autoload (ice-9 pretty-print) (peg-sexp-compile peg-string-compile context-flatten peg-parse define-nonterm define-nonterm-f peg-match get-code define-grammar define-grammar-f keyword-flatten)
   :use-module (ice-9 pretty-print))
 
 (use-modules (ice-9 pretty-print))
@@ -546,7 +546,7 @@
 ;; (define-nonterm peg-nonterminal all
 ;;   (and (body lit (or peg-az peg-AZ) +) peg-sp))
 (define-nonterm peg-nonterminal all
-  (and (body lit (or (range #\a #\z) (range #\A #\Z)) +) peg-sp))
+  (and (body lit (or (range #\a #\z) (range #\A #\Z) (range #\0 #\9) "-") +) peg-sp))
 (define-nonterm peg-sp none
   (body lit (or " " "\t" "\n") *))
 
@@ -599,7 +599,10 @@
 
 ;; Parse an alternative.
 (define (peg-parse-alternative lst)
-  (cons 'and (map peg-parse-body (cdr lst))))
+  (cons 'and (map peg-parse-body
+                  (flatmaster (lambda (x) (or (string? (car x))
+                                              (eq? (car x) 'peg-suffix)))
+                              (cdr lst)))))
 
 ;; Parse a body.
 (define (peg-parse-body lst)
@@ -683,16 +686,19 @@
 ;; Grammar for PEGs in PEG grammar.
 (define peg-as-peg
 "grammar <-- (nonterminal ('<--' / '<-' / '<') sp pattern)+
-pattern <-- alternative ('/' sp alternative)*
+pattern <-- alternative (SLASH sp alternative)*
 alternative <-- ([!&]? sp suffix)+
 suffix <-- primary ([*+?] sp)*
-primary <-- '(' sp pattern ')' sp / '.' sp / literal / charclass / nonterminal !'<-'
+primary <-- '(' sp pattern ')' sp / '.' sp / literal / charclass / nonterminal !'<'
 literal <-- ['] (!['] .)* ['] sp
-charclass <-- '[' (!']' (CCrange / CCsingle))* ']' sp
+charclass <-- LB (!']' (CCrange / CCsingle))* RB sp
 CCrange <-- . '-' .
 CCsingle <-- .
-nonterminal <-- [a-zA-Z]+ sp
+nonterminal <-- [a-zA-Z0-9-]+ sp
 sp < [ \t\n]*
+SLASH < '/'
+LB < '['
+RB < ']'
 ")
 
 ;; Convenience shortcut
@@ -701,7 +707,7 @@ sp < [ \t\n]*
 ;; Builds a lambda-expressions for the pattern STR using accum.
 (define (pattern-builder str accum)
   (cg-match-func
-   (compressor (peg-parse-pattern (cadr (parse peg-pattern str))))
+   (compressor (peg-parse-pattern (peg:tree (parse peg-pattern str))))
    accum))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -712,15 +718,16 @@ sp < [ \t\n]*
   (make-record-type "peg" '(start end string tree)))
 (define make-prec
   (record-constructor prec '(start end string tree)))
-(define peg:start (record-accessor prec 'start))
-(define peg:end (record-accessor prec 'end))
-(define peg:string (record-accessor prec 'string))
-(define peg:tree (record-accessor prec 'tree))
+(define (peg:start pm)
+  (if pm ((record-accessor prec 'start) pm) #f))
+(define (peg:end pm)
+  (if pm ((record-accessor prec 'end) pm) #f))
+(define (peg:string pm)
+  (if pm ((record-accessor prec 'string) pm) #f))
+(define (peg:tree pm)
+  (if pm ((record-accessor prec 'tree) pm) #f))
 (define (peg:substring pm)
-  (substring
-   (peg:string pm)
-   (peg:start pm)
-   (peg:end pm)))
+  (if pm (substring (peg:string pm) (peg:start pm) (peg:end pm)) #f))
 (define peg-record? (record-predicate prec))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -732,6 +739,14 @@ sp < [ \t\n]*
 
 (define context-flatten flatmaster)
 (define peg-parse parse)
+
+(define (keyword-flatten keyword-lst lst)
+  (context-flatten
+   (lambda (x)
+     (if (or (not (list? x)) (null? x))
+         #t
+         (member (car x) keyword-lst)))
+   lst))
 
 ;; define-nonterm
 ;; define-nonterm-f
