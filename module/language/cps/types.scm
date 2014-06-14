@@ -382,7 +382,7 @@ minimum, and maximum."
    ((not (variable-bound? (make-variable val)))
     (return &special-immediate &undefined))
 
-   (else (error "unhandled constant" val))))
+   (else (return &all-types #f))))
 
 (define (constant-type-entry val)
   "Compute the type and range of VAL.  Return three values: the type,
