@@ -786,9 +786,10 @@
                                           args
                                           body))))
                   (make-const loc name))))
-           (with-native-target
-            (lambda ()
-              (compile tree-il #:from 'tree-il #:to 'value)))
+           (when (fluid-ref toplevel?)
+             (with-native-target
+              (lambda ()
+                (compile tree-il #:from 'tree-il #:to 'value))))
            tree-il)))
     (else (report-error loc "bad defmacro" args))))
 
