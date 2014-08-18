@@ -31,6 +31,7 @@
   #:use-module (srfi srfi-11)
   #:use-module (srfi srfi-26)
   #:use-module (ice-9 format)
+  #:use-module (language tree-il eval)
   #:export (compile-tree-il
             compile-progn
             compile-eval-when-compile
@@ -466,7 +467,7 @@
 (defspecial eval-when-compile (loc args)
   (make-const loc (with-native-target
                    (lambda ()
-                     (compile `(progn ,@args) #:from 'elisp #:to 'value)))))
+                     (eval-elisp `(progn ,@args))))))
 
 (define toplevel? (make-fluid))
 
@@ -792,7 +793,7 @@
            (when (fluid-ref toplevel?)
              (with-native-target
               (lambda ()
-                (compile tree-il #:from 'tree-il #:to 'value))))
+                (eval-tree-il tree-il))))
            tree-il)))
     (else (report-error loc "bad defmacro" args))))
 
