@@ -76,6 +76,8 @@ SOURCES =					\
   $(ECMASCRIPT_LANG_SOURCES)			\
   $(ELISP_LANG_SOURCES)				\
   $(BRAINFUCK_LANG_SOURCES)			\
+  $(JS_IL_LANG_SOURCES)				\
+  $(JS_LANG_SOURCES)				\
   $(LIB_SOURCES)				\
   $(WEB_SOURCES)
 
@@ -203,6 +205,15 @@ BRAINFUCK_LANG_SOURCES =			\
   language/brainfuck/compile-scheme.scm		\
   language/brainfuck/compile-tree-il.scm	\
   language/brainfuck/spec.scm
+
+JS_IL_LANG_SOURCES =				\
+  language/js-il.scm				\
+  language/js-il/compile-javascript.scm		\
+  language/js-il/spec.scm
+
+JS_LANG_SOURCES =				\
+  language/javascript.scm			\
+  language/js-il/spec.scm
 
 SCRIPTS_SOURCES =				\
   scripts/compile.scm				\

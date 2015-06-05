@@ -22,6 +22,7 @@
   #:use-module (system base language)
   #:use-module (language cps)
   #:use-module (language cps compile-bytecode)
+  #:use-module (language cps compile-js)
   #:export (cps))
 
 (define* (write-cps exp #:optional (port (current-output-port)))
@@ -32,6 +33,7 @@
   #:reader	(lambda (port env) (read port))
   #:printer	write-cps
   #:parser      parse-cps
-  #:compilers   `((bytecode . ,compile-bytecode))
+  #:compilers   `((bytecode . ,compile-bytecode)
+                  (js-il . ,compile-js))
   #:for-humans? #f
   )
