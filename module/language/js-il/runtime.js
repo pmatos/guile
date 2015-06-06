@@ -159,12 +159,6 @@ scheme.primitives["resolve"] = function (sym, is_bound) {
     return scheme.env[sym.name];
 };
 
-// values
-scheme.Values = function () {
-    this.values = arguments;
-    return this;
-};
-
 // bleh
 scheme.initial_cont = function (x) { return x; };
 scheme.primitives.return = function (x) { return x; };
@@ -172,13 +166,11 @@ scheme.is_true = function (obj) {
     return !(obj == scheme.FALSE || obj == scheme.NIL);
 };
 
-var callcc = function (k,vals) {
-    var closure = vals.values[0];
-    var f = function (k2, val) {
-        // TODO: multivalue continuations
+var callcc = function (self, k, closure) {
+    var f = function (self, k2, val) {
         return k(val);
     };
-    return closure.fun(k, new scheme.Closure(f, 0));
+    return closure.fun(closure, k, new scheme.Closure(f, 0));
 };
 scheme.builtins[4] = new scheme.Closure(callcc, 0);
 // #define FOR_EACH_VM_BUILTIN(M) \

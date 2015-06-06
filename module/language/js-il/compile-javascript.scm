@@ -42,8 +42,8 @@
     (($ il:var id exp)
      (make-var (rename id) (compile-exp exp)))
 
-    (($ il:continue k exp)
-     (make-return (make-call (name->id k) (list (compile-exp exp)))))
+    (($ il:continue k exps)
+     (make-return (make-call (name->id k) (map compile-exp exps))))
 
     (($ il:branch test then else)
      (make-conditional (make-call (make-refine *scheme* (make-const "is_true"))
@@ -71,11 +71,6 @@
      (make-new
       (make-call (make-refine *scheme* (make-const "Closure"))
                  (list (name->id label) (make-const nfree)))))
-
-    (($ il:values vals)
-     (make-new
-      (make-call (make-refine *scheme* (make-const "Values"))
-                 (map name->id vals))))
 
     (($ il:id name)
      (name->id name))))

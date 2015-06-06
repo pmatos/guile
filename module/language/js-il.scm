@@ -13,7 +13,6 @@
             make-jscall jscall
             make-closure closure
             make-branch branch
-            make-values values
             ; print-js
             make-return return
             make-id id
@@ -61,13 +60,12 @@
 
 (define-js-type local bindings body) ; local scope
 (define-js-type var id exp)
-(define-js-type continue cont exp)
+(define-js-type continue cont args)
 (define-js-type const value)
 (define-js-type primcall name args)
 (define-js-type call name args)
 (define-js-type jscall name args) ;; TODO: shouldn't need this hack
 (define-js-type closure label num-free)
-(define-js-type values vals)
 (define-js-type branch test consequence alternate)
 (define-js-type id name)
 (define-js-type return val)
@@ -82,8 +80,8 @@
      `(local ,(map unparse-js bindings) ,(unparse-js body)))
     (($ var id exp)
      `(var ,id ,(unparse-js exp)))
-    (($ continue k exp)
-     `(continue ,k ,(unparse-js exp)))
+    (($ continue k args)
+     `(continue ,k ,(map unparse-js args)))
     (($ branch test then else)
      `(if ,(unparse-js test) ,(unparse-js then) ,(unparse-js else)))
     ;; values
@@ -97,8 +95,6 @@
      `(jscall ,name , args))
     (($ closure label nfree)
      `(closure ,label ,nfree))
-    (($ values vals)
-     `(values . ,vals))
     (($ return val)
      `(return . ,(unparse-js val)))
     (($ id name)
@@ -141,7 +137,7 @@
     (($ var id exp)
      (format port "var ~a = " (lookup-cont id))
      (print-js exp port))
-    (($ continue k exp)
+    (($ continue k args)
      (format port "return ~a(" (lookup-cont k))
      (print-js exp port)
      (display ")" port))

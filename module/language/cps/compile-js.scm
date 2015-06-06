@@ -1,5 +1,4 @@
 (define-module (language cps compile-js)
-  #:use-module ((guile) #:select ((values . mv:values))) ;; FIXME:
   #:use-module (language cps)
   #:use-module (language js-il)
   #:use-module (ice-9 match)
@@ -25,7 +24,7 @@
      ;; "self" argument, for now, I add "undefined" as the first
      ;; argument in the call to it.
      ;; see compile-exp in (language js-il compile-javascript)
-     (mv:values (make-program (compile-fun (car funs))
+     (values (make-program (compile-fun (car funs))
                            (map compile-fun (cdr funs)))
              env
              env)))
@@ -79,8 +78,6 @@
      ;; use the name part?
      (make-var k (make-function syms (compile-term body))))
     (($ $cont k ($ $kreceive ($ $arity (arg) _ (? symbol? rest) _ _) k2))
-     ;; still not 100% on passing values as args vs a values object.
-     ;; using the former means I can merge make-jscall and make-continue
      (make-var k (make-function (list arg rest) (make-jscall k2 (list arg rest)))))
     (($ $cont k ($ $kreceive ($ $arity (arg) _ #f _ _) k2))
      (make-var k (make-function (list arg) (make-jscall k2 (list arg)))))
@@ -93,15 +90,17 @@
     (($ $branch kt exp)
      (compile-test exp kt k))
     (($ $primcall 'return (arg))
-     (make-continue k (make-id arg)))
+     (make-continue k (list (make-id arg))))
     (($ $call name args)
      (make-call name (cons k args)))
     (($ $callk label proc args)
      ;; eh?
      ;; (pk 'callk label proc args k)
-     (make-jscall label (cons k args)))
+     (make-jscall label (cons* proc k args)))
+    (($ $values values)
+     (make-continue k (map make-id values)))
     (_
-     (make-continue k (compile-exp* exp)))))
+     (make-continue k (list (compile-exp* exp))))))
 
 (define (compile-exp* exp)
   (match exp
@@ -111,8 +110,6 @@
      (make-primcall name args))
     (($ $closure label nfree)
      (make-closure label nfree))
-    (($ $values values)
-     (make-values values))
     (_
      `(exp:todo: ,exp))))
 
@@ -121,5 +118,5 @@
   ;; don't need to create a new continuation (which will require extra
   ;; arguments being passed through)
   (make-branch (compile-exp* exp)
-               (make-continue kt (make-values '()))
-               (make-continue kf (make-values '()))))
+               (make-continue kt '())
+               (make-continue kf '())))
