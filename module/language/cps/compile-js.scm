@@ -58,7 +58,7 @@
                        (compile-term exp))
                       (($ $cont k _)
                        (make-local (list (compile-cont body))
-                                   (make-jscall k req))))))
+                                   (make-continue k (map make-id req)))))))
     (_
      `(clause:todo: ,clause))))
 
@@ -78,9 +78,9 @@
      ;; use the name part?
      (make-var k (make-function syms (compile-term body))))
     (($ $cont k ($ $kreceive ($ $arity (arg) _ (? symbol? rest) _ _) k2))
-     (make-var k (make-function (list arg rest) (make-jscall k2 (list arg rest)))))
+     (make-var k (make-function (list arg rest) (make-continue k2 (list (make-id arg) (make-id rest))))))
     (($ $cont k ($ $kreceive ($ $arity (arg) _ #f _ _) k2))
-     (make-var k (make-function (list arg) (make-jscall k2 (list arg)))))
+     (make-var k (make-function (list arg) (make-continue k2 (list (make-id arg))))))
     (_
      `(cont:todo: ,cont))
     ))
@@ -94,9 +94,7 @@
     (($ $call name args)
      (make-call name (cons k args)))
     (($ $callk label proc args)
-     ;; eh?
-     ;; (pk 'callk label proc args k)
-     (make-jscall label (cons* proc k args)))
+     (make-continue label (map make-id (cons* proc k args))))
     (($ $values values)
      (make-continue k (map make-id values)))
     (_

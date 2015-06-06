@@ -10,7 +10,6 @@
             make-const const
             make-primcall primcall
             make-call call
-            make-jscall jscall
             make-closure closure
             make-branch branch
             ; print-js
@@ -64,7 +63,6 @@
 (define-js-type const value)
 (define-js-type primcall name args)
 (define-js-type call name args)
-(define-js-type jscall name args) ;; TODO: shouldn't need this hack
 (define-js-type closure label num-free)
 (define-js-type branch test consequence alternate)
 (define-js-type id name)
@@ -91,8 +89,6 @@
      `(primcall ,name , args))
     (($ call name args)
      `(call ,name , args))
-    (($ jscall name args)
-     `(jscall ,name , args))
     (($ closure label nfree)
      `(closure ,label ,nfree))
     (($ return val)

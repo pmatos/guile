@@ -64,9 +64,6 @@
       (make-call (make-refine (name->id name) (make-const "fun"))
                  (map name->id (cons name args)))))
 
-    (($ il:jscall name args)
-     (make-return (make-call (name->id name) (map name->id args))))
-
     (($ il:closure label nfree)
      (make-new
       (make-call (make-refine *scheme* (make-const "Closure"))
