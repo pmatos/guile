@@ -29,11 +29,10 @@
                                            (list (compile-exp entry) entry-call)))
                   '())))
 
-    (($ il:function #f params body)
+    (($ il:continuation params body)
      (make-function (map rename params) (list (compile-exp body))))
 
     (($ il:function name params body)
-     ;; TODO: split il:function into closure (with self) and cont types
      (make-function (map rename (cons name params)) (list (compile-exp body))))
 
     (($ il:local bindings body)

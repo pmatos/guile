@@ -51,7 +51,7 @@
        (not-supported "keyword arguments are not supported" clause))
      (when alternate
        (not-supported "alternate continuations are not supported" clause))
-     (make-function self ;; didn't think this js pattern would come in handy
+     (make-function self
                     (cons tail req)
                     (match body
                       (($ $cont k ($ $kargs () () exp))
@@ -76,11 +76,14 @@
   (match cont
     (($ $cont k ($ $kargs names syms body))
      ;; use the name part?
-     (make-var k (make-function syms (compile-term body))))
-    (($ $cont k ($ $kreceive ($ $arity (arg) _ (? symbol? rest) _ _) k2))
-     (make-var k (make-function (list arg rest) (make-continue k2 (list (make-id arg) (make-id rest))))))
-    (($ $cont k ($ $kreceive ($ $arity (arg) _ #f _ _) k2))
-     (make-var k (make-function (list arg) (make-continue k2 (list (make-id arg))))))
+     (make-var k (make-continuation syms (compile-term body))))
+    (($ $cont k ($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2))
+     (make-var k
+       (make-continuation (append req (list rest))
+                          (make-continue k2
+                                         (append (map make-id req) (list (make-id rest)))))))
+    (($ $cont k ($ $kreceive ($ $arity req _ #f _ _) k2))
+     (make-var k (make-continuation req (make-continue k2 (map make-id req)))))
     (_
      `(cont:todo: ,cont))
     ))
@@ -108,6 +111,11 @@
      (make-primcall name args))
     (($ $closure label nfree)
      (make-closure label nfree))
+    (($ $values (val))
+     ;; FIXME:
+     ;; may happen if a test branch of a conditional compiles to values
+     ;; placeholder till I learn if multiple values could be returned.
+     (make-id val))
     (_
      `(exp:todo: ,exp))))
 
