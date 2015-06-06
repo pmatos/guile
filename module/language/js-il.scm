@@ -7,13 +7,12 @@
             make-continuation continuation
             make-local local
             make-var var
-            make-continue continue ; differ from conts
+            make-continue continue
             make-const const
             make-primcall primcall
             make-call call
             make-closure closure
             make-branch branch
-            ; print-js
             make-return return
             make-id id
             ))
@@ -78,7 +77,6 @@
      `(continue ,k ,(map unparse-js args)))
     (($ branch test then else)
      `(if ,(unparse-js test) ,(unparse-js then) ,(unparse-js else)))
-    ;; values
     (($ const c)
      `(const ,c))
     (($ primcall name args)
@@ -90,8 +88,4 @@
     (($ return val)
      `(return . ,(unparse-js val)))
     (($ id name)
-     `(id . ,name))
-    (_
-     ;(error "unexpected js" exp)
-     (pk 'unexpected exp)
-     exp)))
+     `(id . ,name))))

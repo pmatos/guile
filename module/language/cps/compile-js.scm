@@ -16,7 +16,6 @@
   ;; first-order optimization should go here
   (set! exp (reify-primitives exp))
   (set! exp (renumber exp))
-  ;; (values exp env env)
   (match exp
     (($ $program funs)
      ;; TODO: I should special case the compilation for the initial fun,
@@ -27,16 +26,12 @@
      (values (make-program (compile-fun (car funs))
                            (map compile-fun (cdr funs)))
              env
-             env)))
-  )
+             env))))
 
 (define (compile-fun fun)
-  ;; meta
   (match fun
     (($ $cont k ($ $kfun src meta self ($ $cont tail ($ $ktail)) clause))
-     (make-var k (compile-clause clause self tail)))
-    (_
-     `(fun:todo: ,fun))))
+     (make-var k (compile-clause clause self tail)))))
 
 (define (compile-clause clause self tail)
   (match clause
@@ -58,9 +53,7 @@
                        (compile-term exp))
                       (($ $cont k _)
                        (make-local (list (compile-cont body))
-                                   (make-continue k (map make-id req)))))))
-    (_
-     `(clause:todo: ,clause))))
+                                   (make-continue k (map make-id req)))))))))
 
 (define (not-supported msg clause)
   (error 'not-supported msg clause))
@@ -115,9 +108,7 @@
      ;; FIXME:
      ;; may happen if a test branch of a conditional compiles to values
      ;; placeholder till I learn if multiple values could be returned.
-     (make-id val))
-    (_
-     `(exp:todo: ,exp))))
+     (make-id val))))
 
 (define (compile-test exp kt kf)
   ;; TODO: find out if the expression is always simple enough that I

@@ -182,9 +182,3 @@
                   (display separator port)
                   (printer x port))
                 rest))))
-
-(define (print-terminated args printer terminator port)
-  (for-each (lambda (x)
-              (printer x port)
-              (display terminator port))
-            args))
