@@ -127,6 +127,7 @@ CPS_LANG_SOURCES =						\
   language/cps.scm						\
   language/cps/closure-conversion.scm				\
   language/cps/compile-bytecode.scm				\
+  language/cps/compile-js.scm				\
   language/cps/constructors.scm					\
   language/cps/contification.scm				\
   language/cps/cse.scm						\
@@ -213,7 +214,7 @@ JS_IL_LANG_SOURCES =				\
 
 JS_LANG_SOURCES =				\
   language/javascript.scm			\
-  language/js-il/spec.scm
+  language/javascript/spec.scm
 
 SCRIPTS_SOURCES =				\
   scripts/compile.scm				\
