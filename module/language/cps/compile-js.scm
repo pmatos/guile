@@ -76,10 +76,7 @@
                           (make-continue k2
                                          (append (map make-id req) (list (make-id rest)))))))
     (($ $cont k ($ $kreceive ($ $arity req _ #f _ _) k2))
-     (make-var k (make-continuation req (make-continue k2 (map make-id req)))))
-    (_
-     `(cont:todo: ,cont))
-    ))
+     (make-var k (make-continuation req (make-continue k2 (map make-id req)))))))
 
 (define (compile-exp exp k)
  (match exp
