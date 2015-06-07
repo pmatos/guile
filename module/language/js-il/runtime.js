@@ -118,6 +118,10 @@ scheme.Symbol = function(s) {
 // Chars
 
 // Strings
+scheme.String = function(s) {
+    this.s = s;
+    return this;
+};
 
 // Closures
 scheme.Closure = function(f, size) {

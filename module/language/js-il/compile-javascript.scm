@@ -112,5 +112,10 @@
          (make-call
            (make-refine *scheme* (make-const "list"))
            (map compile-const c)))
+        ((string? c)
+         (make-new
+          (make-call
+           (make-refine *scheme* (make-const "String"))
+           (list (make-const c)))))
         (else
          (throw 'uncompilable-const c))))

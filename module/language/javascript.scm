@@ -167,6 +167,9 @@
 
 (define (print-const c port)
   (cond ((string? c)
+         ;; FIXME:
+         ;; Scheme strings and JS Strings are different, and not just in
+         ;; terms of mutability
          (write c port))
         ((number? c)
          (write c port))
