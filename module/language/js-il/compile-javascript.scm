@@ -2,9 +2,11 @@
   #:use-module (ice-9 match)
   #:use-module ((language js-il) #:renamer (symbol-prefix-proc 'il:))
   #:use-module (language javascript)
+  #:use-module (language js-il direct)
   #:export (compile-javascript))
 
 (define (compile-javascript exp env opts)
+  (set! exp (remove-immediate-calls exp))
   (values (compile-exp exp) env env))
 
 (define *scheme* (make-id "scheme"))
