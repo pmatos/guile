@@ -47,10 +47,10 @@
      (make-return (make-call (name->id k) (map compile-exp exps))))
 
     (($ il:branch test then else)
-     (make-conditional (make-call (make-refine *scheme* (make-const "is_true"))
-                                  (list (compile-exp test)))
-                       (list (compile-exp then))
-                       (list (compile-exp else))))
+     (make-branch (make-call (make-refine *scheme* (make-const "is_true"))
+                             (list (compile-exp test)))
+                  (list (compile-exp then))
+                  (list (compile-exp else))))
 
     (($ il:const c)
      (compile-const c))

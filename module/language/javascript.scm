@@ -12,7 +12,7 @@
             make-new new
             make-id id
             make-refine refine
-            make-conditional conditional
+            make-branch branch
             make-var var
 
             print-statement))
@@ -55,7 +55,7 @@
 (define-js-type new expr)
 (define-js-type id name)
 (define-js-type refine id field)
-(define-js-type conditional test then else)
+(define-js-type branch test then else)
 (define-js-type var id exp)
 
 (define (unparse-js exp)
@@ -76,7 +76,7 @@
      `(id ,name))
     (($ refine id field)
      `(refine ,(unparse-js id) ,(unparse-js field)))
-    (($ conditional test then else)
+    (($ branch test then else)
      `(if ,(unparse-js test)
           (block ,@(map unparse-js then))
           (block ,@(map unparse-js else))))
@@ -134,7 +134,7 @@
      (print-exp exp port)
      (format port ";"))
 
-    (($ conditional test then else)
+    (($ branch test then else)
      (format port "if (")
      (print-exp test port)
      (format port ") {")
