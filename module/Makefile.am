@@ -209,6 +209,7 @@ BRAINFUCK_LANG_SOURCES =			\
 
 JS_IL_LANG_SOURCES =				\
   language/js-il.scm				\
+  language/js-il/direct.scm			\
   language/js-il/compile-javascript.scm		\
   language/js-il/spec.scm
 
