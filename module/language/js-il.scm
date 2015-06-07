@@ -4,6 +4,7 @@
   #:use-module (ice-9 match)
   #:export (make-program program
             make-function function
+            make-params params
             make-continuation continuation
             make-local local
             make-var var
@@ -48,7 +49,8 @@
   (format port "#<js-il ~S>" (unparse-js exp)))
 
 (define-js-type program entry body)
-(define-js-type function name params body)
+(define-js-type function params body)
+(define-js-type params self req rest)
 (define-js-type continuation params body)
 (define-js-type local bindings body) ; local scope
 (define-js-type var id exp)
@@ -67,8 +69,8 @@
      `(program ,(unparse-js entry) . ,(map unparse-js body)))
     (($ continuation params body)
      `(continuation ,params ,(unparse-js body)))
-    (($ function name params body)
-     `(function ,name ,params ,(unparse-js body)))
+    (($ function ($ params self req opt) body)
+     `(function ,(append (list self) req (if opt (list opt) '())) ,(unparse-js body)))
     (($ local bindings body)
      `(local ,(map unparse-js bindings) ,(unparse-js body)))
     (($ var id exp)

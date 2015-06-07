@@ -17,6 +17,20 @@
 (define (rename name)
   (format #f "kont_~a" name))
 
+(define (bind-rest-args rest num-drop)
+  (define (ref i l)
+    (if (null? l)
+        i
+        (ref (make-refine i (make-const (car l)))
+             (cdr l))))
+  (define this (rename rest))
+  (make-var this
+            (make-call (ref *scheme* (list "list" "apply"))
+                       (list
+                        (ref *scheme* (list "list"))
+                        (make-call (ref (make-id "Array") (list "prototype" "slice" "call"))
+                                   (list (make-id "arguments") (make-const num-drop)))))))
+
 (define (compile-exp exp)
   ;; TODO: handle ids for js
   (match exp
@@ -34,8 +48,13 @@
     (($ il:continuation params body)
      (make-function (map rename params) (list (compile-exp body))))
 
-    (($ il:function name params body)
-     (make-function (map rename (cons name params)) (list (compile-exp body))))
+    (($ il:function ($ il:params self req #f) body)
+     (make-function (map rename (cons self req)) (list (compile-exp body))))
+
+    (($ il:function ($ il:params self req rest) body)
+     (make-function (map rename (cons self req))
+                    (list (bind-rest-args rest (length (cons self req)))
+                          (compile-exp body))))
 
     (($ il:local bindings body)
      (make-block (append (map compile-exp bindings) (list (compile-exp body)))))

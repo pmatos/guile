@@ -40,20 +40,19 @@
      ;; add function argument prelude
      (unless (null? opt)
        (not-supported "optional arguments are not supported" clause))
-     (when rest
-       (not-supported "rest arguments are not supported" clause))
      (unless (or (null? kw) allow-other-keys?)
        (not-supported "keyword arguments are not supported" clause))
      (when alternate
        (not-supported "alternate continuations are not supported" clause))
-     (make-function self
-                    (cons tail req)
+     (make-function (make-params self (cons tail req) rest)
                     (match body
                       (($ $cont k ($ $kargs () () exp))
                        (compile-term exp))
                       (($ $cont k _)
                        (make-local (list (compile-cont body))
-                                   (make-continue k (map make-id req)))))))))
+                                   (make-continue
+                                    k
+                                    (map make-id (append req (if rest (list rest) '())))))))))))
 
 (define (not-supported msg clause)
   (error 'not-supported msg clause))
