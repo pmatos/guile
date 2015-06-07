@@ -14,8 +14,41 @@
 (define (name->id name)
   (make-id (rename name)))
 
-(define (rename name)
-  (format #f "kont_~a" name))
+(define (rename id)
+  (cond ((and (integer? id) (>= id 0))
+         (format #f "k_~a " id))
+        ((symbol? id)
+         (js-id (symbol->string id)))
+        ((string? id)
+         (js-id id))
+        (else
+         (throw 'bad-id id))))
+
+(define (js-id name)
+  (call-with-output-string
+   (lambda (port)
+     (display "k_" port)
+     (string-for-each
+      (lambda (c)
+        (if (or (and (char<=? #\a c) (char<=? c #\z))
+                (and (char<=? #\A c) (char<=? c #\Z))
+                (and (char<=? #\0 c) (char<=? c #\9)))
+            (display c port)
+            (case c
+              ((#\-) (display "_h" port))
+              ((#\_) (display "_u" port))
+              ((#\?) (display "_p" port))
+              ((#\!) (display "_x" port))
+              ((#\<) (display "_l" port))
+              ((#\>) (display "_g" port))
+              ((#\=) (display "_e" port))
+              ((#\*) (display "_s" port))
+              ((#\+) (display "_a" port))
+              ((#\\) (display "_b" port))
+              ((#\/) (display "_f" port))
+              (else
+               (throw 'bad-id-char  c)))))
+      name))))
 
 (define (bind-rest-args rest num-drop)
   (define (ref i l)
