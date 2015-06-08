@@ -14,6 +14,7 @@
             make-refine refine
             make-branch branch
             make-var var
+            make-binop binop
 
             print-statement))
 
@@ -57,6 +58,7 @@
 (define-js-type refine id field)
 (define-js-type branch test then else)
 (define-js-type var id exp)
+(define-js-type binop op arg1 arg2)
 
 (define (unparse-js exp)
   (match exp
@@ -81,7 +83,9 @@
           (block ,@(map unparse-js then))
           (block ,@(map unparse-js else))))
     (($ var id exp)
-     `(var ,id ,(unparse-js exp)))))
+     `(var ,id ,(unparse-js exp)))
+    (($ binop op arg1 arg2)
+     `(binop ,op ,arg1 ,arg2))))
 
 (define (print-exp exp port)
   (match exp
@@ -123,7 +127,25 @@
 
     (($ new expr)
      (format port "new ")
-     (print-exp expr port))))
+     (print-exp expr port))
+
+    (($ binop op arg1 arg2)
+     (display "(" port)
+     (print-exp arg1 port)
+     (display ")" port)
+     (print-binop op port)
+     (display "(" port)
+     (print-exp arg2 port)
+     (display ")" port))))
+
+(define (print-binop op port)
+  (case op
+    ((or) (display "||" port))
+    ((and) (display "&&" port))
+    ((=) (display "==" port))
+    ((+ - < <= > >=) (format port "~a" op))
+    (else
+     (throw 'unprintable-binop op))))
 
 (define (print-statement stmt port)
   (match stmt
