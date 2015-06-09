@@ -30,29 +30,47 @@
 
 (define (compile-fun fun)
   (match fun
-    (($ $cont k ($ $kfun src meta self ($ $cont tail ($ $ktail)) clause))
-     (make-var k (compile-clause clause self tail)))))
+    (($ $cont k ($ $kfun _ _ self ($ $cont tail ($ $ktail)) clause))
+     (call-with-values
+         (lambda ()
+           (extract-clauses self clause))
+       (lambda (jump-table clauses)
+         (make-var
+          k
+          (make-function
+           (list self tail)
+           (make-local (map (lambda (clause)
+                              (compile-clause clause self tail))
+                            clauses)
+                       (make-jump-table jump-table)))))))))
+
+(define (extract-clauses self clause)
+  (let loop ((clause clause) (specs '()) (clauses '()))
+    (match clause
+      (($ $cont k ($ $kclause ($ $arity req _ rest _ _) _ #f))
+       (values (reverse (cons (cons (make-params self req rest) k) specs))
+               (reverse (cons clause clauses))))
+      (($ $cont k ($ $kclause ($ $arity req _ rest _ _) _ alternate))
+       (loop alternate
+             (cons (cons (make-params self req rest) k) specs)
+             (cons clause clauses))))))
 
 (define (compile-clause clause self tail)
   (match clause
-    (($ $cont k ($ $kclause ($ $arity req opt rest kw allow-other-keys?)
-         body alternate))
-     ;; add function argument prelude
-     (unless (null? opt)
-       (not-supported "optional arguments are not supported" clause))
-     (unless (or (null? kw) allow-other-keys?)
-       (not-supported "keyword arguments are not supported" clause))
-     (when alternate
-       (not-supported "alternate continuations are not supported" clause))
-     (make-function (make-params self (cons tail req) rest)
-                    (match body
-                      (($ $cont k ($ $kargs () () exp))
-                       (compile-term exp))
-                      (($ $cont k _)
-                       (make-local (list (compile-cont body))
-                                   (make-continue
-                                    k
-                                    (map make-id (append req (if rest (list rest) '())))))))))))
+    (($ $cont k ($ $kclause ($ $arity req _ rest _) body _))
+     (make-var
+      k
+      (make-continuation
+       (append (list self)
+               req (if rest (list rest) '()))
+       (match body
+         (($ $cont k ($ $kargs () () exp))
+          (compile-term exp))
+         (($ $cont k _)
+          (make-local (list (compile-cont body))
+                      (make-continue
+                       k
+                       (map make-id (append req (if rest (list rest) '()))))))))))))
 
 (define (not-supported msg clause)
   (error 'not-supported msg clause))

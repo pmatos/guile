@@ -1,4 +1,5 @@
 (define-module (language js-il compile-javascript)
+  #:use-module ((srfi srfi-1) #:select (fold-right))
   #:use-module (ice-9 match)
   #:use-module ((language js-il) #:renamer (symbol-prefix-proc 'il:))
   #:use-module (language javascript)
@@ -81,13 +82,11 @@
     (($ il:continuation params body)
      (make-function (map rename params) (list (compile-exp body))))
 
-    (($ il:function ($ il:params self req #f) body)
-     (make-function (map rename (cons self req)) (list (compile-exp body))))
+    (($ il:function params body)
+     (make-function (map rename params) (list (compile-exp body))))
 
-    (($ il:function ($ il:params self req rest) body)
-     (make-function (map rename (cons self req))
-                    (list (bind-rest-args rest (length (cons self req)))
-                          (compile-exp body))))
+    (($ il:jump-table specs)
+     (compile-jump-table specs))
 
     (($ il:local bindings body)
      (make-block (append (map compile-exp bindings) (list (compile-exp body)))))
@@ -124,6 +123,50 @@
 
     (($ il:id name)
      (name->id name))))
+
+(define (compile-jump-table specs)
+  (define offset 2) ; closure & continuation
+  (define (compile-test params)
+    (match params
+      (($ il:params self req #f)
+       (make-binop '=
+                   (make-refine (make-id "arguments")
+                                (make-const "length"))
+                   (make-const (+ offset (length req)))))
+      (($ il:params self req rest)
+       (make-binop '>=
+                   (make-refine (make-id "arguments")
+                                (make-const "length"))
+                   (make-const (+ offset (length req)))))))
+  (define (compile-jump params k)
+    (match params
+      (($ il:params self req #f)
+       (list
+        (make-return
+         (make-call (name->id k)
+                    (cons (name->id self)
+                          (map (lambda (idx)
+                                 (make-refine (make-id "arguments")
+                                              (make-const (+ offset idx))))
+                               (iota (length req))))))))
+      (($ il:params self req rest)
+       (list
+        (bind-rest-args rest (+ offset (length req)))
+        (make-return
+         (make-call (name->id k)
+                    (append (list (name->id self))
+                            (map (lambda (idx)
+                                   (make-refine (make-id "arguments")
+                                                (make-const (+ offset idx))))
+                                 (iota (length req)))
+                            (list (name->id rest)))))))))
+  (fold-right (lambda (a d)
+                (make-branch (compile-test (car a))
+                             (compile-jump (car a) (cdr a))
+                             (list d)))
+              ;; FIXME: should throw an error
+              (make-return (make-id "undefined"))
+              specs))
 
 (define (compile-const c)
   (cond ((number? c)

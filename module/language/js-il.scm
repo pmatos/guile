@@ -4,6 +4,7 @@
   #:use-module (ice-9 match)
   #:export (make-program program
             make-function function
+            make-jump-table jump-table
             make-params params
             make-continuation continuation
             make-local local
@@ -50,6 +51,7 @@
 
 (define-js-type program entry body)
 (define-js-type function params body)
+(define-js-type jump-table spec)
 (define-js-type params self req rest)
 (define-js-type continuation params body)
 (define-js-type local bindings body) ; local scope
@@ -69,8 +71,14 @@
      `(program ,(unparse-js entry) . ,(map unparse-js body)))
     (($ continuation params body)
      `(continuation ,params ,(unparse-js body)))
-    (($ function ($ params self req opt) body)
-     `(function ,(append (list self) req (if opt (list opt) '())) ,(unparse-js body)))
+    (($ function args body)
+     `(function ,args ,(unparse-js body)))
+    (($ jump-table body)
+     `(jump-table ,@(map (lambda (p)
+                           `(,(unparse-js (car p)) . ,(cdr p)))
+                         body)))
+    (($ params self req rest)
+     `(params ,self ,req ,rest))
     (($ local bindings body)
      `(local ,(map unparse-js bindings) ,(unparse-js body)))
     (($ var id exp)
