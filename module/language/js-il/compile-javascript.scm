@@ -17,7 +17,7 @@
 
 (define (rename id)
   (cond ((and (integer? id) (>= id 0))
-         (format #f "k_~a " id))
+         (format #f "k_~a" id))
         ((symbol? id)
          (js-id (symbol->string id)))
         ((string? id)
