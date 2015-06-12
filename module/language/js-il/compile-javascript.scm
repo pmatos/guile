@@ -4,7 +4,14 @@
   #:use-module ((language js-il) #:renamer (symbol-prefix-proc 'il:))
   #:use-module (language javascript)
   #:use-module (language js-il direct)
+  #:use-module (system foreign)
   #:export (compile-javascript))
+
+(define (undefined? obj)
+  (define tc8-iflag 4)
+  (define unbound-val 9)
+  (define unbound-bits (logior (ash unbound-val 8) tc8-iflag))
+  (eqv? obj (pointer->scm (make-pointer unbound-bits))))
 
 (define (compile-javascript exp env opts)
   (set! exp (remove-immediate-calls exp))
@@ -64,6 +71,17 @@
                         (ref *scheme* (list "list"))
                         (make-call (ref (make-id "Array") (list "prototype" "slice" "call"))
                                    (list (make-id "arguments") (make-const num-drop)))))))
+
+(define (bind-opt-args opts num-drop)
+  (map (lambda (opt idx)
+         (make-var (rename opt)
+                   (make-binop 'or
+                               (make-refine (make-id "arguments")
+                                            (make-const (+ num-drop idx)))
+                               (make-refine *scheme* (make-const "UNDEFINED")))))
+       opts
+       (iota (length opts))))
+
 
 (define (compile-exp exp)
   ;; TODO: handle ids for js
@@ -128,19 +146,30 @@
   (define offset 2) ; closure & continuation
   (define (compile-test params)
     (match params
-      (($ il:params self req #f)
+      (($ il:params self req '() #f)
        (make-binop '=
                    (make-refine (make-id "arguments")
                                 (make-const "length"))
                    (make-const (+ offset (length req)))))
-      (($ il:params self req rest)
+      (($ il:params self req '() rest)
        (make-binop '>=
                    (make-refine (make-id "arguments")
                                 (make-const "length"))
-                   (make-const (+ offset (length req)))))))
+                   (make-const (+ offset (length req)))))
+      (($ il:params self req opts #f)
+       (make-binop 'and
+                   (make-binop '<=
+                               (make-const (+ offset (length req)))
+                               (make-refine (make-id "arguments")
+                                            (make-const "length")))
+                   (make-binop '<=
+                               (make-refine (make-id "arguments")
+                                            (make-const "length"))
+                               (make-const (+ offset (length req) (length opts))))))
+      ))
   (define (compile-jump params k)
     (match params
-      (($ il:params self req #f)
+      (($ il:params self req '() #f)
        (list
         (make-return
          (make-call (name->id k)
@@ -149,7 +178,7 @@
                                  (make-refine (make-id "arguments")
                                               (make-const (+ offset idx))))
                                (iota (length req))))))))
-      (($ il:params self req rest)
+      (($ il:params self req '() rest)
        (list
         (bind-rest-args rest (+ offset (length req)))
         (make-return
@@ -159,7 +188,20 @@
                                    (make-refine (make-id "arguments")
                                                 (make-const (+ offset idx))))
                                  (iota (length req)))
-                            (list (name->id rest)))))))))
+                            (list (name->id rest)))))))
+      (($ il:params self req opts #f)
+       (append
+        (bind-opt-args opts (+ offset (length req)))
+        (list
+         (make-return
+          (make-call (name->id k)
+                     (append (list (name->id self))
+                             (map (lambda (idx)
+                                    (make-refine (make-id "arguments")
+                                                 (make-const (+ offset idx))))
+                                  (iota (length req)))
+                             (map name->id opts)))))))
+      ))
   (fold-right (lambda (a d)
                 (make-branch (compile-test (car a))
                              (compile-jump (car a) (cdr a))

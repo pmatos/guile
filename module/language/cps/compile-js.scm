@@ -47,22 +47,21 @@
 (define (extract-clauses self clause)
   (let loop ((clause clause) (specs '()) (clauses '()))
     (match clause
-      (($ $cont k ($ $kclause ($ $arity req _ rest _ _) _ #f))
-       (values (reverse (cons (cons (make-params self req rest) k) specs))
+      (($ $cont k ($ $kclause ($ $arity req opts rest _ _) _ #f))
+       (values (reverse (cons (cons (make-params self req opts rest) k) specs))
                (reverse (cons clause clauses))))
-      (($ $cont k ($ $kclause ($ $arity req _ rest _ _) _ alternate))
+      (($ $cont k ($ $kclause ($ $arity req opts rest _ _) _ alternate))
        (loop alternate
-             (cons (cons (make-params self req rest) k) specs)
+             (cons (cons (make-params self req opts rest) k) specs)
              (cons clause clauses))))))
 
 (define (compile-clause clause self tail)
   (match clause
-    (($ $cont k ($ $kclause ($ $arity req _ rest _) body _))
+    (($ $cont k ($ $kclause ($ $arity req opt rest _) body _))
      (make-var
       k
       (make-continuation
-       (append (list self)
-               req (if rest (list rest) '()))
+       (append (list self) req opt (if rest (list rest) '()))
        (match body
          (($ $cont k ($ $kargs () () exp))
           (compile-term exp))
@@ -70,7 +69,7 @@
           (make-local (list (compile-cont body))
                       (make-continue
                        k
-                       (map make-id (append req (if rest (list rest) '()))))))))))))
+                       (map make-id (append req opt (if rest (list rest) '()))))))))))))
 
 (define (not-supported msg clause)
   (error 'not-supported msg clause))

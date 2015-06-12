@@ -9,7 +9,9 @@ var scheme = {
     TRUE : true,
     NIL  : false,
     EMPTY : [],
-    UNSPECIFIED : []
+    UNSPECIFIED : [],
+    // FIXME: wingo says not to leak undefined to users
+    UNDEFINED: undefined
 };
 
 function not_implemented_yet() {
