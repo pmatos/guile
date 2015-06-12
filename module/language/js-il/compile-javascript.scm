@@ -235,5 +235,28 @@
           (make-call
            (make-refine *scheme* (make-const "String"))
            (list (make-const c)))))
+        ((pair? c)
+         (make-new
+          (make-call
+           (make-refine *scheme* (make-const "Pair"))
+           (list (compile-const (car c))
+                 (compile-const (cdr c))))))
+        ((vector? c)
+         (make-new
+          (make-call
+           (make-refine *scheme* (make-const "Vector"))
+           (map compile-const (vector->list c)))))
+        ((char? c)
+         (make-new
+          (make-call
+           (make-refine *scheme* (make-const "Char"))
+           (list (make-const (string c))))))
+        ((keyword? c)
+         (make-new
+          (make-call
+           (make-refine *scheme* (make-const "Keyword"))
+           (list (make-const (symbol->string (keyword->symbol c)))))))
+        ((undefined? c)
+         (make-refine *scheme* (make-const "UNDEFINED")))
         (else
          (throw 'uncompilable-const c))))

@@ -111,13 +111,39 @@ scheme.Symbol = function(s) {
     };
 };
 
+// Keywords
+scheme.Keyword = function(s) {
+    this.name = s;
+    return this;
+};
+
 // Vectors
+scheme.Vector = function () {
+    this.array = Array.prototype.slice.call(arguments);
+    return this;
+};
+
+scheme.primitives["vector-ref"] = function (vec, idx) {
+    return vec.array[idx];
+};
+
+scheme.primitives["vector-set!"] = function (vec, idx, obj) {
+    return vec.array[idx] = obj;
+};
+
+scheme.primitives["vector-length"] = function (vec) {
+    return vec.array.length;
+};
 
 // Bytevectors
 
 // Booleans
 
 // Chars
+scheme.Char = function(c) {
+    this.c = c;
+    return this;
+};
 
 // Strings
 scheme.String = function(s) {
