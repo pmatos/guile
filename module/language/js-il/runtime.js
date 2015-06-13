@@ -1,6 +1,7 @@
 var scheme = {
     obarray : {},
     primitives : {},
+    utils : {},
     env : {},
     cache: [],
     builtins: [],
@@ -115,6 +116,25 @@ scheme.Symbol = function(s) {
 scheme.Keyword = function(s) {
     this.name = s;
     return this;
+};
+
+scheme.utils.keyword_ref = function(kw, args, start, dflt) {
+    var l = args.length;
+
+    if ((l - start) % 2 == 1) {
+        // FIXME: should error
+        return undefined;
+    }
+    // Need to loop in reverse because last matching keyword wins
+    for (var i = l - 2; i >= start; i -= 2) {
+        if (!(args[i] instanceof scheme.Keyword)) {
+            return undefined;
+        }
+        if (args[i].name === kw.name) {
+            return args[i + 1];
+        }
+    }
+    return dflt;
 };
 
 // Vectors

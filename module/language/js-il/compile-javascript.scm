@@ -21,6 +21,7 @@
   (values exp env env))
 
 (define *scheme* (make-id "scheme"))
+(define *utils*  (make-refine *scheme* (make-const "utils")))
 
 (define (name->id name)
   (make-id (rename name)))
@@ -84,6 +85,18 @@
                                (make-refine *scheme* (make-const "UNDEFINED")))))
        opts
        (iota (length opts))))
+
+(define (bind-kw-args kws ids num-drop)
+  (define lookup (make-refine *utils* (make-const "keyword_ref")))
+  (map (lambda (kw id)
+         (make-var (rename id)
+                   (make-call lookup
+                              (list (compile-const kw)
+                                    (make-id "arguments")
+                                    (compile-const num-drop)
+                                    (make-refine *scheme* (make-const "UNDEFINED"))))))
+       kws
+       ids))
 
 
 (define (compile-exp exp)
@@ -149,17 +162,17 @@
   (define offset 2) ; closure & continuation
   (define (compile-test params)
     (match params
-      (($ il:params self req '() #f)
+      (($ il:params self req '() #f '() #f)
        (make-binop '=
                    (make-refine (make-id "arguments")
                                 (make-const "length"))
                    (make-const (+ offset (length req)))))
-      (($ il:params self req '() rest)
+      (($ il:params self req '() rest '() #f)
        (make-binop '>=
                    (make-refine (make-id "arguments")
                                 (make-const "length"))
                    (make-const (+ offset (length req)))))
-      (($ il:params self req opts #f)
+      (($ il:params self req opts #f '() #f)
        (make-binop 'and
                    (make-binop '<=
                                (make-const (+ offset (length req)))
@@ -169,10 +182,16 @@
                                (make-refine (make-id "arguments")
                                             (make-const "length"))
                                (make-const (+ offset (length req) (length opts))))))
+      ;; FIXME: need to handle allow-other-keys? and testing for actual keywords
+      (($ il:params self req opts #f kwargs _)
+       (make-binop '<=
+                   (make-const (+ offset (length req)))
+                   (make-refine (make-id "arguments")
+                                (make-const "length"))))
       ))
   (define (compile-jump params k)
     (match params
-      (($ il:params self req '() #f)
+      (($ il:params self req '() #f '() #f)
        (list
         (make-return
          (make-call (name->id k)
@@ -181,7 +200,7 @@
                                  (make-refine (make-id "arguments")
                                               (make-const (+ offset idx))))
                                (iota (length req))))))))
-      (($ il:params self req '() rest)
+      (($ il:params self req '() rest '() #f)
        (list
         (bind-rest-args rest (+ offset (length req)))
         (make-return
@@ -192,7 +211,7 @@
                                                 (make-const (+ offset idx))))
                                  (iota (length req)))
                             (list (name->id rest)))))))
-      (($ il:params self req opts #f)
+      (($ il:params self req opts #f '() #f)
        (append
         (bind-opt-args opts (+ offset (length req)))
         (list
@@ -204,6 +223,20 @@
                                                  (make-const (+ offset idx))))
                                   (iota (length req)))
                              (map name->id opts)))))))
+      (($ il:params self req opts #f ((kws names ids) ...) _)
+       (append
+        (bind-opt-args opts (+ offset (length req)))
+        (bind-kw-args kws names (+ offset (length req)))
+        (list
+         (make-return
+          (make-call (name->id k)
+                     (append (list (name->id self))
+                             (map (lambda (idx)
+                                    (make-refine (make-id "arguments")
+                                                 (make-const (+ offset idx))))
+                                  (iota (length req)))
+                             (map name->id opts)
+                             (map name->id names)))))))
       ))
   (fold-right (lambda (a d)
                 (make-branch (compile-test (car a))
