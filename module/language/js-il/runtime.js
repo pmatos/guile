@@ -19,6 +19,10 @@ function not_implemented_yet() {
     throw "not implemented yet";
 };
 
+function coerce_bool(obj) {
+    return obj ? scheme.TRUE : scheme.FALSE;
+};
+
 // Numbers
 scheme.primitives.add = function (x, y) {
     return x + y;
@@ -45,11 +49,12 @@ scheme.primitives.div = function (x, y) {
 };
 
 scheme.primitives["="] = function (x, y) {
-    return x == y;
+    return coerce_bool(x == y);
 };
 
 scheme.primitives["<"] = function (x, y) {
-    return x < y;
+    return coerce_bool(x < y);
+};
 };
 
 scheme.primitives.quo = not_implemented_yet;
@@ -98,7 +103,7 @@ scheme.list = function () {
 };
 
 scheme.primitives["null?"] = function(obj) {
-    return scheme.EMPTY == obj;
+    return coerce_bool(scheme.EMPTY == obj);
 };
 
 // Symbols
