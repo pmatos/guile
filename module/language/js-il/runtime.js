@@ -55,6 +55,17 @@ scheme.primitives["="] = function (x, y) {
 scheme.primitives["<"] = function (x, y) {
     return coerce_bool(x < y);
 };
+
+scheme.primitives["<="] = function (x, y) {
+    return coerce_bool(x <= y);
+};
+
+scheme.primitives[">"] = function (x, y) {
+    return coerce_bool(x > y);
+};
+
+scheme.primitives[">="] = function (x, y) {
+    return coerce_bool(x >= y);
 };
 
 scheme.primitives.quo = not_implemented_yet;
@@ -65,6 +76,10 @@ scheme.primitives.mod = not_implemented_yet;
 scheme.Box = function (x) {
     this.x = x;
     return this;
+};
+
+scheme.primitives["box"] = function(x) {
+    return new scheme.Box(x);
 };
 
 scheme.primitives["box-ref"] = function (box) {
@@ -82,6 +97,10 @@ scheme.Pair = function (car, cdr) {
     return this;
 };
 
+scheme.primitives["pair?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Pair);
+};
+
 scheme.primitives.cons = function (car, cdr) {
     return new scheme.Pair(car,cdr);
 };
@@ -92,6 +111,14 @@ scheme.primitives.car = function (obj) {
 
 scheme.primitives.cdr = function (obj) {
     return obj.cdr;
+};
+
+scheme.primitives["set-car!"] = function (pair, obj) {
+    obj.car = obj;
+};
+
+scheme.primitives["set-cdr!"] = function (pair, obj) {
+    obj.cdr = obj;
 };
 
 scheme.list = function () {
@@ -117,10 +144,18 @@ scheme.Symbol = function(s) {
     };
 };
 
+scheme.primitives["symbol?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Symbol);
+};
+
 // Keywords
 scheme.Keyword = function(s) {
     this.name = s;
     return this;
+};
+
+scheme.primitives["keyword?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Keyword);
 };
 
 scheme.utils.keyword_ref = function(kw, args, start, dflt) {
@@ -160,9 +195,19 @@ scheme.primitives["vector-length"] = function (vec) {
     return vec.array.length;
 };
 
+scheme.primitives["vector?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Vector);
+};
+
+scheme.primitives["make-vector/immediate"] = not_implemented_yet;
+scheme.primitives["vector-set!/immediate"] = not_implemented_yet;
+scheme.primitives["vector-ref/immediate"] = not_implemented_yet;
+
 // Bytevectors
 
 // Booleans
+
+scheme.primitives["boolean?"] = not_implemented_yet;
 
 // Chars
 scheme.Char = function(c) {
@@ -170,10 +215,26 @@ scheme.Char = function(c) {
     return this;
 };
 
+scheme.primitives["char?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Char);
+};
+
 // Strings
 scheme.String = function(s) {
     this.s = s;
     return this;
+};
+
+scheme.primitives["string?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.String);
+};
+
+scheme.primitives["string-length"] = function (str) {
+    return str.s.length;
+};
+
+scheme.primitives["string-ref"] = function (str, idx) {
+    return new scheme.Char(str.s[idx]);
 };
 
 // Closures
@@ -208,6 +269,8 @@ scheme.primitives["cached-toplevel-box"] = function (scope, sym, is_bound) {
     return scheme.cache[scope][sym.name];
 };
 
+scheme.primitives["cached-module-box"] = not_implemented_yet;
+
 scheme.primitives["current-module"] = function () {
     return scheme.env;
 };
@@ -237,4 +300,34 @@ scheme.builtins[4] = new scheme.Closure(callcc, 0);
 //   M(call_with_values, CALL_WITH_VALUES, 2, 0, 0) \
 //   M(call_with_current_continuation, CALL_WITH_CURRENT_CONTINUATION, 1, 0, 0)
 
-// ---
+// Structs
+scheme.primitives["struct?"] = not_implemented_yet;
+scheme.primitives["struct-set!/immediate"] = not_implemented_yet;
+scheme.primitives["struct-vtable"] = not_implemented_yet;
+scheme.primitives["struct-ref/immediate"] = not_implemented_yet;
+scheme.primitives["struct-ref"] = not_implemented_yet;
+scheme.primitives["struct-set!"] = not_implemented_yet;
+scheme.primitives["allocate-struct/immediate"] = not_implemented_yet;
+
+// Equality
+scheme.primitives["eq?"] = function(x, y) {
+    return coerce_bool(x === y);
+};
+
+scheme.primitives["eqv?"] = function(x, y) {
+    return coerce_bool(x === y);
+};
+
+scheme.primitives["equal?"] = not_implemented_yet;
+
+// Fluids
+scheme.primitives["pop-fluid"] = not_implemented_yet;
+scheme.primitives["push-fluid"] = not_implemented_yet;
+scheme.primitives["fluid-ref"] = not_implemented_yet;
+
+// Variables
+scheme.primitives["variable?"] = not_implemented_yet;
+
+// Dynamic Wind
+scheme.primitives["wind"] = not_implemented_yet;
+scheme.primitives["unwind"] = not_implemented_yet;
