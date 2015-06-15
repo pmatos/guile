@@ -17,6 +17,8 @@
             make-branch branch
             make-return return
             make-id id
+            make-seq seq
+            make-prompt prompt
             ))
 
 ;; Copied from (language cps)
@@ -64,6 +66,8 @@
 (define-js-type branch test consequence alternate)
 (define-js-type id name)
 (define-js-type return val)
+(define-js-type seq body)
+(define-js-type prompt escape? tag handler)
 
 (define (unparse-js exp)
   (match exp

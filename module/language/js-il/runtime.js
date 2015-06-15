@@ -5,6 +5,7 @@ var scheme = {
     env : {},
     cache: [],
     builtins: [],
+    dynstack : [],
     // TODO: placeholders
     FALSE : false,
     TRUE : true,
@@ -283,8 +284,43 @@ scheme.primitives["resolve"] = function (sym, is_bound) {
 scheme.initial_cont = function (x) { return x; };
 scheme.primitives.return = function (x) { return x; };
 scheme.is_true = function (obj) {
-    return !(obj == scheme.FALSE || obj == scheme.NIL);
+    return !(obj === scheme.FALSE || obj === scheme.NIL);
 };
+
+// Builtins
+var apply = function(self, k, f, arg) {
+    return f.fun(f.freevars, k, arg);
+};
+
+var values = function(self, k, arg) {
+
+    return k(arg);
+};
+
+var abort_to_prompt = function(self, k, prompt, arg) {
+
+    var idx = find_prompt(prompt);
+    var spec = scheme.dynstack[idx];
+
+    var kont = undefined; // actual value doesn't matter
+
+    if (!scheme.is_true(spec[1])) {
+        // TODO: handle multivalue continations
+        // compare with callcc
+        var f = function (self, k2, val) {
+            return k(val);
+        };
+        kont = new scheme.Closure(f, 0);
+    };
+
+    unwind(idx);
+
+    var handler = spec[2];
+
+    return handler(kont, arg);
+};
+
+var call_with_values = not_implemented_yet;
 
 var callcc = function (self, k, closure) {
     var f = function (self, k2, val) {
@@ -292,13 +328,11 @@ var callcc = function (self, k, closure) {
     };
     return closure.fun(closure, k, new scheme.Closure(f, 0));
 };
+scheme.builtins[0] = new scheme.Closure(apply, 0);
+scheme.builtins[1] = new scheme.Closure(values, 0);
+scheme.builtins[2] = new scheme.Closure(abort_to_prompt, 0);
+scheme.builtins[3] = new scheme.Closure(call_with_values, 0);
 scheme.builtins[4] = new scheme.Closure(callcc, 0);
-// #define FOR_EACH_VM_BUILTIN(M) \
-//   M(apply, APPLY, 2, 0, 1) \
-//   M(values, VALUES, 0, 0, 1) \
-//   M(abort_to_prompt, ABORT_TO_PROMPT, 1, 0, 1) \
-//   M(call_with_values, CALL_WITH_VALUES, 2, 0, 0) \
-//   M(call_with_current_continuation, CALL_WITH_CURRENT_CONTINUATION, 1, 0, 0)
 
 // Structs
 scheme.primitives["struct?"] = not_implemented_yet;
@@ -331,3 +365,27 @@ scheme.primitives["variable?"] = not_implemented_yet;
 // Dynamic Wind
 scheme.primitives["wind"] = not_implemented_yet;
 scheme.primitives["unwind"] = not_implemented_yet;
+
+// Misc
+scheme.primitives["prompt"] = function(escape_only, tag, handler){
+    scheme.dynstack.unshift([tag, escape_only, handler]);
+};
+
+var unwind = function (idx) {
+    // TODO: call winders
+    scheme.dynstack = scheme.dynstack.slice(idx+1);
+};
+
+var find_prompt = function(prompt) {
+    var eq = scheme.primitives["eq?"];
+    function test(x){
+        return scheme.is_true(eq(x,prompt)) || scheme.is_true(eq(x,scheme.TRUE));
+    };
+    for (idx in scheme.dynstack) {
+        if (test(scheme.dynstack[idx][0])) {
+            return idx;
+        };
+    };
+    // FIXME: should error
+    return undefined;
+};

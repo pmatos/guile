@@ -155,6 +155,15 @@
       (make-call (make-refine *scheme* (make-const "Closure"))
                  (list (name->id label) (make-const nfree)))))
 
+    (($ il:prompt escape? tag handler)
+     ;; never a tailcall
+     (make-call (make-refine (make-refine *scheme* (make-const "primitives"))
+                             (make-const "prompt"))
+                (list (compile-const escape?) (name->id tag) (name->id handler))))
+
+    (($ il:seq body)
+     (make-block (map compile-exp body)))
+
     (($ il:id name)
      (name->id name))))
 

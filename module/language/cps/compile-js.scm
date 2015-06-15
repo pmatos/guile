@@ -1,6 +1,7 @@
 (define-module (language cps compile-js)
   #:use-module (language cps)
-  #:use-module (language js-il)
+  #:use-module ((language js-il)
+                #:renamer (lambda (x) (if (eqv? x 'make-prompt) 'make-prompt* x)))
   #:use-module (ice-9 match)
   #:export (compile-js))
 
@@ -106,6 +107,11 @@
      (make-continue label (map make-id (cons* proc k args))))
     (($ $values values)
      (make-continue k (map make-id values)))
+    (($ $prompt escape? tag handler)
+     (make-seq
+      (list
+       (make-prompt* escape? tag handler)
+       (make-continue k '()))))
     (_
      (make-continue k (list (compile-exp* exp))))))
 
