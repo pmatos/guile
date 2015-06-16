@@ -305,10 +305,9 @@ var abort_to_prompt = function(self, k, prompt, arg) {
     var kont = undefined; // actual value doesn't matter
 
     if (!scheme.is_true(spec[1])) {
-        // TODO: handle multivalue continations
-        // compare with callcc
-        var f = function (self, k2, val) {
-            return k(val);
+        var f = function (self, k2) {
+            var args = Array.prototype.slice.call(arguments, 2);
+            return k.apply(k,args);
         };
         kont = new scheme.Closure(f, 0);
     };
@@ -323,8 +322,9 @@ var abort_to_prompt = function(self, k, prompt, arg) {
 var call_with_values = not_implemented_yet;
 
 var callcc = function (self, k, closure) {
-    var f = function (self, k2, val) {
-        return k(val);
+    var f = function (self, k2) {
+        var args = Array.prototype.slice.call(arguments, 2);
+        return k.apply(k,args);
     };
     return closure.fun(closure, k, new scheme.Closure(f, 0));
 };
