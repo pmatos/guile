@@ -288,8 +288,16 @@ scheme.is_true = function (obj) {
 };
 
 // Builtins
-var apply = function(self, k, f, arg) {
-    return f.fun(f.freevars, k, arg);
+var apply = function(self, k, f) {
+    var args = Array.prototype.slice.call(arguments, 3);
+    var tail = args.pop();
+
+    while (scheme.is_true(scheme.primitives["pair?"](tail))) {
+        args.push(tail.car);
+        tail = tail.cdr;
+    };
+
+    return f.fun.apply(f.fun, [f,k].concat(args));
 };
 
 var values = function(self, k) {
