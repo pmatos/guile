@@ -319,7 +319,13 @@ var abort_to_prompt = function(self, k, prompt, arg) {
     return handler(kont, arg);
 };
 
-var call_with_values = not_implemented_yet;
+var call_with_values = function (self, k, producer, consumer) {
+    var k2 = function () {
+        var args = Array.prototype.slice.call(arguments);
+        return consumer.fun.apply(consumer.fun, [consumer, k].concat(args));
+    };
+    return producer.fun(producer, k2);
+};
 
 var callcc = function (self, k, closure) {
     var f = function (self, k2) {
