@@ -292,9 +292,9 @@ var apply = function(self, k, f, arg) {
     return f.fun(f.freevars, k, arg);
 };
 
-var values = function(self, k, arg) {
-
-    return k(arg);
+var values = function(self, k) {
+    var args = Array.prototype.slice.call(arguments, 2);
+    return k.apply(k,args);
 };
 
 var abort_to_prompt = function(self, k, prompt) {
