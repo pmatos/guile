@@ -297,8 +297,9 @@ var values = function(self, k, arg) {
     return k(arg);
 };
 
-var abort_to_prompt = function(self, k, prompt, arg) {
+var abort_to_prompt = function(self, k, prompt) {
 
+    var args = Array.prototype.slice.call(arguments, 3);
     var idx = find_prompt(prompt);
     var spec = scheme.dynstack[idx];
 
@@ -315,8 +316,8 @@ var abort_to_prompt = function(self, k, prompt, arg) {
     unwind(idx);
 
     var handler = spec[2];
-
-    return handler(kont, arg);
+    args.unshift(kont);
+    return handler.apply(handler, args);
 };
 
 var call_with_values = function (self, k, producer, consumer) {
