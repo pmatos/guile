@@ -370,9 +370,33 @@ scheme.primitives["eqv?"] = function(x, y) {
 scheme.primitives["equal?"] = not_implemented_yet;
 
 // Fluids
-scheme.primitives["pop-fluid"] = not_implemented_yet;
-scheme.primitives["push-fluid"] = not_implemented_yet;
-scheme.primitives["fluid-ref"] = not_implemented_yet;
+scheme.Fluid = function (x) {
+    this.value = x;
+    return this;
+};
+
+scheme.primitives["pop-fluid"] = function () {
+    var frame = scheme.dynstack.shift();
+    if (frame instanceof scheme.frame.Fluid) {
+        frame.fluid.value = frame.fluid.old_value;
+        return;
+    } else {
+        throw "not a frame";
+    };
+};
+
+scheme.primitives["push-fluid"] = function (fluid, new_value) {
+    var old_value = fluid.value;
+    fluid.value = new_value;
+    var frame = new scheme.frame.Fluid(fluid, old_value);
+    scheme.dynstack.unshift(frame);
+    return;
+};
+
+scheme.primitives["fluid-ref"] = function (fluid) {
+    // TODO: check fluid type
+    return fluid.value;
+};
 
 // Variables
 scheme.primitives["variable?"] = not_implemented_yet;
@@ -415,3 +439,7 @@ scheme.frame.Prompt = function(tag, escape_only, handler){
     this.handler = handler;
 };
 
+scheme.frame.Fluid = function(fluid, old_value) {
+    this.fluid = fluid;
+    this.old_value = old_value;
+};
