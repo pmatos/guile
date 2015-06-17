@@ -309,11 +309,11 @@ var abort_to_prompt = function(self, k, prompt) {
 
     var args = Array.prototype.slice.call(arguments, 3);
     var idx = find_prompt(prompt);
-    var spec = scheme.dynstack[idx];
+    var frame = scheme.dynstack[idx];
 
     var kont = undefined; // actual value doesn't matter
 
-    if (!scheme.is_true(spec[1])) {
+    if (!scheme.is_true(frame.escape_only)) {
         var f = function (self, k2) {
             var args = Array.prototype.slice.call(arguments, 2);
             return k.apply(k,args);
@@ -323,7 +323,7 @@ var abort_to_prompt = function(self, k, prompt) {
 
     unwind(idx);
 
-    var handler = spec[2];
+    var handler = frame.handler;
     args.unshift(kont);
     return handler.apply(handler, args);
 };
@@ -383,7 +383,8 @@ scheme.primitives["unwind"] = not_implemented_yet;
 
 // Misc
 scheme.primitives["prompt"] = function(escape_only, tag, handler){
-    scheme.dynstack.unshift([tag, escape_only, handler]);
+    var frame = new scheme.frame.Prompt(tag, escape_only, handler);
+    scheme.dynstack.unshift(frame);
 };
 
 var unwind = function (idx) {
@@ -397,10 +398,20 @@ var find_prompt = function(prompt) {
         return scheme.is_true(eq(x,prompt)) || scheme.is_true(eq(x,scheme.TRUE));
     };
     for (idx in scheme.dynstack) {
-        if (test(scheme.dynstack[idx][0])) {
+        var frame = scheme.dynstack[idx];
+        if (frame instanceof scheme.frame.Prompt && test(frame.tag)) {
             return idx;
         };
     };
     // FIXME: should error
     return undefined;
 };
+// Dynstack frames
+scheme.frame = {};
+
+scheme.frame.Prompt = function(tag, escape_only, handler){
+    this.tag = tag;
+    this.escape_only = escape_only;
+    this.handler = handler;
+};
+
