@@ -12,8 +12,8 @@
     (($ continuation params body)
      (make-continuation params (remove-immediate-calls body)))
 
-    (($ function params body)
-     (make-function params (remove-immediate-calls body)))
+    (($ function self tail body)
+     (make-function self tail (remove-immediate-calls body)))
 
     (($ local
         (($ var id ($ continuation () body)))

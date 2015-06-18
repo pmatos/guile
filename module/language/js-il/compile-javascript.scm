@@ -23,12 +23,28 @@
 (define *scheme* (make-id "scheme"))
 (define *utils*  (make-refine *scheme* (make-const "utils")))
 
+(define (rename-id i)
+  (match i
+    (($ il:id i)
+     (rename i))
+    (($ il:kid i)
+     (rename-kont i))))
+
+(define (compile-id i)
+  (make-id (rename-id i)))
+
+(define (kont->id name)
+  (make-id (rename-kont name)))
+
+(define (rename-kont name)
+  (format #f "k_~a" name))
+
 (define (name->id name)
   (make-id (rename name)))
 
 (define (rename id)
   (cond ((and (integer? id) (>= id 0))
-         (format #f "k_~a" id))
+         (format #f "v_~a" id))
         ((symbol? id)
          (js-id (symbol->string id)))
         ((string? id)
@@ -39,7 +55,7 @@
 (define (js-id name)
   (call-with-output-string
    (lambda (port)
-     (display "k_" port)
+     (display "v_" port)
      (string-for-each
       (lambda (c)
         (if (or (and (char<=? #\a c) (char<=? c #\z))
@@ -68,7 +84,7 @@
         i
         (ref (make-refine i (make-const (car l)))
              (cdr l))))
-  (define this (rename rest))
+  (define this (rename-id rest))
   (make-var this
             (make-call (ref *scheme* (list "list" "apply"))
                        (list
@@ -78,7 +94,7 @@
 
 (define (bind-opt-args opts num-drop)
   (map (lambda (opt idx)
-         (make-var (rename opt)
+         (make-var (rename-id opt)
                    (make-binop 'or
                                (make-refine (make-id "arguments")
                                             (make-const (+ num-drop idx)))
@@ -89,7 +105,7 @@
 (define (bind-kw-args kws ids num-drop)
   (define lookup (make-refine *utils* (make-const "keyword_ref")))
   (map (lambda (kw id)
-         (make-var (rename id)
+         (make-var (rename-id id)
                    (make-call lookup
                               (list (compile-const kw)
                                     (make-id "arguments")
@@ -105,7 +121,7 @@
     (($ il:program (and entry ($ il:var name _)) body)
      (let ((entry-call
             (make-return
-             (make-call (name->id name)
+             (make-call (compile-id name)
                         (list
                          (make-id "undefined")
                          (make-refine *scheme* (make-const "initial_cont")))))))
@@ -114,10 +130,11 @@
                   '())))
 
     (($ il:continuation params body)
-     (make-function (map rename params) (list (compile-exp body))))
+     (make-function (map rename-id params) (list (compile-exp body))))
 
-    (($ il:function params body)
-     (make-function (map rename params) (list (compile-exp body))))
+    (($ il:function self tail body)
+     (make-function (list (rename-id self) (rename-id tail))
+                    (list (compile-exp body))))
 
     (($ il:jump-table specs)
      (compile-jump-table specs))
@@ -126,10 +143,10 @@
      (make-block (append (map compile-exp bindings) (list (compile-exp body)))))
 
     (($ il:var id exp)
-     (make-var (rename id) (compile-exp exp)))
+     (make-var (rename-id id) (compile-exp exp)))
 
     (($ il:continue k exps)
-     (make-return (make-call (name->id k) (map compile-exp exps))))
+     (make-return (make-call (compile-id k) (map compile-exp exps))))
 
     (($ il:branch test then else)
      (make-branch (make-call (make-refine *scheme* (make-const "is_true"))
@@ -143,29 +160,34 @@
     (($ il:primcall name args)
      (make-call (make-refine (make-refine *scheme* (make-const "primitives"))
                              (make-const (symbol->string name)))
-                (map name->id args)))
+                (map compile-id args)))
 
-    (($ il:call name args)
+    (($ il:call name k args)
      (make-return
-      (make-call (make-refine (name->id name) (make-const "fun"))
-                 (map name->id (cons name args)))))
+      (make-call (make-refine (compile-id name) (make-const "fun"))
+                 (cons* (compile-id name)
+                        (compile-id k)
+                        (map compile-id args)))))
 
     (($ il:closure label nfree)
      (make-new
       (make-call (make-refine *scheme* (make-const "Closure"))
-                 (list (name->id label) (make-const nfree)))))
+                 (list (compile-id label) (make-const nfree)))))
 
     (($ il:prompt escape? tag handler)
      ;; never a tailcall
      (make-call (make-refine (make-refine *scheme* (make-const "primitives"))
                              (make-const "prompt"))
-                (list (compile-const escape?) (name->id tag) (name->id handler))))
+                (list (compile-const escape?) (compile-id tag) (compile-id handler))))
 
     (($ il:seq body)
      (make-block (map compile-exp body)))
 
     (($ il:id name)
-     (name->id name))))
+     (name->id name))
+
+    (($ il:kid name)
+     (kont->id name))))
 
 (define (compile-jump-table specs)
   (define offset 2) ; closure & continuation
@@ -203,8 +225,8 @@
       (($ il:params self req '() #f '() #f)
        (list
         (make-return
-         (make-call (name->id k)
-                    (cons (name->id self)
+         (make-call (compile-id k)
+                    (cons (compile-id self)
                           (map (lambda (idx)
                                  (make-refine (make-id "arguments")
                                               (make-const (+ offset idx))))
@@ -213,39 +235,39 @@
        (list
         (bind-rest-args rest (+ offset (length req)))
         (make-return
-         (make-call (name->id k)
-                    (append (list (name->id self))
+         (make-call (compile-id k)
+                    (append (list (compile-id self))
                             (map (lambda (idx)
                                    (make-refine (make-id "arguments")
                                                 (make-const (+ offset idx))))
                                  (iota (length req)))
-                            (list (name->id rest)))))))
+                            (list (compile-id rest)))))))
       (($ il:params self req opts #f '() #f)
        (append
         (bind-opt-args opts (+ offset (length req)))
         (list
          (make-return
-          (make-call (name->id k)
-                     (append (list (name->id self))
+          (make-call (compile-id k)
+                     (append (list (compile-id self))
                              (map (lambda (idx)
                                     (make-refine (make-id "arguments")
                                                  (make-const (+ offset idx))))
                                   (iota (length req)))
-                             (map name->id opts)))))))
+                             (map compile-id opts)))))))
       (($ il:params self req opts #f ((kws names ids) ...) _)
        (append
         (bind-opt-args opts (+ offset (length req)))
         (bind-kw-args kws names (+ offset (length req)))
         (list
          (make-return
-          (make-call (name->id k)
-                     (append (list (name->id self))
+          (make-call (compile-id k)
+                     (append (list (compile-id self))
                              (map (lambda (idx)
                                     (make-refine (make-id "arguments")
                                                  (make-const (+ offset idx))))
                                   (iota (length req)))
-                             (map name->id opts)
-                             (map name->id names)))))))
+                             (map compile-id opts)
+                             (map compile-id names)))))))
       ))
   (fold-right (lambda (a d)
                 (make-branch (compile-test (car a))
