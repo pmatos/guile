@@ -23,12 +23,9 @@
       (($ program ((ids . funs) ...))
        (for-each analyse funs))
 
-      (($ function self tail body)
-       (analyse body))
-
-      (($ jump-table spec)
-       (for-each (lambda (p) (analyse (cdr p)))
-                 spec))
+      (($ function self tail ((($ kid ids) _ bodies) ...))
+       (for-each count-inc! ids) ;; count-inf! ?
+       (for-each analyse bodies))
 
       (($ continuation params body)
        (analyse body))
@@ -184,18 +181,15 @@
       (exp exp)))
 
   (define (handle-function fun)
-    (define (handle-bindings bindings)
-      (map (lambda (binding)
-             (match binding
-               (($ var id ($ continuation params body))
-                (make-var id (make-continuation params (inline body '()))))))
-           bindings))
     (match fun
-      (($ function self tail ($ local bindings ($ jump-table spec)))
+      (($ function self tail ((ids params bodies) ...))
        (make-function self
                       tail
-                      (make-local (handle-bindings bindings)
-                                  (make-jump-table spec))))))
+                      (map (lambda (id param body)
+                             (list id param (inline body '())))
+                           ids
+                           params
+                           bodies)))))
 
   (match exp
     (($ program ((ids . funs) ...))

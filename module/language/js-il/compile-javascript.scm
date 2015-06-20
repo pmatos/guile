@@ -140,12 +140,14 @@
     (($ il:continuation params body)
      (make-function (map rename-id params) (list (compile-exp body))))
 
-    (($ il:function self tail body)
+    (($ il:function self tail clauses)
      (make-function (list (rename-id self) (rename-id tail))
-                    (list (compile-exp body))))
-
-    (($ il:jump-table specs)
-     (compile-jump-table specs))
+                    (append
+                     (map (match-lambda
+                           ((id _ body)
+                            (make-var (rename-id id) (compile-exp body))))
+                          clauses)
+                     (list (compile-jump-table clauses)))))
 
     (($ il:local bindings body)
      (make-block (append (map compile-exp bindings) (list (compile-exp body)))))
@@ -278,9 +280,11 @@
                              (map compile-id names)))))))
       ))
   (fold-right (lambda (a d)
-                (make-branch (compile-test (car a))
-                             (compile-jump (car a) (cdr a))
-                             (list d)))
+                (match a
+                  ((id params _)
+                   (make-branch (compile-test params)
+                                (compile-jump params id)
+                                (list d)))))
               ;; FIXME: should throw an error
               (make-return (make-id "undefined"))
               specs))

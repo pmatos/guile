@@ -35,61 +35,48 @@
 (define (compile-fun fun)
   (match fun
     (($ $kfun _ _ self ($ $cont tail ($ $ktail)) clause)
-     (call-with-values
-         (lambda ()
-           (extract-clauses self clause))
-       (lambda (jump-table clauses)
-         (make-function
-          (make-id self) (make-kid tail)
-          (make-local (map (lambda (clause)
-                             (compile-clause clause self tail))
-                           clauses)
-                      (make-jump-table jump-table))))))))
+     (make-function
+      (make-id self)
+      (make-kid tail)
+      (compile-clauses clause self)))))
 
-(define (extract-clauses self clause)
-  (define (make-params* self req opts rest kw allow-other-keys?)
-    (make-params (make-id self)
+(define (compile-clauses clause self)
+  (match clause
+    (($ $cont k ($ $kclause arity body #f))
+     `((,(make-kid k)
+        ,(arity->params arity self)
+        ,(compile-clause arity body self))))
+    (($ $cont k ($ $kclause arity body next))
+     `((,(make-kid k)
+        ,(arity->params arity self)
+        ,(compile-clause arity body self))
+       . ,(compile-clauses next self)))))
+
+(define (arity->params arity self)
+  (match arity
+    (($ $arity req opts rest ((kws names kw-syms) ...) allow-other-keys?)
+     (make-params (make-id self)
                   (map make-id req)
                   (map make-id opts)
                   (and rest (make-id rest))
-                  (map make-id kw)
-                  allow-other-keys?))
-  (let loop ((clause clause) (specs '()) (clauses '()))
-    (match clause
-      (($ $cont k ($ $kclause ($ $arity req opts rest kw allow-other-keys?) _ #f))
-       (values (reverse (acons (make-params* self req opts rest kw allow-other-keys?)
-                               (make-kid k)
-                               specs))
-               (reverse (cons clause clauses))))
-      (($ $cont k ($ $kclause ($ $arity req opts rest kw allow-other-keys?) _ alternate))
-       (loop alternate
-             (acons (make-params* self req opts rest kw allow-other-keys?)
-                    (make-kid k)
-                    specs)
-             (cons clause clauses))))))
+                  (map (lambda (kw name kw-sym)
+                         (list kw (make-id name) (make-id kw-sym)))
+                       kws
+                       names
+                       kw-syms)
+                  allow-other-keys?))))
 
-(define (compile-clause clause self tail)
-  (match clause
-    (($ $cont k ($ $kclause ($ $arity req opt rest ((_ _ kw-syms) ...) _) body _))
-     (make-var
-      (make-kid k)
-      (make-continuation
-       (append (list (make-id self))
-               (map make-id req)
-               (map make-id opt)
-               (map make-id kw-syms)
-               (if rest (list (make-id rest)) '()))
-       (match body
-         (($ $cont k ($ $kargs () () exp))
-          (compile-term exp))
-         (($ $cont k _)
-          (make-local (list (compile-cont body))
-                      (make-continue
-                       (make-kid k)
-                       (map make-id (append req opt kw-syms (if rest (list rest) '()))))))))))))
-
-(define (not-supported msg clause)
-  (error 'not-supported msg clause))
+(define (compile-clause arity body self)
+  (match arity
+    (($ $arity req opt rest ((_ _ kw-syms) ...) _)
+     (let ((ids (map make-id
+                     (append req opt kw-syms (if rest (list rest) '())))))
+       (make-continuation
+        (cons (make-id self) ids)
+        (match body
+          (($ $cont k _)
+           (make-local (list (compile-cont body))
+                       (make-continue (make-kid k) ids)))))))))
 
 (define (compile-term term)
   (match term

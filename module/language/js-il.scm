@@ -4,7 +4,6 @@
   #:use-module (ice-9 match)
   #:export (make-program program
             make-function function
-            make-jump-table jump-table
             make-params params
             make-continuation continuation
             make-local local
@@ -52,8 +51,7 @@
   (format port "#<js-il ~S>" (unparse-js exp)))
 
 (define-js-type program body)
-(define-js-type function self tail body)
-(define-js-type jump-table spec)
+(define-js-type function self tail clauses)
 (define-js-type params self req opt rest kw allow-other-keys?)
 (define-js-type continuation params body)
 (define-js-type local bindings body) ; local scope
@@ -78,12 +76,15 @@
                        body)))
     (($ continuation params body)
      `(continuation ,(map unparse-js params) ,(unparse-js body)))
-    (($ function self tail body)
-     `(function ,self ,tail ,(unparse-js body)))
-    (($ jump-table body)
-     `(jump-table ,@(map (lambda (p)
-                           `(,(unparse-js (car p)) . ,(cdr p)))
-                         body)))
+    (($ function ($ id self) ($ kid tail) clauses)
+     `(function ,self
+                ,tail
+                ,@(map (match-lambda
+                        ((($ kid id) params kont)
+                         (list id
+                               (unparse-js params)
+                               (unparse-js kont))))
+                       clauses)))
     (($ params ($ id self) req opt rest kws allow-other-keys?)
      `(params ,self
               ,(map unparse-js req)
