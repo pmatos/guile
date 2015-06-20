@@ -4,7 +4,7 @@
   #:use-module ((language js-il) #:renamer (symbol-prefix-proc 'il:))
   #:use-module (language javascript)
   #:use-module (language javascript simplify)
-  #:use-module (language js-il direct)
+  #:use-module (language js-il inlining)
   #:use-module (system foreign)
   #:export (compile-javascript))
 
@@ -15,7 +15,7 @@
   (eqv? obj (pointer->scm (make-pointer unbound-bits))))
 
 (define (compile-javascript exp env opts)
-  (set! exp (remove-immediate-calls exp))
+  (set! exp (inline-single-calls exp))
   (set! exp (compile-exp exp))
   (set! exp (flatten-blocks exp))
   (values exp env env))
