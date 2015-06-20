@@ -18,32 +18,33 @@
   (set! exp (reify-primitives exp))
   (set! exp (renumber exp))
   (match exp
-    (($ $program funs)
+    (($ $program (($ $cont ks funs) ...))
      ;; TODO: I should special case the compilation for the initial fun,
      ;; as this is the entry point for the program, and shouldn't get a
      ;; "self" argument, for now, I add "undefined" as the first
      ;; argument in the call to it.
      ;; see compile-exp in (language js-il compile-javascript)
-     (values (make-program (compile-fun (car funs))
-                           (map compile-fun (cdr funs)))
+     (values (make-program
+              (map (lambda (k fun)
+                     (cons (make-kid k) (compile-fun fun)))
+                   ks
+                   funs))
              env
              env))))
 
 (define (compile-fun fun)
   (match fun
-    (($ $cont k ($ $kfun _ _ self ($ $cont tail ($ $ktail)) clause))
+    (($ $kfun _ _ self ($ $cont tail ($ $ktail)) clause)
      (call-with-values
          (lambda ()
            (extract-clauses self clause))
        (lambda (jump-table clauses)
-         (make-var
-          (make-kid k)
-          (make-function
-           (make-id self) (make-kid tail)
-           (make-local (map (lambda (clause)
-                              (compile-clause clause self tail))
-                            clauses)
-                       (make-jump-table jump-table)))))))))
+         (make-function
+          (make-id self) (make-kid tail)
+          (make-local (map (lambda (clause)
+                             (compile-clause clause self tail))
+                           clauses)
+                      (make-jump-table jump-table))))))))
 
 (define (extract-clauses self clause)
   (define (make-params* self req opts rest kw allow-other-keys?)

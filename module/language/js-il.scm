@@ -51,7 +51,7 @@
 (define (print-js exp port)
   (format port "#<js-il ~S>" (unparse-js exp)))
 
-(define-js-type program entry body)
+(define-js-type program body)
 (define-js-type function self tail body)
 (define-js-type jump-table spec)
 (define-js-type params self req opt rest kw allow-other-keys?)
@@ -71,8 +71,11 @@
 
 (define (unparse-js exp)
   (match exp
-    (($ program entry body)
-     `(program ,(unparse-js entry) . ,(map unparse-js body)))
+    (($ program body)
+     `(program . ,(map (match-lambda
+                        ((($ kid k) . fun)
+                         (cons k (unparse-js fun))))
+                       body)))
     (($ continuation params body)
      `(continuation ,(map unparse-js params) ,(unparse-js body)))
     (($ function self tail body)

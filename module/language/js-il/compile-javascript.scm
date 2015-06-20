@@ -118,15 +118,23 @@
 (define (compile-exp exp)
   ;; TODO: handle ids for js
   (match exp
-    (($ il:program (and entry ($ il:var name _)) body)
+    (($ il:program ((name . fun) (names . funs) ...))
      (let ((entry-call
             (make-return
              (make-call (compile-id name)
                         (list
                          (make-id "undefined")
                          (make-refine *scheme* (make-const "initial_cont")))))))
-       (make-call (make-function '() (append (map compile-exp body)
-                                           (list (compile-exp entry) entry-call)))
+       (make-call (make-function
+                   '()
+                   (append
+                    (map (lambda (id f)
+                           (make-var (rename-id id)
+                                     (compile-exp f)))
+                         (cons name names)
+                         (cons fun funs))
+
+                    (list entry-call)))
                   '())))
 
     (($ il:continuation params body)

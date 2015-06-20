@@ -20,9 +20,8 @@
               arg-list))
   (define (analyse exp)
     (match exp
-      (($ program entry body)
-       (analyse entry)
-       (for-each analyse body))
+      (($ program ((ids . funs) ...))
+       (for-each analyse funs))
 
       (($ function self tail body)
        (analyse body))
@@ -192,14 +191,15 @@
                 (make-var id (make-continuation params (inline body '()))))))
            bindings))
     (match fun
-      (($ var id ($ function self tail ($ local bindings ($ jump-table spec))))
-       (make-var id
-                 (make-function self
-                                tail
-                                (make-local (handle-bindings bindings)
-                                            (make-jump-table spec)))))))
+      (($ function self tail ($ local bindings ($ jump-table spec)))
+       (make-function self
+                      tail
+                      (make-local (handle-bindings bindings)
+                                  (make-jump-table spec))))))
 
   (match exp
-    (($ program entry body)
-     (make-program (handle-function entry)
-                   (map handle-function body)))))
+    (($ program ((ids . funs) ...))
+     (make-program (map (lambda (id fun)
+                          (cons id (handle-function fun)))
+                        ids
+                        funs)))))
