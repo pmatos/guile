@@ -74,36 +74,32 @@
        (make-continuation
         (cons (make-id self) ids)
         (match body
-          (($ $cont k _)
-           (make-local (list (compile-cont body))
+          (($ $cont k cont)
+           (make-local `((,(make-kid k) . ,(compile-cont cont)))
                        (make-continue (make-kid k) ids)))))))))
 
 (define (compile-term term)
   (match term
-    (($ $letk conts body)
-     (make-local (map compile-cont conts) (compile-term body)))
+    (($ $letk (($ $cont ks conts) ...) body)
+     (make-local (map (lambda (k cont)
+                        (cons (make-kid k)
+                              (compile-cont cont)))
+                      ks
+                      conts)
+                 (compile-term body)))
     (($ $continue k src exp)
      (compile-exp exp k))))
 
 (define (compile-cont cont)
   (match cont
-    (($ $cont k ($ $kargs names syms body))
-     ;; use the name part?
-     (make-var (make-kid k)
-               (make-continuation (map make-id syms)
-                                  (compile-term body))))
-    (($ $cont k ($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2))
-     (make-var
-      (make-kid k)
-      (make-continuation (append (map make-id req) (list (make-id rest)))
-                         (make-continue (make-kid k2)
-                                        (append (map make-id req)
-                                                (list (make-id rest)))))))
-    (($ $cont k ($ $kreceive ($ $arity req _ #f _ _) k2))
-     (make-var (make-kid k)
-               (make-continuation (map make-id req)
-                                  (make-continue (make-kid k2)
-                                                 (map make-id req)))))))
+    (($ $kargs names syms body)
+     (make-continuation (map make-id syms) (compile-term body)))
+    (($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2)
+     (let ((ids (map make-id (append req (list rest)))))
+       (make-continuation ids (make-continue (make-kid k2) ids))))
+    (($ $kreceive ($ $arity req _ #f _ _) k2)
+     (let ((ids (map make-id req)))
+       (make-continuation ids (make-continue (make-kid k2) ids))))))
 
 (define (compile-exp exp k)
  (match exp

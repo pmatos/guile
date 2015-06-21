@@ -31,11 +31,10 @@
        (analyse body))
 
       (($ local bindings body)
-       (for-each analyse bindings)
+       (for-each (match-lambda
+                  ((i . b) (analyse b)))
+                 bindings)
        (analyse body))
-
-      (($ var id exp)
-       (analyse exp))
 
       (($ continue ($ kid cont) args)
        (count-inc! cont)
@@ -103,12 +102,12 @@
 
   (define (split-inlinable bindings)
     (partition (match-lambda
-                (($ var ($ kid id) _) (inlinable? id)))
+                ((($ kid id) . _) (inlinable? id)))
                bindings))
 
   (define (lookup kont substs)
     (match substs
-      ((($ var ($ kid id) exp) . rest)
+      (((($ kid id) . exp) . rest)
        (if (= id kont)
            exp
            (lookup kont rest)))
@@ -140,7 +139,7 @@
          (($ continuation kargs body)
           (if (not (= (length args) (length kargs)))
               (throw 'args-dont-match cont args kargs)
-              (make-local (map make-var kargs args)
+              (make-local (map cons kargs args)
                           ;; gah, this doesn't work
                           ;; identifiers need to be separated earlier
                           ;; not just as part of compilation
@@ -162,12 +161,11 @@
              (split-inlinable bindings))
          (lambda (new-substs uninlinable-bindings)
            (define substs* (append new-substs substs))
-           (make-local (map (lambda (x) (inline x substs*))
+           (make-local (map (match-lambda
+                             ((id . val)
+                              `(,id . ,(inline val substs*))))
                             uninlinable-bindings)
                        (inline body substs*)))))
-
-      (($ var id exp)
-       (make-var id (inline exp substs)))
 
       (($ seq body)
        (make-seq (map (lambda (x) (inline x substs))

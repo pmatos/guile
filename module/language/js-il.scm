@@ -7,7 +7,6 @@
             make-params params
             make-continuation continuation
             make-local local
-            make-var var
             make-continue continue
             make-const const
             make-primcall primcall
@@ -55,7 +54,6 @@
 (define-js-type params self req opt rest kw allow-other-keys?)
 (define-js-type continuation params body)
 (define-js-type local bindings body) ; local scope
-(define-js-type var id exp)
 (define-js-type continue cont args)
 (define-js-type const value)
 (define-js-type primcall name args)
@@ -96,9 +94,12 @@
                     kws)
               ,allow-other-keys?))
     (($ local bindings body)
-     `(local ,(map unparse-js bindings) ,(unparse-js body)))
-    (($ var id exp)
-     `(var ,id ,(unparse-js exp)))
+     `(local ,(map (match-lambda
+                    ((a . d)
+                     (cons (unparse-js a)
+                           (unparse-js d))))
+                   bindings)
+             ,(unparse-js body)))
     (($ continue ($ kid k) args)
      `(continue ,k ,(map unparse-js args)))
     (($ branch test then else)

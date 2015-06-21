@@ -149,11 +149,13 @@
                           clauses)
                      (list (compile-jump-table clauses)))))
 
-    (($ il:local bindings body)
-     (make-block (append (map compile-exp bindings) (list (compile-exp body)))))
-
-    (($ il:var id exp)
-     (make-var (rename-id id) (compile-exp exp)))
+    (($ il:local ((ids . bindings) ...) body)
+     (make-block
+      (append (map (lambda (id binding)
+                     (make-var (rename-id id) (compile-exp binding)))
+                   ids
+                   bindings)
+              (list (compile-exp body)))))
 
     (($ il:continue k exps)
      (make-return (make-call (compile-id k) (map compile-exp exps))))
