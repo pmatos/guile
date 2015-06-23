@@ -74,8 +74,17 @@
               ((#\+) (display "_a" port))
               ((#\\) (display "_b" port))
               ((#\/) (display "_f" port))
+              ((#\%) (display "_c" port))
+              ((#\$) (display "_d" port))
+              ((#\~) (display "_t" port))
+              ((#\^) (display "_i" port))
+              ((#\&) (display "_j" port))
+              ((#\:) (display "_k" port))
+              ((#\@) (display "_m" port))
+              ;; unused: noqrvxy
               (else
-               (throw 'bad-id-char  c)))))
+               (display "_z" port)
+               (display (char->integer c) port)))))
       name))))
 
 (define (bind-rest-args rest num-drop)
