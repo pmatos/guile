@@ -85,7 +85,7 @@
     (($ var id exp)
      `(var ,id ,(unparse-js exp)))
     (($ binop op arg1 arg2)
-     `(binop ,op ,arg1 ,arg2))))
+     `(binop ,op ,(unparse-js arg1) ,(unparse-js arg2)))))
 
 (define (print-exp exp port)
   (match exp
