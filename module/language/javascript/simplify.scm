@@ -40,7 +40,15 @@
                     (flatten-block else)))
       (($ call function args)
        (make-call (flatten-exp function)
-                  (map flatten-exp args)))))
+                  (map flatten-exp args)))
+
+      (($ ternary test then else)
+       (make-ternary (flatten-exp test)
+                     (flatten-exp then)
+                     (flatten-exp else)))
+      (($ prefix op exp)
+       (make-prefix op (flatten-exp exp)))
+      ))
   (define (maybe-make-block exp)
     (match exp
       ((exp) exp)

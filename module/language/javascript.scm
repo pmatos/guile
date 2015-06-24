@@ -15,6 +15,8 @@
             make-branch branch
             make-var var
             make-binop binop
+            make-ternary ternary
+            make-prefix prefix
 
             print-statement))
 
@@ -59,6 +61,8 @@
 (define-js-type branch test then else)
 (define-js-type var id exp)
 (define-js-type binop op arg1 arg2)
+(define-js-type ternary test then else)
+(define-js-type prefix op expr)
 
 (define (unparse-js exp)
   (match exp
@@ -85,7 +89,12 @@
     (($ var id exp)
      `(var ,id ,(unparse-js exp)))
     (($ binop op arg1 arg2)
-     `(binop ,op ,(unparse-js arg1) ,(unparse-js arg2)))))
+     `(binop ,op ,(unparse-js arg1) ,(unparse-js arg2)))
+    (($ ternary test then else)
+     `(ternary ,(unparse-js test) ,(unparse-js then) ,(unparse-js else)))
+    (($ prefix op expr)
+     `(prefix ,op ,(unparse-js expr)))
+    ))
 
 (define (print-exp exp port)
   (match exp
@@ -136,16 +145,40 @@
      (print-binop op port)
      (display "(" port)
      (print-exp arg2 port)
-     (display ")" port))))
+     (display ")" port))
+
+    (($ ternary test then else)
+     (display "(" port)
+     (print-exp test port)
+     (display ") ? (" port)
+     (print-exp then port)
+     (display ") : (" port)
+     (print-exp else port)
+     (display ")" port))
+
+    (($ prefix op exp)
+     (print-prefix op port)
+     (display "(" port)
+     (print-exp exp port)
+     (display ")" port))
+    ))
 
 (define (print-binop op port)
   (case op
     ((or) (display "||" port))
     ((and) (display "&&" port))
     ((=) (display "==" port))
-    ((+ - < <= > >=) (format port "~a" op))
+    ((+ - < <= > >= ===) (format port "~a" op))
     (else
      (throw 'unprintable-binop op))))
+
+(define (print-prefix op port)
+  (case op
+    ((not) (display "!" port))
+    ((typeof + -)
+     (format port "~a" op))
+    (else
+     (throw 'unprintable-prefix op))))
 
 (define (print-statement stmt port)
   (match stmt

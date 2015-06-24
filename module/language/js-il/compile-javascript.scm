@@ -104,10 +104,13 @@
 (define (bind-opt-args opts num-drop)
   (map (lambda (opt idx)
          (make-var (rename-id opt)
-                   (make-binop 'or
-                               (make-refine (make-id "arguments")
-                                            (make-const (+ num-drop idx)))
-                               (make-refine *scheme* (make-const "UNDEFINED")))))
+                   (let ((arg (make-refine (make-id "arguments")
+                                            (make-const (+ num-drop idx)))))
+                     (make-ternary (make-binop '===
+                                               (make-prefix 'typeof arg)
+                                               (make-id "undefined"))
+                                   (make-refine *scheme* (make-const "UNDEFINED"))
+                                   arg))))
        opts
        (iota (length opts))))
 
