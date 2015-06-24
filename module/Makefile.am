@@ -215,6 +215,7 @@ JS_IL_LANG_SOURCES =				\
 
 JS_LANG_SOURCES =				\
   language/javascript.scm			\
+  language/javascript/simplify.scm		\
   language/javascript/spec.scm
 
 SCRIPTS_SOURCES =				\
