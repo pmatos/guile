@@ -32,7 +32,6 @@
 #include "libguile/macros.h"
 #include "libguile/procprop.h"
 #include "libguile/modules.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/vm.h" /* to capture vm stacks */
 #include "libguile/frames.h" /* vm frames */
@@ -326,8 +325,8 @@ SCM_DEFINE (scm_make_stack, "make-stack", 1, 0, 1,
 
       kind = SCM_VM_FRAME_KIND_CONT;
       frame.stack_holder = c;
-      frame.fp_offset = (c->fp + c->reloc) - c->stack_base;
-      frame.sp_offset = (c->sp + c->reloc) - c->stack_base;
+      frame.fp_offset = c->fp_offset;
+      frame.sp_offset = c->stack_size;
       frame.ip = c->ra;
     }
   else if (SCM_VM_FRAME_P (obj))
@@ -358,8 +357,7 @@ SCM_DEFINE (scm_make_stack, "make-stack", 1, 0, 1,
 
   /* Skip initial boot frame, if any.  This is possible if the frame
      originates from a captured continuation.  */
-  if (SCM_PROGRAM_P (scm_c_frame_closure (kind, &frame))
-      && SCM_PROGRAM_IS_BOOT (scm_c_frame_closure (kind, &frame))
+  if (scm_i_vm_is_boot_continuation_code (frame.ip)
       && !scm_c_frame_previous (kind, &frame))
     return SCM_BOOL_F;
 
@@ -413,7 +411,7 @@ SCM_DEFINE (scm_stack_id, "stack-id", 1, 0, 0,
     {
       /* Fetch most recent start-stack tag. */
       SCM stacks = scm_fluid_ref (scm_sys_stacks);
-      return scm_is_pair (stacks) ? scm_caar (stacks) : SCM_BOOL_F;
+      return scm_is_pair (stacks) ? scm_car (stacks) : SCM_BOOL_F;
     }
   else if (SCM_CONTINUATIONP (stack))
     /* FIXME: implement me */
@@ -461,7 +459,7 @@ SCM_DEFINE (scm_stack_length, "stack-length", 1, 0, 0,
 void
 scm_init_stacks ()
 {
-  scm_sys_stacks = scm_make_fluid ();
+  scm_sys_stacks = scm_make_thread_local_fluid (SCM_BOOL_F);
   scm_c_define ("%stacks", scm_sys_stacks);
   
   scm_stack_type = scm_make_vtable (scm_from_locale_string (SCM_STACK_LAYOUT),

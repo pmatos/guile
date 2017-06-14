@@ -177,10 +177,10 @@ Return the previous frame of @var{frame}, or @code{#f} if
 @var{frame} is the first frame in its stack.
 @end deffn
 
-@deffn {Scheme Procedure} frame-procedure frame
-@deffnx {C Function} scm_frame_procedure (frame)
-Return the procedure for @var{frame}, or @code{#f} if no
-procedure is associated with @var{frame}.
+@deffn {Scheme Procedure} frame-procedure-name frame
+@deffnx {C Function} scm_frame_procedure_name (frame)
+Return the name of the procedure being applied in @var{frame}, as a
+symbol, or @code{#f} if the procedure has no name.
 @end deffn
 
 @deffn {Scheme Procedure} frame-arguments frame
@@ -201,16 +201,32 @@ respectively. @xref{VM Concepts}, for more information.
 @deffnx {Scheme Procedure} frame-mv-return-address frame
 Accessors for the three saved VM registers in a frame: the previous
 frame pointer, the single-value return address, and the multiple-value
-return address. @xref{Stack Layout}, for more information.
+return address.  @xref{Stack Layout}, for more information.
 @end deffn
 
-@deffn {Scheme Procedure} frame-num-locals frame
-@deffnx {Scheme Procedure} frame-local-ref frame i
-@deffnx {Scheme Procedure} frame-local-set! frame i val
-Accessors for the temporary values corresponding to @var{frame}'s
-procedure application. The first local is the first argument given to
-the procedure. After the arguments, there are the local variables, and
-after that temporary values. @xref{Stack Layout}, for more information.
+@deffn {Scheme Procedure} frame-bindings frame
+Return a list of binding records indicating the local variables that are
+live in a frame.
+@end deffn
+
+@deffn {Scheme Procedure} frame-lookup-binding frame var
+Fetch the bindings in @var{frame}, and return the first one whose name
+is @var{var}, or @code{#f} otherwise.
+@end deffn
+
+@deffn {Scheme Procedure} binding-index binding
+@deffnx {Scheme Procedure} binding-name binding
+@deffnx {Scheme Procedure} binding-slot binding
+@deffnx {Scheme Procedure} binding-representation binding
+Accessors for the various fields in a binding.  The implicit ``callee''
+argument is index 0, the first argument is index 1, and so on to the end
+of the arguments.  After that are temporary variables.  Note that if a
+variable is dead, it might not be available.
+@end deffn
+
+@deffn {Scheme Procedure} binding-ref binding
+@deffnx {Scheme Procedure} binding-set! binding val
+Accessors for the values of local variables in a frame.
 @end deffn
 
 @deffn {Scheme Procedure} display-application frame [port [indent]]
@@ -1088,11 +1104,6 @@ separately, we discuss them all together here:
 @table @code
 @item #:vm
 The VM to instrument. Defaults to the current thread's VM.
-@item #:closure?
-For traps that depend on the current frame's procedure, this argument
-specifies whether to trap on the only the specific procedure given, or
-on any closure that has the given procedure's code. Defaults to
-@code{#f}.
 @item #:current-frame
 For traps that enable more hooks depending on their dynamic context,
 this argument gives the current frame that the trap is running in.
@@ -1107,12 +1118,12 @@ To have access to these procedures, you'll need to have imported the
 @end lisp
 
 @deffn {Scheme Procedure} trap-at-procedure-call proc handler @
-       [#:vm] [#:closure?]
+       [#:vm]
 A trap that calls @var{handler} when @var{proc} is applied.
 @end deffn                
 
 @deffn {Scheme Procedure} trap-in-procedure proc @
-       enter-handler exit-handler [#:current-frame] [#:vm] [#:closure?]
+       enter-handler exit-handler [#:current-frame] [#:vm]
 A trap that calls @var{enter-handler} when control enters @var{proc},
 and @var{exit-handler} when control leaves @var{proc}.
 
@@ -1140,13 +1151,13 @@ An abort.
 @end deffn
 
 @deffn {Scheme Procedure} trap-instructions-in-procedure proc @
-       next-handler exit-handler [#:current-frame] [#:vm] [#:closure?]
+       next-handler exit-handler [#:current-frame] [#:vm]
 A trap that calls @var{next-handler} for every instruction executed in
 @var{proc}, and @var{exit-handler} when execution leaves @var{proc}.
 @end deffn
 
 @deffn {Scheme Procedure} trap-at-procedure-ip-in-range proc range @
-       handler [#:current-frame] [#:vm] [#:closure?]
+       handler [#:current-frame] [#:vm]
 A trap that calls @var{handler} when execution enters a range of
 instructions in @var{proc}. @var{range} is a simple of pairs,
 @code{((@var{start} . @var{end}) ...)}. The @var{start} addresses are
@@ -1169,7 +1180,7 @@ exit.
 @end deffn
 
 @deffn {Scheme Procedure} trap-in-dynamic-extent proc @
-       enter-handler return-handler abort-handler [#:vm] [#:closure?]
+       enter-handler return-handler abort-handler [#:vm]
 A more traditional dynamic-wind trap, which fires @var{enter-handler}
 when control enters @var{proc}, @var{return-handler} on a normal return,
 and @var{abort-handler} on a nonlocal exit.
@@ -1178,14 +1189,14 @@ Note that rewinds are not handled, so there is no rewind handler.
 @end deffn
 
 @deffn {Scheme Procedure} trap-calls-in-dynamic-extent proc @
-       apply-handler return-handler [#:current-frame] [#:vm] [#:closure?]
+       apply-handler return-handler [#:current-frame] [#:vm]
 A trap that calls @var{apply-handler} every time a procedure is applied,
 and @var{return-handler} for returns, but only during the dynamic extent
 of an application of @var{proc}.
 @end deffn
 
 @deffn {Scheme Procedure} trap-instructions-in-dynamic-extent proc @
-       next-handler [#:current-frame] [#:vm] [#:closure?]
+       next-handler [#:current-frame] [#:vm]
 A trap that calls @var{next-handler} for all retired instructions within
 the dynamic extent of a call to @var{proc}.
 @end deffn

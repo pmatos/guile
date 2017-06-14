@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Guile Reference Manual.
-@c Copyright (C) 1996, 1997, 2000-2004, 2006, 2007-2014
+@c Copyright (C) 1996, 1997, 2000-2004, 2006, 2007-2014, 2017
 @c   Free Software Foundation, Inc.
 @c See the file guile.texi for copying conditions.
 
@@ -150,6 +150,7 @@ The Guile core has the following features,
 @example
 guile
 guile-2  ;; starting from Guile 2.x
+guile-2.2  ;; starting from Guile 2.2
 r5rs
 srfi-0
 srfi-4
@@ -1823,8 +1824,8 @@ procedures easier.  It is documented in @xref{Multiple Values}.
 
 This SRFI is a syntax for defining new record types and creating
 predicate, constructor, and field getter and setter functions.  It is
-documented in the ``Compound Data Types'' section of the manual
-(@pxref{SRFI-9 Records}).
+documented in the ``Data Types'' section of the manual (@pxref{SRFI-9
+Records}).
 
 
 @node SRFI-10
@@ -1834,9 +1835,9 @@ documented in the ``Compound Data Types'' section of the manual
 @cindex hash-comma
 @cindex #,()
 This SRFI implements a reader extension @code{#,()} called hash-comma.
-It allows the reader to give new kinds of objects, for use both in
-data and as constants or literals in source code.  This feature is
-available with
+It allows the reader to give new kinds of objects, for use both in data
+and as constants or literals in source code.  This feature is available
+with
 
 @example
 (use-modules (srfi srfi-10))
@@ -1894,73 +1895,46 @@ addition,
 (display #,(sum 123 456)) @print{} 579
 @end example
 
-A typical use for @nicode{#,()} is to get a read syntax for objects
-which don't otherwise have one.  For example, the following allows a
-hash table to be given literally, with tags and values, ready for fast
-lookup.
-
-@example
-(define-reader-ctor 'hash
-  (lambda elems
-    (let ((table (make-hash-table)))
-      (for-each (lambda (elem)
-                  (apply hash-set! table elem))
-                elems)
-      table)))
-
-(define (animal->family animal)
-  (hash-ref '#,(hash ("tiger" "cat")
-                     ("lion"  "cat")
-                     ("wolf"  "dog"))
-            animal))
-
-(animal->family "lion") @result{} "cat"
-@end example
-
-Or for example the following is a syntax for a compiled regular
-expression (@pxref{Regular Expressions}).
-
-@example
-(use-modules (ice-9 regex))
-
-(define-reader-ctor 'regexp make-regexp)
-
-(define (extract-angs str)
-  (let ((match (regexp-exec '#,(regexp "<([A-Z0-9]+)>") str)))
-    (and match
-         (match:substring match 1))))
-
-(extract-angs "foo <BAR> quux") @result{} "BAR"
-@end example
-
-@sp 1
-@nicode{#,()} is somewhat similar to @code{define-macro}
-(@pxref{Macros}) in that handler code is run to produce a result, but
-@nicode{#,()} operates at the read stage, so it can appear in data for
-@code{read} (@pxref{Scheme Read}), not just in code to be executed.
-
-Because @nicode{#,()} is handled at read-time it has no direct access
-to variables etc.  A symbol in the arguments is just a symbol, not a
-variable reference.  The arguments are essentially constants, though
-the handler procedure can use them in any complicated way it might
-want.
-
 Once @code{(srfi srfi-10)} has loaded, @nicode{#,()} is available
 globally, there's no need to use @code{(srfi srfi-10)} in later
 modules.  Similarly the tags registered are global and can be used
 anywhere once registered.
 
-There's no attempt to record what previous @nicode{#,()} forms have
-been seen, if two identical forms occur then two calls are made to the
-handler procedure.  The handler might like to maintain a cache or
-similar to avoid making copies of large objects, depending on expected
-usage.
+We do not recommend @nicode{#,()} reader extensions, however, and for
+three reasons.
 
-In code the best uses of @nicode{#,()} are generally when there's a
-lot of objects of a particular kind as literals or constants.  If
-there's just a few then some local variables and initializers are
-fine, but that becomes tedious and error prone when there's a lot, and
-the anonymous and compact syntax of @nicode{#,()} is much better.
+First of all, this SRFI is not modular: the tag is matched by name, not
+as an identifier within a scope.  Defining a reader extension in one
+part of a program can thus affect unrelated parts of a program because
+the tag is not scoped.
+
+Secondly, reader extensions can be hard to manage from a time
+perspective: when does the reader extension take effect?  @xref{Eval
+When}, for more discussion.
+
+Finally, reader extensions can easily produce objects that can't be
+reified to an object file by the compiler.  For example if you define a
+reader extension that makes a hash table (@pxref{Hash Tables}), then it
+will work fine when run with the interpreter, and you think you have a
+neat hack.  But then if you try to compile your program, after wrangling
+with the @code{eval-when} concerns mentioned above, the compiler will
+carp that it doesn't know how to serialize a hash table to disk.
+
+In the specific case of hash tables, it would be possible for Guile to
+know how to pack hash tables into compiled files, but this doesn't work
+in general.  What if the object you produce is an instance of a record
+type?  Guile would then have to serialize the record type to disk too,
+and then what happens if the program independently loads the code that
+defines the record type?  Does it define the same type or a different
+type?  Guile's record types are nominal, not structural, so the answer
+is not clear at all.
+
+For all of these reasons we recommend macros over reader extensions.
+Macros fulfill many of the same needs while preserving modular
+composition, and their interaction with @code{eval-when} is well-known.
+If you need brevity, instead use @code{read-hash-extend} and make your
+reader extension expand to a macro invocation.  In that way we preserve
+scoping as much as possible.  @xref{Reader Extensions}.
 
 
 @node SRFI-11
@@ -2087,14 +2061,12 @@ library.  The functions and variables described here are provided by
 (use-modules (srfi srfi-18))
 @end example
 
-As a general rule, the data types and functions in this SRFI-18
-implementation are compatible with the types and functions in Guile's
-core threading code.  For example, mutexes created with the SRFI-18 
-@code{make-mutex} function can be passed to the built-in Guile 
-function @code{lock-mutex} (@pxref{Mutexes and Condition Variables}),
-and mutexes created with the built-in Guile function @code{make-mutex}
-can be passed to the SRFI-18 function @code{mutex-lock!}.  Cases in
-which this does not hold true are noted in the following sections.
+SRFI-18 defines facilities for threads, mutexes, condition variables,
+time, and exception handling.  Because these facilities are at a higher
+level than Guile's primitives, they are implemented as a layer on top of
+what Guile provides.  In particular this means that a Guile mutex is not
+a SRFI-18 mutex, and a Guile thread is not a SRFI-18 thread, and so on.
+Guile provides a set of primitives and SRFI-18 is one of the systems built in terms of those primitives.
 
 @menu
 * SRFI-18 Threads::             Executing code 
@@ -2112,8 +2084,10 @@ Guile's built-in thread functions.  First, a thread created by SRFI-18
 @code{make-thread} begins in a blocked state and will not start 
 execution until @code{thread-start!} is called on it.  Second, SRFI-18
 threads are constructed with a top-level exception handler that 
-captures any exceptions that are thrown on thread exit.  In all other
-regards, SRFI-18 threads are identical to normal Guile threads.
+captures any exceptions that are thrown on thread exit.
+
+SRFI-18 threads are disjoint from Guile's primitive threads.
+@xref{Threads}, for more on Guile's primitive facility.
 
 @defun current-thread
 Returns the thread that called this function.  This is the same
@@ -2206,41 +2180,28 @@ original exception can be retrieved using
 @node SRFI-18 Mutexes
 @subsubsection SRFI-18 Mutexes
 
-The behavior of Guile's built-in mutexes is parameterized via a set of
-flags passed to the @code{make-mutex} procedure in the core
-(@pxref{Mutexes and Condition Variables}).  To satisfy the requirements
-for mutexes specified by SRFI-18, the @code{make-mutex} procedure
-described below sets the following flags:
-@itemize @bullet
-@item
-@code{recursive}: the mutex can be locked recursively
-@item
-@code{unchecked-unlock}: attempts to unlock a mutex that is already
-unlocked will not raise an exception
-@item
-@code{allow-external-unlock}: the mutex can be unlocked by any thread,
-not just the thread that locked it originally
-@end itemize
+SRFI-18 mutexes are disjoint from Guile's primitive mutexes.
+@xref{Mutexes and Condition Variables}, for more on Guile's primitive
+facility.
 
 @defun make-mutex [name]
-Returns a new mutex, optionally assigning it the object name 
-@var{name}, which may be any Scheme object.  The returned mutex will be
-created with the configuration described above.  Note that the name 
-@code{make-mutex} conflicts with Guile core function @code{make-mutex}.
-Applications wanting to use both of these functions will need to refer 
-to them by different names.
+Returns a new mutex, optionally assigning it the object name @var{name},
+which may be any Scheme object.  The returned mutex will be created with
+the configuration described above.
 @end defun
 
 @defun mutex-name mutex
-Returns the name assigned to @var{mutex} at the time of its creation, 
-or @code{#f} if it was not given a name.
+Returns the name assigned to @var{mutex} at the time of its creation, or
+@code{#f} if it was not given a name.
 @end defun
 
 @defun mutex-specific mutex
-@defunx mutex-specific-set! mutex obj
-Get or set the ``object-specific'' property of @var{mutex}.  In Guile's
-implementation of SRFI-18, this value is stored as an object property, 
-and will be @code{#f} if not set.
+Return the ``object-specific'' property of @var{mutex}, or @code{#f} if
+none is set.
+@end defun
+
+@defun mutex-specific-set! mutex obj
+Set the ``object-specific'' property of @var{mutex}.
 @end defun
 
 @defun mutex-state mutex
@@ -2248,8 +2209,8 @@ Returns information about the state of @var{mutex}.  Possible values
 are:
 @itemize @bullet
 @item
-thread @code{T}: the mutex is in the locked/owned state and thread T
-is the owner of the mutex
+thread @var{t}: the mutex is in the locked/owned state and thread
+@var{t} is the owner of the mutex
 @item 
 symbol @code{not-owned}: the mutex is in the locked/not-owned state
 @item
@@ -2263,17 +2224,14 @@ unlocked/not-abandoned state
 @defun mutex-lock! mutex [timeout [thread]]
 Lock @var{mutex}, optionally specifying a time object @var{timeout}
 after which to abort the lock attempt and a thread @var{thread} giving
-a new owner for @var{mutex} different than the current thread.  This 
-procedure has the same behavior as the @code{lock-mutex} procedure in 
-the core library.
+a new owner for @var{mutex} different than the current thread.
 @end defun
 
 @defun mutex-unlock! mutex [condition-variable [timeout]]
 Unlock @var{mutex}, optionally specifying a condition variable
 @var{condition-variable} on which to wait, either indefinitely or,
 optionally, until the time object @var{timeout} has passed, to be
-signalled.  This procedure has the same behavior as the 
-@code{unlock-mutex} procedure in the core library.
+signalled.
 @end defun
 
 
@@ -2282,20 +2240,20 @@ signalled.  This procedure has the same behavior as the
 
 SRFI-18 does not specify a ``wait'' function for condition variables.
 Waiting on a condition variable can be simulated using the SRFI-18
-@code{mutex-unlock!} function described in the previous section, or
-Guile's built-in @code{wait-condition-variable} procedure can be used.
+@code{mutex-unlock!} function described in the previous section.
+
+SRFI-18 condition variables are disjoint from Guile's primitive
+condition variables.  @xref{Mutexes and Condition Variables}, for more
+on Guile's primitive facility.
 
 @defun condition-variable? obj
 Returns @code{#t} if @var{obj} is a condition variable, @code{#f}
-otherwise.  This is the same procedure as the same-named built-in 
-procedure
-(@pxref{Mutexes and Condition Variables, @code{condition-variable?}}).
+otherwise.
 @end defun
 
 @defun make-condition-variable [name]
 Returns a new condition variable, optionally assigning it the object
-name @var{name}, which may be any Scheme object.  This procedure 
-replaces a procedure of the same name in the core library.
+name @var{name}, which may be any Scheme object.
 @end defun
 
 @defun condition-variable-name condition-variable
@@ -2304,21 +2262,19 @@ creation, or @code{#f} if it was not given a name.
 @end defun
 
 @defun condition-variable-specific condition-variable
-@defunx condition-variable-specific-set! condition-variable obj
-Get or set the ``object-specific'' property of 
-@var{condition-variable}.  In Guile's implementation of SRFI-18, this
-value is stored as an object property, and will be @code{#f} if not 
-set.
+Return the ``object-specific'' property of @var{condition-variable}, or
+@code{#f} if none is set.
+@end defun
+
+@defun condition-variable-specific-set! condition-variable obj
+Set the ``object-specific'' property of @var{condition-variable}.
 @end defun
 
 @defun condition-variable-signal! condition-variable
 @defunx condition-variable-broadcast! condition-variable
 Wake up one thread that is waiting for @var{condition-variable}, in
 the case of @code{condition-variable-signal!}, or all threads waiting
-for it, in the case of @code{condition-variable-broadcast!}.  The
-behavior of these procedures is equivalent to that of the procedures
-@code{signal-condition-variable} and 
-@code{broadcast-condition-variable} in the core library.
+for it, in the case of @code{condition-variable-broadcast!}.
 @end defun
 
 
@@ -2426,17 +2382,6 @@ functions and variables described here are provided by
 @example
 (use-modules (srfi srfi-19))
 @end example
-
-@strong{Caution}: The current code in this module incorrectly extends
-the Gregorian calendar leap year rule back prior to the introduction
-of those reforms in 1582 (or the appropriate year in various
-countries).  The Julian calendar was used prior to 1582, and there
-were 10 days skipped for the reform, but the code doesn't implement
-that.
-
-This will be fixed some time.  Until then calculations for 1583
-onwards are correct, but prior to that any day/month/year and day of
-the week calculations are wrong.
 
 @menu
 * SRFI-19 Introduction::        
@@ -2636,6 +2581,16 @@ time of day on that date in some timezone.
 The fields are year, month, day, hour, minute, second, nanoseconds and
 timezone.  A date object is immutable, its fields can be read but they
 cannot be modified once the object is created.
+
+Historically, the Gregorian calendar was only used from the latter part
+of the year 1582 onwards, and not until even later in many countries.
+Prior to that most countries used the Julian calendar.  SRFI-19 does
+not deal with the Julian calendar at all, and so does not reflect this
+historical calendar reform.  Instead it projects the Gregorian calendar
+back proleptically as far as necessary.  When dealing with historical
+data, especially prior to the British Empire's adoption of the Gregorian
+calendar in 1752, one should be mindful of which calendar is used in
+each context, and apply non-SRFI-19 facilities to convert where necessary.
 
 @defun date? obj
 Return @code{#t} if @var{obj} is a date object, or @code{#f} if not.
@@ -3302,8 +3257,8 @@ Insert a newline.
 Insert a tilde.
 @end table
 
-This procedure is the same as calling @code{simple-format} (@pxref{Writing})
-with @code{#f} as the destination.
+This procedure is the same as calling @code{simple-format}
+(@pxref{Simple Output}) with @code{#f} as the destination.
 @end deffn
 
 @node SRFI-30

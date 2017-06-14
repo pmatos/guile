@@ -1,5 +1,5 @@
 /* Copyright (C) 2001, 2009, 2010, 2011, 2012
- *    2013, 2014 Free Software Foundation, Inc.
+ *    2013, 2014, 2015 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -78,6 +78,9 @@
 #else
 #define ELFDATA ELFDATA2LSB
 #endif
+
+/* The page size.  */
+static size_t page_size;
 
 static void register_elf (char *data, size_t len, char *frame_maps);
 
@@ -192,12 +195,13 @@ alloc_aligned (size_t len, unsigned alignment)
       /* FIXME: Assert that we actually have an 8-byte-aligned malloc.  */
       ret = malloc (len);
     }
-#if defined(HAVE_SYS_MMAN_H) && defined(MMAP_ANONYMOUS)
-  else if (alignment == SCM_PAGE_SIZE)
+#if defined(HAVE_SYS_MMAN_H) && defined(HAVE_MAP_ANONYMOUS)
+  else if (alignment == page_size)
     {
-      ret = mmap (NULL, len, PROT_READ | PROT_WRITE, -1, 0);
+      ret = mmap (NULL, len, PROT_READ | PROT_WRITE,
+                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
       if (ret == MAP_FAILED)
-        SCM_SYSERROR;
+        scm_syserror ("load-thunk-from-memory");
     }
 #endif
   else
@@ -208,7 +212,7 @@ alloc_aligned (size_t len, unsigned alignment)
       ret = malloc (len + alignment - 1);
       if (!ret)
         abort ();
-      ret = (char *) ALIGN ((scm_t_uintptr) ret, alignment);
+      ret = (char *) ALIGN ((scm_t_uintptr) ret, (scm_t_uintptr) alignment);
     }
 
   return ret;
@@ -292,12 +296,10 @@ process_dynamic_segment (char *base, Elf_Phdr *dyn_phdr,
               {
               case 0x0202:
                 bytecode_kind = BYTECODE_KIND_GUILE_2_2;
-                /* As we get closer to 2.2, we will allow for backwards
-                   compatibility and we can change this test to ">"
-                   instead of "!=".  However until then, to deal with VM
-                   churn it's best to keep these things in
-                   lock-step.  */
-                if (minor != SCM_OBJCODE_MINOR_VERSION)
+                if (minor < SCM_OBJCODE_MINIMUM_MINOR_VERSION)
+                  return "incompatible bytecode version";
+                /* FIXME for 3.0: Go back to integers.  */
+                if (minor > SCM_OBJCODE_MINOR_VERSION_STRING[0])
                   return "incompatible bytecode version";
                 break;
               default:
@@ -416,7 +418,18 @@ load_thunk_from_memory (char *data, size_t len, int is_read_only)
   if (dynamic_segment < 0)
     ABORT ("no PT_DYNAMIC segment");
 
-  if (!IS_ALIGNED ((scm_t_uintptr) data, alignment))
+  /* The ELF images that Guile currently emits have segments that are
+     aligned on 64 KB boundaries, which might be larger than the actual
+     page size (usually 4 KB).  However Guile doesn't actually use the
+     absolute addresses at all.  All Guile needs is for the loaded image
+     to be able to make the data section writable (for the mmap path),
+     and for that the segment just needs to be page-aligned, and a page
+     is always bigger than Guile's minimum alignment.  Since we know
+     (for the mmap path) that the base _is_ page-aligned, we proceed
+     ahead even if the image alignment is greater than the page
+     size.  */
+  if (!IS_ALIGNED ((scm_t_uintptr) data, alignment)
+      && !IS_ALIGNED (alignment, page_size))
     ABORT ("incorrectly aligned base");
 
   /* Allow writes to writable pages.  */
@@ -429,7 +442,7 @@ load_thunk_from_memory (char *data, size_t len, int is_read_only)
             continue;
           if (ph[i].p_flags == PF_R)
             continue;
-          if (ph[i].p_align != 4096)
+          if (ph[i].p_align < page_size)
             continue;
 
           if (mprotect (data + ph[i].p_vaddr,
@@ -464,8 +477,6 @@ load_thunk_from_memory (char *data, size_t len, int is_read_only)
 }
 #undef FUNC_NAME
 
-#define SCM_PAGE_SIZE 4096
-
 static char*
 map_file_contents (int fd, size_t len, int *is_read_only)
 #define FUNC_NAME "load-thunk-from-file"
@@ -478,7 +489,7 @@ map_file_contents (int fd, size_t len, int *is_read_only)
     SCM_SYSERROR;
   *is_read_only = 1;
 #else
-  if (lseek (fd, 0, SEEK_START) < 0)
+  if (lseek (fd, 0, SEEK_SET) < 0)
     {
       int errno_save = errno;
       (void) close (fd);
@@ -489,15 +500,15 @@ map_file_contents (int fd, size_t len, int *is_read_only)
   /* Given that we are using the read fallback, optimistically assume
      that the .go files were made with 8-byte alignment.
      alignment.  */
-  data = malloc (end);
+  data = malloc (len);
   if (!data)
     {
       (void) close (fd);
       scm_misc_error (FUNC_NAME, "failed to allocate ~A bytes",
-                      scm_list_1 (scm_from_size_t (end)));
+                      scm_list_1 (scm_from_size_t (len)));
     }
 
-  if (full_read (fd, data, end) != end)
+  if (full_read (fd, data, len) != len)
     {
       int errno_save = errno;
       (void) close (fd);
@@ -510,11 +521,11 @@ map_file_contents (int fd, size_t len, int *is_read_only)
 
   /* If our optimism failed, fall back.  */
   {
-    unsigned alignment = sniff_elf_alignment (data, end);
+    unsigned alignment = elf_alignment (data, len);
 
     if (alignment != 8)
       {
-        char *copy = copy_and_align_elf_data (data, end, alignment);
+        char *copy = copy_and_align_elf_data (data, len);
         free (data);
         data = copy;
       }
@@ -748,7 +759,7 @@ verify (sizeof (struct frame_map_prefix) == 8);
 verify (sizeof (struct frame_map_header) == 8);
 
 const scm_t_uint8 *
-scm_find_dead_slot_map_unlocked (const scm_t_uint32 *ip)
+scm_find_slot_map_unlocked (const scm_t_uint32 *ip)
 {
   struct mapped_elf_image *image;
   char *base;
@@ -794,6 +805,11 @@ scm_find_dead_slot_map_unlocked (const scm_t_uint32 *ip)
 void
 scm_bootstrap_loader (void)
 {
+  page_size = getpagesize ();
+  /* page_size should be a power of two.  */
+  if (page_size & (page_size - 1))
+    abort ();
+
   scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
                             "scm_init_loader",
                             (scm_t_extension_init_func)scm_init_loader, NULL);

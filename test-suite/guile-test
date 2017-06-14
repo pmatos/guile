@@ -23,7 +23,7 @@
 ;;;; Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-;;;; Usage: [guile -e main -s] guile-test [OPTIONS] [TEST ...]
+;;;; Usage: [guile -L `pwd`/test-suite -e main -s] guile-test [OPTIONS] [TEST ...]
 ;;;;
 ;;;; Run tests from the Guile test suite.  Report failures and
 ;;;; unexpected passes to the standard output, along with a summary of
@@ -246,7 +246,7 @@
                              tests))))
             (if (opt 'coverage #f)
                 (let-values (((coverage-data _)
-                              (with-code-coverage (the-vm) run-tests)))
+                              (with-code-coverage run-tests)))
                   (let ((out (open-output-file "guile.info")))
                     (coverage-data->lcov coverage-data out)
                     (close out)))

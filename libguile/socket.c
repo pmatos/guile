@@ -1,5 +1,5 @@
-/* Copyright (C) 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
- *   2006, 2007, 2009, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 1996-1998, 2000-2007, 2009, 2011-2015
+ *   Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -40,6 +40,7 @@
 #include <sys/un.h>
 #endif
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 
@@ -366,7 +367,12 @@ SCM_DEFINE (scm_inet_pton, "inet-pton", 2, 0, 0,
 
 SCM_SYMBOL (sym_socket, "socket");
 
-#define SCM_SOCK_FD_TO_PORT(fd) scm_fdes_to_port (fd, "r+0", sym_socket)
+static SCM
+scm_socket_fd_to_port (int fd)
+{
+  return scm_i_fdes_to_port (fd, scm_mode_bits ("r+0"), sym_socket,
+                             SCM_FPORT_OPTION_NOT_SEEKABLE);
+}
 
 SCM_DEFINE (scm_socket, "socket", 3, 0, 0,
             (SCM family, SCM style, SCM proto),
@@ -390,7 +396,7 @@ SCM_DEFINE (scm_socket, "socket", 3, 0, 0,
 	       scm_to_int (proto));
   if (fd == -1)
     SCM_SYSERROR;
-  return SCM_SOCK_FD_TO_PORT (fd);
+  return scm_socket_fd_to_port (fd);
 }
 #undef FUNC_NAME
 
@@ -412,7 +418,8 @@ SCM_DEFINE (scm_socketpair, "socketpair", 3, 0, 0,
   if (socketpair (fam, scm_to_int (style), scm_to_int (proto), fd) == -1)
     SCM_SYSERROR;
 
-  return scm_cons (SCM_SOCK_FD_TO_PORT (fd[0]), SCM_SOCK_FD_TO_PORT (fd[1]));
+  return scm_cons (scm_socket_fd_to_port (fd[0]),
+                   scm_socket_fd_to_port (fd[1]));
 }
 #undef FUNC_NAME
 #endif
@@ -508,19 +515,7 @@ SCM_DEFINE (scm_getsockopt, "getsockopt", 3, 0, 0,
 			   scm_from_int (0));
 #endif
 	}
-      else
 #endif
-	if (0
-#ifdef SO_SNDBUF
-	    || ioptname == SO_SNDBUF
-#endif
-#ifdef SO_RCVBUF
-	    || ioptname == SO_RCVBUF
-#endif
-	    )
-	  {
-	    return scm_from_size_t (*(size_t *) &optval);
-	  }
     }
   return scm_from_int (*(int *) &optval);
 }
@@ -649,21 +644,7 @@ SCM_DEFINE (scm_setsockopt, "setsockopt", 4, 0, 0,
 	  optval = &opt_int;
 #endif
 	}
-      else
 #endif
-	if (0
-#ifdef SO_SNDBUF
-	    || ioptname == SO_SNDBUF
-#endif
-#ifdef SO_RCVBUF
-	    || ioptname == SO_RCVBUF
-#endif
-	    )
-	  {
-	    opt_int = scm_to_int (value);
-	    optlen = sizeof (size_t);
-	    optval = &opt_int;
-	  }
     }
 
 #ifdef HAVE_STRUCT_IP_MREQ
@@ -859,7 +840,8 @@ SCM_DEFINE (scm_connect, "connect", 2, 1, 1,
 	    "Alternatively, the second argument can be a socket address object "
 	    "as returned by @code{make-socket-address}, in which case the "
 	    "no additional arguments should be passed.\n\n"
-	    "The return value is unspecified.")
+	    "Return true, unless the socket was configured to be non-blocking\n"
+            "and the operation has not finished yet.\n")
 #define FUNC_NAME s_scm_connect
 {
   int fd;
@@ -884,10 +866,12 @@ SCM_DEFINE (scm_connect, "connect", 2, 1, 1,
 
       free (soka);
       errno = save_errno;
+      if (errno == EINPROGRESS)
+        return SCM_BOOL_F;
       SCM_SYSERROR;
     }
   free (soka);
-  return SCM_UNSPECIFIED;
+  return SCM_BOOL_T;
 }
 #undef FUNC_NAME
 
@@ -1259,24 +1243,24 @@ SCM_DEFINE (scm_make_socket_address, "make-socket-address", 2, 0, 1,
 #undef FUNC_NAME
 
 
-SCM_DEFINE (scm_accept, "accept", 1, 0, 0, 
-            (SCM sock),
-	    "Accept a connection on a bound, listening socket.\n"
-	    "If there\n"
-	    "are no pending connections in the queue, wait until\n"
-	    "one is available unless the non-blocking option has been\n"
-	    "set on the socket.\n\n"
-	    "The return value is a\n"
-	    "pair in which the @emph{car} is a new socket port for the\n"
-	    "connection and\n"
-	    "the @emph{cdr} is an object with address information about the\n"
-	    "client which initiated the connection.\n\n"
+SCM_DEFINE (scm_accept4, "accept", 1, 1, 0, 
+            (SCM sock, SCM flags),
+	    "Accept a connection on a bound, listening socket.  If there\n"
+	    "are no pending connections in the queue, there are two\n"
+            "possibilities: if the socket has been configured as\n"
+            "non-blocking, return @code{#f} directly.  Otherwise wait\n"
+            "until a connection is available.  When a connection comes,\n"
+	    "the return value is a pair in which the @emph{car} is a new\n"
+            "socket port for the connection and the @emph{cdr} is an\n"
+            "object with address information about the client which\n"
+            "initiated the connection.\n\n"
 	    "@var{sock} does not become part of the\n"
 	    "connection and will continue to accept new requests.")
-#define FUNC_NAME s_scm_accept
+#define FUNC_NAME s_scm_accept4
 {
   int fd;
   int newfd;
+  int c_flags;
   SCM address;
   SCM newsock;
   socklen_t addr_size = MAX_ADDR_SIZE;
@@ -1284,17 +1268,29 @@ SCM_DEFINE (scm_accept, "accept", 1, 0, 0,
 
   sock = SCM_COERCE_OUTPORT (sock);
   SCM_VALIDATE_OPFPORT (1, sock);
+  c_flags = SCM_UNBNDP (flags) ? 0 : scm_to_int (flags);
+
   fd = SCM_FPORT_FDES (sock);
-  SCM_SYSCALL (newfd = accept (fd, (struct sockaddr *) &addr, &addr_size));
+  SCM_SYSCALL (newfd = accept4 (fd, (struct sockaddr *) &addr, &addr_size,
+                                c_flags));
   if (newfd == -1)
-    SCM_SYSERROR;
-  newsock = SCM_SOCK_FD_TO_PORT (newfd);
-  address = _scm_from_sockaddr (&addr, addr_size,
-				FUNC_NAME);
+    {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        return SCM_BOOL_F;
+      SCM_SYSERROR;
+    }
+  newsock = scm_socket_fd_to_port (newfd);
+  address = _scm_from_sockaddr (&addr, addr_size, FUNC_NAME);
 
   return scm_cons (newsock, address);
 }
 #undef FUNC_NAME
+
+SCM
+scm_accept (SCM sock)
+{
+  return scm_accept4 (sock, SCM_UNDEFINED);
+}
 
 SCM_DEFINE (scm_getsockname, "getsockname", 1, 0, 0, 
             (SCM sock),
@@ -1657,6 +1653,14 @@ scm_init_socket ()
   scm_c_define ("SOCK_RDM", scm_from_int (SOCK_RDM));
 #endif
 
+  /* accept4 flags.  */
+#ifdef SOCK_CLOEXEC
+  scm_c_define ("SOCK_CLOEXEC", scm_from_int (SOCK_CLOEXEC));
+#endif
+#ifdef SOCK_NONBLOCK
+  scm_c_define ("SOCK_NONBLOCK", scm_from_int (SOCK_NONBLOCK));
+#endif
+
   /* setsockopt level.
 
      SOL_IP, SOL_TCP and SOL_UDP are defined on gnu/linux, but not on for
@@ -1737,6 +1741,14 @@ scm_init_socket ()
 #endif
 #ifdef MSG_DONTROUTE
   scm_c_define ("MSG_DONTROUTE", scm_from_int (MSG_DONTROUTE));
+#endif
+
+  /* TCP options.  */
+#ifdef TCP_NODELAY
+  scm_c_define ("TCP_NODELAY", scm_from_int (TCP_NODELAY));
+#endif
+#ifdef TCP_CORK
+  scm_c_define ("TCP_CORK", scm_from_int (TCP_CORK));
 #endif
 
 #ifdef IP_ADD_MEMBERSHIP

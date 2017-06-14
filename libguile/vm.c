@@ -16,9 +16,6 @@
  * 02110-1301 USA
  */
 
-/* For mremap(2) on GNU/Linux systems.  */
-#define _GNU_SOURCE
-
 #if HAVE_CONFIG_H
 #  include <config.h>
 #endif
@@ -37,16 +34,19 @@
 #include "libguile/bdw-gc.h"
 #include <gc/gc_mark.h>
 
-#include "_scm.h"
-#include "control.h"
-#include "frames.h"
-#include "gc-inline.h"
-#include "instructions.h"
-#include "loader.h"
-#include "programs.h"
-#include "simpos.h"
-#include "vm.h"
-#include "vm-builtins.h"
+#include "libguile/_scm.h"
+#include "libguile/atomic.h"
+#include "libguile/atomics-internal.h"
+#include "libguile/cache-internal.h"
+#include "libguile/control.h"
+#include "libguile/frames.h"
+#include "libguile/gc-inline.h"
+#include "libguile/instructions.h"
+#include "libguile/loader.h"
+#include "libguile/programs.h"
+#include "libguile/simpos.h"
+#include "libguile/vm.h"
+#include "libguile/vm-builtins.h"
 
 static int vm_default_engine = SCM_VM_REGULAR_ENGINE;
 
@@ -65,7 +65,8 @@ static size_t page_size;
    necessary, but might be if you think you found a bug in the VM. */
 /* #define VM_ENABLE_ASSERTIONS */
 
-static void vm_expand_stack (struct scm_vm *vp, SCM *new_sp) SCM_NOINLINE;
+static void vm_expand_stack (struct scm_vm *vp,
+                             union scm_vm_stack_element *new_sp) SCM_NOINLINE;
 
 /* RESTORE is for the case where we know we have done a PUSH of equal or
    greater stack size in the past.  Otherwise PUSH is the thing, which
@@ -73,28 +74,29 @@ static void vm_expand_stack (struct scm_vm *vp, SCM *new_sp) SCM_NOINLINE;
 enum vm_increase_sp_kind { VM_SP_PUSH, VM_SP_RESTORE };
 
 static inline void
-vm_increase_sp (struct scm_vm *vp, SCM *new_sp, enum vm_increase_sp_kind kind)
+vm_increase_sp (struct scm_vm *vp, union scm_vm_stack_element *new_sp,
+                enum vm_increase_sp_kind kind)
 {
-  if (new_sp <= vp->sp_max_since_gc)
+  if (new_sp >= vp->sp_min_since_gc)
     {
       vp->sp = new_sp;
       return;
     }
 
-  if (kind == VM_SP_PUSH && new_sp >= vp->stack_limit)
+  if (kind == VM_SP_PUSH && new_sp < vp->stack_limit)
     vm_expand_stack (vp, new_sp);
   else
-    vp->sp_max_since_gc = vp->sp = new_sp;
+    vp->sp_min_since_gc = vp->sp = new_sp;
 }
 
 static inline void
-vm_push_sp (struct scm_vm *vp, SCM *new_sp)
+vm_push_sp (struct scm_vm *vp, union scm_vm_stack_element *new_sp)
 {
   vm_increase_sp (vp, new_sp, VM_SP_PUSH);
 }
 
 static inline void
-vm_restore_sp (struct scm_vm *vp, SCM *new_sp)
+vm_restore_sp (struct scm_vm *vp, union scm_vm_stack_element *new_sp)
 {
   vm_increase_sp (vp, new_sp, VM_SP_RESTORE);
 }
@@ -107,9 +109,9 @@ vm_restore_sp (struct scm_vm *vp, SCM *new_sp)
 void
 scm_i_vm_cont_print (SCM x, SCM port, scm_print_state *pstate)
 {
-  scm_puts_unlocked ("#<vm-continuation ", port);
+  scm_puts ("#<vm-continuation ", port);
   scm_uintprint (SCM_UNPACK (x), 16, port);
-  scm_puts_unlocked (">", port);
+  scm_puts (">", port);
 }
 
 int
@@ -118,8 +120,8 @@ scm_i_vm_cont_to_frame (SCM cont, struct scm_frame *frame)
   struct scm_vm_cont *data = SCM_VM_CONT_DATA (cont);
 
   frame->stack_holder = data;
-  frame->fp_offset = (data->fp + data->reloc) - data->stack_base;
-  frame->sp_offset = (data->sp + data->reloc) - data->stack_base;
+  frame->fp_offset = data->fp_offset;
+  frame->sp_offset = data->stack_size;
   frame->ip = data->ra;
 
   return 1;
@@ -129,23 +131,23 @@ scm_i_vm_cont_to_frame (SCM cont, struct scm_frame *frame)
    is inside VM code, and call/cc was invoked within that same call to
    vm_run.  That's currently not implemented.  */
 SCM
-scm_i_vm_capture_stack (SCM *stack_base, SCM *fp, SCM *sp, scm_t_uint32 *ra,
+scm_i_vm_capture_stack (union scm_vm_stack_element *stack_top,
+                        union scm_vm_stack_element *fp,
+                        union scm_vm_stack_element *sp, scm_t_uint32 *ra,
                         scm_t_dynstack *dynstack, scm_t_uint32 flags)
 {
   struct scm_vm_cont *p;
 
   p = scm_gc_malloc (sizeof (*p), "capture_vm_cont");
-  p->stack_size = sp - stack_base + 1;
-  p->stack_base = scm_gc_malloc (p->stack_size * sizeof (SCM),
-				 "capture_vm_cont");
+  p->stack_size = stack_top - sp;
+  p->stack_bottom = scm_gc_malloc (p->stack_size * sizeof (*p->stack_bottom),
+                                   "capture_vm_cont");
   p->ra = ra;
-  p->sp = sp;
-  p->fp = fp;
-  memcpy (p->stack_base, stack_base, (sp + 1 - stack_base) * sizeof (SCM));
-  p->reloc = p->stack_base - stack_base;
+  p->fp_offset = stack_top - fp;
+  memcpy (p->stack_bottom, sp, p->stack_size * sizeof (*p->stack_bottom));
   p->dynstack = dynstack;
   p->flags = flags;
-  return scm_cell (scm_tc7_vm_cont, (scm_t_bits)p);
+  return scm_cell (scm_tc7_vm_cont, (scm_t_bits) p);
 }
 
 struct return_to_continuation_data
@@ -162,44 +164,30 @@ vm_return_to_continuation_inner (void *data_ptr)
   struct return_to_continuation_data *data = data_ptr;
   struct scm_vm *vp = data->vp;
   struct scm_vm_cont *cp = data->cp;
-  scm_t_ptrdiff reloc;
 
   /* We know that there is enough space for the continuation, because we
      captured it in the past.  However there may have been an expansion
      since the capture, so we may have to re-link the frame
      pointers.  */
-  reloc = (vp->stack_base - (cp->stack_base - cp->reloc));
-  vp->fp = cp->fp + reloc;
-  memcpy (vp->stack_base, cp->stack_base, cp->stack_size * sizeof (SCM));
-  vm_restore_sp (vp, cp->sp + reloc);
-
-  if (reloc)
-    {
-      SCM *fp = vp->fp;
-      while (fp)
-        {
-          SCM *next_fp = SCM_FRAME_DYNAMIC_LINK (fp);
-          if (next_fp)
-            {
-              next_fp += reloc;
-              SCM_FRAME_SET_DYNAMIC_LINK (fp, next_fp);
-            }
-          fp = next_fp;
-        }
-    }
+  memcpy (vp->stack_top - cp->stack_size,
+          cp->stack_bottom,
+          cp->stack_size * sizeof (*cp->stack_bottom));
+  vp->fp = vp->stack_top - cp->fp_offset;
+  vm_restore_sp (vp, vp->stack_top - cp->stack_size);
 
   return NULL;
 }
 
 static void
-vm_return_to_continuation (struct scm_vm *vp, SCM cont, size_t n, SCM *argv)
+vm_return_to_continuation (struct scm_vm *vp, SCM cont, size_t n,
+                           union scm_vm_stack_element *argv)
 {
   struct scm_vm_cont *cp;
-  SCM *argv_copy;
+  union scm_vm_stack_element *argv_copy;
   struct return_to_continuation_data data;
 
-  argv_copy = alloca (n * sizeof(SCM));
-  memcpy (argv_copy, argv, n * sizeof(SCM));
+  argv_copy = alloca (n * sizeof (*argv));
+  memcpy (argv_copy, argv, n * sizeof (*argv));
 
   cp = SCM_VM_CONT_DATA (cont);
 
@@ -208,22 +196,13 @@ vm_return_to_continuation (struct scm_vm *vp, SCM cont, size_t n, SCM *argv)
   GC_call_with_alloc_lock (vm_return_to_continuation_inner, &data);
 
   /* Now we have the continuation properly copied over.  We just need to
-     copy the arguments.  It is not guaranteed that there is actually
-     space for the arguments, though, so we have to bump the SP first.  */
-  vm_push_sp (vp, vp->sp + 3 + n);
-
-  /* Now copy on an empty frame and the return values, as the
-     continuation expects.  */
-  {
-    SCM *base = vp->sp + 1 - 3 - n;
-    size_t i;
-
-    for (i = 0; i < 3; i++)
-      base[i] = SCM_BOOL_F;
-
-    for (i = 0; i < n; i++)
-      base[i + 3] = argv_copy[i];
-  }
+     copy on an empty frame and the return values, as the continuation
+     expects.  */
+  vm_push_sp (vp, vp->sp - 3 - n);
+  vp->sp[n+2].as_scm = SCM_BOOL_F;
+  vp->sp[n+1].as_scm = SCM_BOOL_F;
+  vp->sp[n].as_scm = SCM_BOOL_F;
+  memcpy(vp->sp, argv_copy, n * sizeof (union scm_vm_stack_element));
 
   vp->ip = cp->ra;
 }
@@ -238,19 +217,21 @@ scm_i_capture_current_stack (void)
   thread = SCM_I_CURRENT_THREAD;
   vp = thread_vm (thread);
 
-  return scm_i_vm_capture_stack (vp->stack_base, vp->fp, vp->sp, vp->ip,
+  return scm_i_vm_capture_stack (vp->stack_top, vp->fp, vp->sp, vp->ip,
                                  scm_dynstack_capture_all (&thread->dynstack),
                                  0);
 }
 
 static void vm_dispatch_apply_hook (struct scm_vm *vp) SCM_NOINLINE;
 static void vm_dispatch_push_continuation_hook (struct scm_vm *vp) SCM_NOINLINE;
-static void vm_dispatch_pop_continuation_hook (struct scm_vm *vp, SCM *old_fp) SCM_NOINLINE;
+static void vm_dispatch_pop_continuation_hook
+  (struct scm_vm *vp, union scm_vm_stack_element *old_fp) SCM_NOINLINE;
 static void vm_dispatch_next_hook (struct scm_vm *vp) SCM_NOINLINE;
 static void vm_dispatch_abort_hook (struct scm_vm *vp) SCM_NOINLINE;
 
 static void
-vm_dispatch_hook (struct scm_vm *vp, int hook_num, SCM *argv, int n)
+vm_dispatch_hook (struct scm_vm *vp, int hook_num,
+                  union scm_vm_stack_element *argv, int n)
 {
   SCM hook;
   struct scm_frame c_frame;
@@ -275,8 +256,8 @@ vm_dispatch_hook (struct scm_vm *vp, int hook_num, SCM *argv, int n)
      seems reasonable to limit the lifetime of frame objects.  */
 
   c_frame.stack_holder = vp;
-  c_frame.fp_offset = vp->fp - vp->stack_base;
-  c_frame.sp_offset = vp->sp - vp->stack_base;
+  c_frame.fp_offset = vp->stack_top - vp->fp;
+  c_frame.sp_offset = vp->stack_top - vp->sp;
   c_frame.ip = vp->ip;
 
   /* Arrange for FRAME to be 8-byte aligned, like any other cell.  */
@@ -298,15 +279,16 @@ vm_dispatch_hook (struct scm_vm *vp, int hook_num, SCM *argv, int n)
       SCM args[2];
 
       args[0] = SCM_PACK_POINTER (frame);
-      args[1] = argv[0];
+      args[1] = argv[0].as_scm;
       scm_c_run_hookn (hook, args, 2);
     }
   else
     {
       SCM args = SCM_EOL;
+      int i;
 
-      while (n--)
-        args = scm_cons (argv[n], args);
+      for (i = 0; i < n; i++)
+        args = scm_cons (argv[i].as_scm, args);
       scm_c_run_hook (hook, scm_cons (SCM_PACK_POINTER (frame), args));
     }
 
@@ -322,11 +304,11 @@ static void vm_dispatch_push_continuation_hook (struct scm_vm *vp)
 {
   return vm_dispatch_hook (vp, SCM_VM_PUSH_CONTINUATION_HOOK, NULL, 0);
 }
-static void vm_dispatch_pop_continuation_hook (struct scm_vm *vp, SCM *old_fp)
+static void vm_dispatch_pop_continuation_hook (struct scm_vm *vp,
+                                               union scm_vm_stack_element *old_fp)
 {
   return vm_dispatch_hook (vp, SCM_VM_POP_CONTINUATION_HOOK,
-                           &SCM_FRAME_LOCAL (old_fp, 1),
-                           SCM_FRAME_NUM_LOCALS (old_fp, vp->sp) - 1);
+                           vp->sp, SCM_FRAME_NUM_LOCALS (old_fp, vp->sp) - 1);
 }
 static void vm_dispatch_next_hook (struct scm_vm *vp)
 {
@@ -335,45 +317,33 @@ static void vm_dispatch_next_hook (struct scm_vm *vp)
 static void vm_dispatch_abort_hook (struct scm_vm *vp)
 {
   return vm_dispatch_hook (vp, SCM_VM_ABORT_CONTINUATION_HOOK,
-                           &SCM_FRAME_LOCAL (vp->fp, 1),
-                           SCM_FRAME_NUM_LOCALS (vp->fp, vp->sp) - 1);
+                           vp->sp, SCM_FRAME_NUM_LOCALS (vp->fp, vp->sp) - 1);
 }
 
 static void
-vm_abort (struct scm_vm *vp, SCM tag,
-          size_t nstack, SCM *stack_args, SCM tail, SCM *sp,
+vm_abort (struct scm_vm *vp, SCM tag, size_t nargs,
           scm_i_jmp_buf *current_registers) SCM_NORETURN;
 
 static void
-vm_abort (struct scm_vm *vp, SCM tag,
-          size_t nstack, SCM *stack_args, SCM tail, SCM *sp,
+vm_abort (struct scm_vm *vp, SCM tag, size_t nargs,
           scm_i_jmp_buf *current_registers)
 {
   size_t i;
-  ssize_t tail_len;
   SCM *argv;
   
-  tail_len = scm_ilength (tail);
-  if (tail_len < 0)
-    scm_misc_error ("vm-engine", "tail values to abort should be a list",
-                    scm_list_1 (tail));
+  argv = alloca (nargs * sizeof (SCM));
+  for (i = 0; i < nargs; i++)
+    argv[i] = vp->sp[nargs - i - 1].as_scm;
 
-  argv = alloca ((nstack + tail_len) * sizeof (SCM));
-  for (i = 0; i < nstack; i++)
-    argv[i] = stack_args[i];
-  for (; i < nstack + tail_len; i++, tail = scm_cdr (tail))
-    argv[i] = scm_car (tail);
+  vp->sp = vp->fp;
 
-  vp->sp = sp;
-
-  scm_c_abort (vp, tag, nstack + tail_len, argv, current_registers);
+  scm_c_abort (vp, tag, nargs, argv, current_registers);
 }
 
 struct vm_reinstate_partial_continuation_data
 {
   struct scm_vm *vp;
   struct scm_vm_cont *cp;
-  scm_t_ptrdiff reloc;
 };
 
 static void *
@@ -382,58 +352,45 @@ vm_reinstate_partial_continuation_inner (void *data_ptr)
   struct vm_reinstate_partial_continuation_data *data = data_ptr;
   struct scm_vm *vp = data->vp;
   struct scm_vm_cont *cp = data->cp;
-  SCM *base;
-  scm_t_ptrdiff reloc;
 
-  base = SCM_FRAME_LOCALS_ADDRESS (vp->fp);
-  reloc = cp->reloc + (base - cp->stack_base);
+  memcpy (vp->fp - cp->stack_size,
+          cp->stack_bottom,
+          cp->stack_size * sizeof (*cp->stack_bottom));
 
-  memcpy (base, cp->stack_base, cp->stack_size * sizeof (SCM));
-
-  vp->fp = cp->fp + reloc;
+  vp->fp -= cp->fp_offset;
   vp->ip = cp->ra;
-
-  /* now relocate frame pointers */
-  {
-    SCM *fp;
-    for (fp = vp->fp;
-         SCM_FRAME_LOWER_ADDRESS (fp) >= base;
-         fp = SCM_FRAME_DYNAMIC_LINK (fp))
-      SCM_FRAME_SET_DYNAMIC_LINK (fp, SCM_FRAME_DYNAMIC_LINK (fp) + reloc);
-  }
-
-  data->reloc = reloc;
 
   return NULL;
 }
 
 static void
-vm_reinstate_partial_continuation (struct scm_vm *vp, SCM cont,
-                                   size_t n, SCM *argv,
+vm_reinstate_partial_continuation (struct scm_vm *vp, SCM cont, size_t nargs,
                                    scm_t_dynstack *dynstack,
                                    scm_i_jmp_buf *registers)
 {
   struct vm_reinstate_partial_continuation_data data;
   struct scm_vm_cont *cp;
-  SCM *argv_copy;
-  scm_t_ptrdiff reloc;
-  size_t i;
+  union scm_vm_stack_element *args;
+  scm_t_ptrdiff old_fp_offset;
 
-  argv_copy = alloca (n * sizeof(SCM));
-  memcpy (argv_copy, argv, n * sizeof(SCM));
+  args = alloca (nargs * sizeof (*args));
+  memcpy (args, vp->sp, nargs * sizeof (*args));
 
   cp = SCM_VM_CONT_DATA (cont);
 
-  vm_push_sp (vp, SCM_FRAME_LOCALS_ADDRESS (vp->fp) + cp->stack_size + n - 1);
+  old_fp_offset = vp->stack_top - vp->fp;
+
+  vm_push_sp (vp, vp->fp - (cp->stack_size + nargs + 1));
 
   data.vp = vp;
   data.cp = cp;
   GC_call_with_alloc_lock (vm_reinstate_partial_continuation_inner, &data);
-  reloc = data.reloc;
 
-  /* Push the arguments. */
-  for (i = 0; i < n; i++)
-    vp->sp[i + 1 - n] = argv_copy[i];
+  /* The resume continuation will expect ARGS on the stack as if from a
+     multiple-value return.  Fill in the closure slot with #f, and copy
+     the arguments into place.  */
+  vp->sp[nargs].as_scm = SCM_BOOL_F;
+  memcpy (vp->sp, args, nargs * sizeof (*args));
 
   /* The prompt captured a slice of the dynamic stack.  Here we wind
      those entries onto the current thread's stack.  We also have to
@@ -448,7 +405,7 @@ vm_reinstate_partial_continuation (struct scm_vm *vp, SCM cont,
         scm_t_bits tag = SCM_DYNSTACK_TAG (walk);
 
         if (SCM_DYNSTACK_TAG_TYPE (tag) == SCM_DYNSTACK_TYPE_PROMPT)
-          scm_dynstack_wind_prompt (dynstack, walk, reloc, registers);
+          scm_dynstack_wind_prompt (dynstack, walk, old_fp_offset, registers);
         else
           scm_dynstack_wind_1 (dynstack, walk);
       }
@@ -463,27 +420,29 @@ vm_reinstate_partial_continuation (struct scm_vm *vp, SCM cont,
 static void vm_error (const char *msg, SCM arg) SCM_NORETURN;
 static void vm_error_bad_instruction (scm_t_uint32 inst) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_unbound (SCM sym) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_unbound_fluid (SCM fluid) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_a_variable (const char *func_name, SCM x) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_apply_to_non_list (SCM x) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_kwargs_length_not_even (SCM proc) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_kwargs_missing_value (SCM proc, SCM kw) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_kwargs_invalid_keyword (SCM proc, SCM obj) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_kwargs_unrecognized_keyword (SCM proc, SCM kw) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_too_many_args (int nargs) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_wrong_num_args (SCM proc) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_wrong_type_apply (SCM proc) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_stack_underflow (void) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_improper_list (SCM x) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_char (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_a_pair (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_mutable_pair (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_string (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_atomic_box (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_a_bytevector (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_mutable_bytevector (const char *subr, SCM v) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_a_struct (const char *subr, SCM x) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_a_vector (const char *subr, SCM v) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_out_of_range (const char *subr, SCM k) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_not_a_mutable_vector (const char *subr, SCM v) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_out_of_range_uint64 (const char *subr, scm_t_uint64 idx) SCM_NORETURN SCM_NOINLINE;
+static void vm_error_out_of_range_int64 (const char *subr, scm_t_int64 idx) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_no_values (void) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_not_enough_values (void) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_wrong_number_of_values (scm_t_uint32 expected) SCM_NORETURN SCM_NOINLINE;
 static void vm_error_continuation_not_rewindable (SCM cont) SCM_NORETURN SCM_NOINLINE;
-static void vm_error_bad_wide_string_length (size_t len) SCM_NORETURN SCM_NOINLINE;
 
 static void
 vm_error (const char *msg, SCM arg)
@@ -509,14 +468,6 @@ vm_error_unbound (SCM sym)
 }
 
 static void
-vm_error_unbound_fluid (SCM fluid)
-{
-  scm_error_scm (scm_misc_error_key, SCM_BOOL_F,
-                 scm_from_latin1_string ("Unbound fluid: ~s"),
-                 scm_list_1 (fluid), SCM_BOOL_F);
-}
-
-static void
 vm_error_not_a_variable (const char *func_name, SCM x)
 {
   scm_error (scm_arg_type_key, func_name, "Not a variable: ~S",
@@ -531,11 +482,11 @@ vm_error_apply_to_non_list (SCM x)
 }
 
 static void
-vm_error_kwargs_length_not_even (SCM proc)
+vm_error_kwargs_missing_value (SCM proc, SCM kw)
 {
   scm_error_scm (sym_keyword_argument_error, proc,
-                 scm_from_latin1_string ("Odd length of keyword argument list"),
-                 SCM_EOL, SCM_BOOL_F);
+                 scm_from_latin1_string ("Keyword argument has no value"),
+                 SCM_EOL, scm_list_1 (kw));
 }
 
 static void
@@ -555,12 +506,6 @@ vm_error_kwargs_unrecognized_keyword (SCM proc, SCM kw)
 }
 
 static void
-vm_error_too_many_args (int nargs)
-{
-  vm_error ("VM: Too many arguments", scm_from_int (nargs));
-}
-
-static void
 vm_error_wrong_num_args (SCM proc)
 {
   scm_wrong_num_args (proc);
@@ -574,15 +519,9 @@ vm_error_wrong_type_apply (SCM proc)
 }
 
 static void
-vm_error_stack_underflow (void)
+vm_error_not_a_char (const char *subr, SCM x)
 {
-  vm_error ("VM: Stack underflow", SCM_UNDEFINED);
-}
-
-static void
-vm_error_improper_list (SCM x)
-{
-  vm_error ("Expected a proper list, but got object with tail ~s", x);
+  scm_wrong_type_arg_msg (subr, 1, x, "char");
 }
 
 static void
@@ -592,9 +531,33 @@ vm_error_not_a_pair (const char *subr, SCM x)
 }
 
 static void
+vm_error_not_a_mutable_pair (const char *subr, SCM x)
+{
+  scm_wrong_type_arg_msg (subr, 1, x, "mutable pair");
+}
+
+static void
+vm_error_not_a_string (const char *subr, SCM x)
+{
+  scm_wrong_type_arg_msg (subr, 1, x, "string");
+}
+
+static void
+vm_error_not_a_atomic_box (const char *subr, SCM x)
+{
+  scm_wrong_type_arg_msg (subr, 1, x, "atomic box");
+}
+
+static void
 vm_error_not_a_bytevector (const char *subr, SCM x)
 {
   scm_wrong_type_arg_msg (subr, 1, x, "bytevector");
+}
+
+static void
+vm_error_not_a_mutable_bytevector (const char *subr, SCM x)
+{
+  scm_wrong_type_arg_msg (subr, 1, x, "mutable bytevector");
 }
 
 static void
@@ -610,10 +573,21 @@ vm_error_not_a_vector (const char *subr, SCM x)
 }
 
 static void
-vm_error_out_of_range (const char *subr, SCM k)
+vm_error_not_a_mutable_vector (const char *subr, SCM x)
 {
-  scm_to_size_t (k);
-  scm_out_of_range (subr, k);
+  scm_wrong_type_arg_msg (subr, 1, x, "mutable vector");
+}
+
+static void
+vm_error_out_of_range_uint64 (const char *subr, scm_t_uint64 idx)
+{
+  scm_out_of_range (subr, scm_from_uint64 (idx));
+}
+
+static void
+vm_error_out_of_range_int64 (const char *subr, scm_t_int64 idx)
+{
+  scm_out_of_range (subr, scm_from_int64 (idx));
 }
 
 static void
@@ -642,12 +616,6 @@ vm_error_continuation_not_rewindable (SCM cont)
   vm_error ("Unrewindable partial continuation", cont);
 }
 
-static void
-vm_error_bad_wide_string_length (size_t len)
-{
-  vm_error ("VM: Bad wide string length: ~S", scm_from_size_t (len));
-}
-
 
 
 
@@ -660,6 +628,10 @@ static SCM vm_builtin_call_with_current_continuation;
 
 static const scm_t_uint32 vm_boot_continuation_code[] = {
   SCM_PACK_OP_24 (halt, 0)
+};
+
+static const scm_t_uint32 vm_apply_non_program_code[] = {
+  SCM_PACK_OP_24 (apply_non_program, 0)
 };
 
 static const scm_t_uint32 vm_builtin_apply_code[] = {
@@ -681,9 +653,9 @@ static const scm_t_uint32 vm_builtin_abort_to_prompt_code[] = {
 static const scm_t_uint32 vm_builtin_call_with_values_code[] = {
   SCM_PACK_OP_24 (assert_nargs_ee, 3),
   SCM_PACK_OP_24 (alloc_frame, 7),
-  SCM_PACK_OP_12_12 (mov, 6, 1),
+  SCM_PACK_OP_12_12 (mov, 0, 5),
   SCM_PACK_OP_24 (call, 6), SCM_PACK_OP_ARG_8_24 (0, 1),
-  SCM_PACK_OP_12_12 (mov, 0, 2),
+  SCM_PACK_OP_24 (long_fmov, 0), SCM_PACK_OP_ARG_8_24 (0, 2),
   SCM_PACK_OP_24 (tail_call_shuffle, 7)
 };
 
@@ -692,6 +664,19 @@ static const scm_t_uint32 vm_builtin_call_with_current_continuation_code[] = {
   SCM_PACK_OP_24 (call_cc, 0)
 };
 
+static const scm_t_uint32 vm_handle_interrupt_code[] = {
+  SCM_PACK_OP_24 (alloc_frame, 3),
+  SCM_PACK_OP_12_12 (mov, 0, 2),
+  SCM_PACK_OP_24 (call, 2), SCM_PACK_OP_ARG_8_24 (0, 1),
+  SCM_PACK_OP_24 (return_from_interrupt, 0)
+};
+
+
+int
+scm_i_vm_is_boot_continuation_code (scm_t_uint32 *ip)
+{
+  return ip == vm_boot_continuation_code;
+}
 
 static SCM
 scm_vm_builtin_ref (unsigned idx)
@@ -789,20 +774,22 @@ typedef SCM (*scm_t_vm_engine) (scm_i_thread *current_thread, struct scm_vm *vp,
 static const scm_t_vm_engine vm_engines[SCM_VM_NUM_ENGINES] =
   { vm_regular_engine, vm_debug_engine };
 
-static SCM*
+static union scm_vm_stack_element*
 allocate_stack (size_t size)
-#define FUNC_NAME "make_vm"
 {
   void *ret;
 
-  if (size >= ((size_t) -1) / sizeof (SCM))
+  if (size >= ((size_t) -1) / sizeof (union scm_vm_stack_element))
     abort ();
 
-  size *= sizeof (SCM);
+  size *= sizeof (union scm_vm_stack_element);
 
 #if HAVE_SYS_MMAN_H
   ret = mmap (NULL, size, PROT_READ | PROT_WRITE,
               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (ret == NULL)
+    /* Shouldn't happen.  */
+    abort ();
   if (ret == MAP_FAILED)
     ret = NULL;
 #else
@@ -810,19 +797,15 @@ allocate_stack (size_t size)
 #endif
 
   if (!ret)
-    {
-      perror ("allocate_stack failed");
-      return NULL;
-    }
+    perror ("allocate_stack failed");
 
-  return (SCM *) ret;
+  return (union scm_vm_stack_element *) ret;
 }
-#undef FUNC_NAME
 
 static void
-free_stack (SCM *stack, size_t size)
+free_stack (union scm_vm_stack_element *stack, size_t size)
 {
-  size *= sizeof (SCM);
+  size *= sizeof (*stack);
 
 #if HAVE_SYS_MMAN_H
   munmap (stack, size);
@@ -831,36 +814,38 @@ free_stack (SCM *stack, size_t size)
 #endif
 }
 
-static SCM*
-expand_stack (SCM *old_stack, size_t old_size, size_t new_size)
+/* Ideally what we would like is an mremap or a realloc that grows at
+   the bottom, not the top.  Oh well; mmap and memcpy are fast enough,
+   considering that they run very infrequently.  */
+static union scm_vm_stack_element*
+expand_stack (union scm_vm_stack_element *old_bottom, size_t old_size,
+              size_t new_size)
 #define FUNC_NAME "expand_stack"
 {
-#if defined MREMAP_MAYMOVE
-  void *new_stack;
+  union scm_vm_stack_element *new_bottom;
+  size_t extension_size;
 
-  if (new_size >= ((size_t) -1) / sizeof (SCM))
+  if (new_size >= ((size_t) -1) / sizeof (union scm_vm_stack_element))
+    abort ();
+  if (new_size <= old_size)
     abort ();
 
-  old_size *= sizeof (SCM);
-  new_size *= sizeof (SCM);
+  extension_size = new_size - old_size;
 
-  new_stack = mremap (old_stack, old_size, new_size, MREMAP_MAYMOVE);
-  if (new_stack == MAP_FAILED)
+  if ((size_t)old_bottom < extension_size * sizeof (union scm_vm_stack_element))
+    abort ();
+
+  new_bottom = allocate_stack (new_size);
+
+  if (!new_bottom)
     return NULL;
 
-  return (SCM *) new_stack;
-#else
-  SCM *new_stack;
+  memcpy (new_bottom + extension_size,
+          old_bottom,
+          old_size * sizeof (union scm_vm_stack_element));
+  free_stack (old_bottom, old_size);
 
-  new_stack = allocate_stack (new_size);
-  if (!new_stack)
-    return NULL;
-
-  memcpy (new_stack, old_stack, old_size * sizeof (SCM));
-  free_stack (old_stack, old_size);
-
-  return new_stack;
-#endif
+  return new_bottom;
 }
 #undef FUNC_NAME
 
@@ -873,19 +858,21 @@ make_vm (void)
 
   vp = scm_gc_malloc (sizeof (struct scm_vm), "vm");
 
-  vp->stack_size = page_size / sizeof (SCM);
-  vp->stack_base = allocate_stack (vp->stack_size);
-  if (!vp->stack_base)
+  vp->stack_size = page_size / sizeof (union scm_vm_stack_element);
+  vp->stack_bottom = allocate_stack (vp->stack_size);
+  if (!vp->stack_bottom)
     /* As in expand_stack, we don't have any way to throw an exception
        if we can't allocate one measely page -- there's no stack to
        handle it.  For now, abort.  */
     abort ();
-  vp->stack_limit = vp->stack_base + vp->stack_size;
+  vp->stack_top = vp->stack_bottom + vp->stack_size;
+  vp->stack_limit = vp->stack_bottom;
   vp->overflow_handler_stack = SCM_EOL;
-  vp->ip    	  = NULL;
-  vp->sp    	  = vp->stack_base - 1;
-  vp->fp    	  = NULL;
-  vp->engine      = vm_default_engine;
+  vp->ip = NULL;
+  vp->sp = vp->stack_top;
+  vp->sp_min_since_gc = vp->sp;
+  vp->fp = vp->stack_top;
+  vp->engine = vm_default_engine;
   vp->trace_level = 0;
   for (i = 0; i < SCM_VM_NUM_HOOKS; i++)
     vp->hooks[i] = SCM_BOOL_F;
@@ -898,58 +885,58 @@ static void
 return_unused_stack_to_os (struct scm_vm *vp)
 {
 #if HAVE_SYS_MMAN_H
-  scm_t_uintptr start = (scm_t_uintptr) (vp->sp + 1);
-  scm_t_uintptr end = (scm_t_uintptr) vp->stack_limit;
+  scm_t_uintptr lo = (scm_t_uintptr) vp->stack_bottom;
+  scm_t_uintptr hi = (scm_t_uintptr) vp->sp;
   /* The second condition is needed to protect against wrap-around.  */
-  if (vp->sp_max_since_gc < vp->stack_limit && vp->sp < vp->sp_max_since_gc)
-    end = (scm_t_uintptr) (vp->sp_max_since_gc + 1);
+  if (vp->sp_min_since_gc >= vp->stack_bottom && vp->sp >= vp->sp_min_since_gc)
+    lo = (scm_t_uintptr) vp->sp_min_since_gc;
 
-  start = ((start - 1U) | (page_size - 1U)) + 1U; /* round up */
-  end = ((end - 1U) | (page_size - 1U)) + 1U; /* round up */
+  lo &= ~(page_size - 1U); /* round down */
+  hi &= ~(page_size - 1U); /* round down */
 
   /* Return these pages to the OS.  The next time they are paged in,
      they will be zeroed.  */
-  if (start < end)
+  if (lo < hi)
     {
       int ret = 0;
 
       do
-        ret = madvise ((void *) start, end - start, MADV_DONTNEED);
+        ret = madvise ((void *) lo, hi - lo, MADV_DONTNEED);
       while (ret && errno == -EAGAIN);
 
       if (ret)
         perror ("madvise failed");
     }
 
-  vp->sp_max_since_gc = vp->sp;
+  vp->sp_min_since_gc = vp->sp;
 #endif
 }
 
-#define DEAD_SLOT_MAP_CACHE_SIZE 32U
-struct dead_slot_map_cache_entry
+#define SLOT_MAP_CACHE_SIZE 32U
+struct slot_map_cache_entry
 {
   scm_t_uint32 *ip;
   const scm_t_uint8 *map;
 };
 
-struct dead_slot_map_cache
+struct slot_map_cache
 {
-  struct dead_slot_map_cache_entry entries[DEAD_SLOT_MAP_CACHE_SIZE];
+  struct slot_map_cache_entry entries[SLOT_MAP_CACHE_SIZE];
 };
 
 static const scm_t_uint8 *
-find_dead_slot_map (scm_t_uint32 *ip, struct dead_slot_map_cache *cache)
+find_slot_map (scm_t_uint32 *ip, struct slot_map_cache *cache)
 {
   /* The lower two bits should be zero.  FIXME: Use a better hash
      function; we don't expose scm_raw_hashq currently.  */
-  size_t slot = (((scm_t_uintptr) ip) >> 2) % DEAD_SLOT_MAP_CACHE_SIZE;
+  size_t slot = (((scm_t_uintptr) ip) >> 2) % SLOT_MAP_CACHE_SIZE;
   const scm_t_uint8 *map;
 
   if (cache->entries[slot].ip == ip)
     map = cache->entries[slot].map;
   else
     {
-      map = scm_find_dead_slot_map_unlocked (ip);
+      map = scm_find_slot_map_unlocked (ip);
       cache->entries[slot].ip = ip;
       cache->entries[slot].map = map;
     }
@@ -957,48 +944,63 @@ find_dead_slot_map (scm_t_uint32 *ip, struct dead_slot_map_cache *cache)
   return map;
 }
 
-/* Mark the VM stack region between its base and its current top.  */
+enum slot_desc
+  {
+    SLOT_DESC_DEAD = 0,
+    SLOT_DESC_LIVE_RAW = 1,
+    SLOT_DESC_LIVE_SCM = 2,
+    SLOT_DESC_UNUSED = 3
+  };
+
+/* Mark the active VM stack region.  */
 struct GC_ms_entry *
 scm_i_vm_mark_stack (struct scm_vm *vp, struct GC_ms_entry *mark_stack_ptr,
                      struct GC_ms_entry *mark_stack_limit)
 {
-  SCM *sp, *fp;
-  /* The first frame will be marked conservatively (without a dead
-     slot map).  This is because GC can happen at any point within the
-     hottest activation, due to multiple threads or per-instruction
-     hooks, and providing dead slot maps for all points in a program
-     would take a prohibitive amount of space.  */
-  const scm_t_uint8 *dead_slots = NULL;
-  scm_t_uintptr upper = (scm_t_uintptr) GC_greatest_plausible_heap_addr;
-  scm_t_uintptr lower = (scm_t_uintptr) GC_least_plausible_heap_addr;
-  struct dead_slot_map_cache cache;
+  union scm_vm_stack_element *sp, *fp;
+  /* The first frame will be marked conservatively (without a slot map).
+     This is because GC can happen at any point within the hottest
+     activation, due to multiple threads or per-instruction hooks, and
+     providing slot maps for all points in a program would take a
+     prohibitive amount of space.  */
+  const scm_t_uint8 *slot_map = NULL;
+  void *upper = (void *) GC_greatest_plausible_heap_addr;
+  void *lower = (void *) GC_least_plausible_heap_addr;
+  struct slot_map_cache cache;
 
   memset (&cache, 0, sizeof (cache));
 
-  for (fp = vp->fp, sp = vp->sp; fp; fp = SCM_FRAME_DYNAMIC_LINK (fp))
+  for (fp = vp->fp, sp = vp->sp;
+       fp < vp->stack_top;
+       fp = SCM_FRAME_DYNAMIC_LINK (fp))
     {
-      for (; sp >= &SCM_FRAME_LOCAL (fp, 0); sp--)
+      scm_t_ptrdiff nlocals = SCM_FRAME_NUM_LOCALS (fp, sp);
+      size_t slot = nlocals - 1;
+      for (slot = nlocals - 1; sp < fp; sp++, slot--)
         {
-          SCM elt = *sp;
-          if (SCM_NIMP (elt)
-              && SCM_UNPACK (elt) >= lower && SCM_UNPACK (elt) <= upper)
-            {
-              if (dead_slots)
-                {
-                  size_t slot = sp - &SCM_FRAME_LOCAL (fp, 0);
-                  if (dead_slots[slot / 8U] & (1U << (slot % 8U)))
-                    {
-                      /* This value may become dead as a result of GC,
-                         so we can't just leave it on the stack.  */
-                      *sp = SCM_UNSPECIFIED;
-                      continue;
-                    }
-                }
+          enum slot_desc desc = SLOT_DESC_LIVE_SCM;
 
-              mark_stack_ptr = GC_mark_and_push ((void *) elt,
-                                                 mark_stack_ptr,
-                                                 mark_stack_limit,
-                                                 NULL);
+          if (slot_map)
+            desc = (slot_map[slot / 4U] >> ((slot % 4U) * 2)) & 3U;
+
+          switch (desc)
+            {
+            case SLOT_DESC_LIVE_RAW:
+              break;
+            case SLOT_DESC_UNUSED:
+            case SLOT_DESC_LIVE_SCM:
+              if (SCM_NIMP (sp->as_scm) &&
+                  sp->as_ptr >= lower && sp->as_ptr <= upper)
+                mark_stack_ptr = GC_mark_and_push (sp->as_ptr,
+                                                   mark_stack_ptr,
+                                                   mark_stack_limit,
+                                                   NULL);
+              break;
+            case SLOT_DESC_DEAD:
+              /* This value may become dead as a result of GC,
+                 so we can't just leave it on the stack.  */
+              sp->as_scm = SCM_UNSPECIFIED;
+              break;
             }
         }
       sp = SCM_FRAME_PREVIOUS_SP (fp);
@@ -1006,7 +1008,7 @@ scm_i_vm_mark_stack (struct scm_vm *vp, struct GC_ms_entry *mark_stack_ptr,
          Note that there may be other reasons to not have a dead slots
          map, e.g. if all of the frame's slots below the callee frame
          are live.  */
-      dead_slots = find_dead_slot_map (SCM_FRAME_RETURN_ADDRESS (fp), &cache);
+      slot_map = find_slot_map (SCM_FRAME_RETURN_ADDRESS (fp), &cache);
     }
 
   return_unused_stack_to_os (vp);
@@ -1018,8 +1020,8 @@ scm_i_vm_mark_stack (struct scm_vm *vp, struct GC_ms_entry *mark_stack_ptr,
 void
 scm_i_vm_free_stack (struct scm_vm *vp)
 {
-  free_stack (vp->stack_base, vp->stack_size);
-  vp->stack_base = vp->stack_limit = NULL;
+  free_stack (vp->stack_bottom, vp->stack_size);
+  vp->stack_bottom = vp->stack_top = vp->stack_limit = NULL;
   vp->stack_size = 0;
 }
 
@@ -1027,7 +1029,7 @@ struct vm_expand_stack_data
 {
   struct scm_vm *vp;
   size_t stack_size;
-  SCM *new_sp;
+  union scm_vm_stack_element *new_sp;
 };
 
 static void *
@@ -1036,44 +1038,30 @@ vm_expand_stack_inner (void *data_ptr)
   struct vm_expand_stack_data *data = data_ptr;
 
   struct scm_vm *vp = data->vp;
-  SCM *old_stack, *new_stack;
+  union scm_vm_stack_element *old_top, *new_bottom;
   size_t new_size;
   scm_t_ptrdiff reloc;
 
+  old_top = vp->stack_top;
   new_size = vp->stack_size;
   while (new_size < data->stack_size)
     new_size *= 2;
-  old_stack = vp->stack_base;
 
-  new_stack = expand_stack (vp->stack_base, vp->stack_size, new_size);
-  if (!new_stack)
+  new_bottom = expand_stack (vp->stack_bottom, vp->stack_size, new_size);
+  if (!new_bottom)
     return NULL;
 
-  vp->stack_base = new_stack;
+  vp->stack_bottom = new_bottom;
   vp->stack_size = new_size;
-  vp->stack_limit = vp->stack_base + new_size;
-  reloc = vp->stack_base - old_stack;
+  vp->stack_top = vp->stack_bottom + new_size;
+  vp->stack_limit = vp->stack_bottom;
+  reloc = vp->stack_top - old_top;
 
-  if (reloc)
-    {
-      SCM *fp;
-      if (vp->fp)
-        vp->fp += reloc;
-      data->new_sp += reloc;
-      fp = vp->fp;
-      while (fp)
-        {
-          SCM *next_fp = SCM_FRAME_DYNAMIC_LINK (fp);
-          if (next_fp)
-            {
-              next_fp += reloc;
-              SCM_FRAME_SET_DYNAMIC_LINK (fp, next_fp);
-            }
-          fp = next_fp;
-        }
-    }
+  if (vp->fp)
+    vp->fp += reloc;
+  data->new_sp += reloc;
 
-  return new_stack;
+  return new_bottom;
 }
 
 static scm_t_ptrdiff
@@ -1095,9 +1083,9 @@ static void
 reset_stack_limit (struct scm_vm *vp)
 {
   if (should_handle_stack_overflow (vp, vp->stack_size))
-    vp->stack_limit = vp->stack_base + current_overflow_size (vp);
+    vp->stack_limit = vp->stack_top - current_overflow_size (vp);
   else
-    vp->stack_limit = vp->stack_base + vp->stack_size;
+    vp->stack_limit = vp->stack_bottom;
 }
 
 struct overflow_handler_data
@@ -1127,9 +1115,9 @@ unwind_overflow_handler (void *ptr)
 }
 
 static void
-vm_expand_stack (struct scm_vm *vp, SCM *new_sp)
+vm_expand_stack (struct scm_vm *vp, union scm_vm_stack_element *new_sp)
 {
-  scm_t_ptrdiff stack_size = new_sp + 1 - vp->stack_base;
+  scm_t_ptrdiff stack_size = vp->stack_top - new_sp;
 
   if (stack_size > vp->stack_size)
     {
@@ -1146,7 +1134,7 @@ vm_expand_stack (struct scm_vm *vp, SCM *new_sp)
       new_sp = data.new_sp;
     }
 
-  vp->sp_max_since_gc = vp->sp = new_sp;
+  vp->sp_min_since_gc = vp->sp = new_sp;
 
   if (should_handle_stack_overflow (vp, stack_size))
     {
@@ -1184,7 +1172,7 @@ vm_expand_stack (struct scm_vm *vp, SCM *new_sp)
 
       scm_dynwind_end ();
 
-      /* Recurse  */
+      /* Recurse.  */
       return vm_expand_stack (vp, new_sp);
     }
 }
@@ -1209,10 +1197,13 @@ scm_call_n (SCM proc, SCM *argv, size_t nargs)
 {
   scm_i_thread *thread;
   struct scm_vm *vp;
-  SCM *base;
-  ptrdiff_t base_frame_size;
-  /* Cached variables. */
-  scm_i_jmp_buf registers;              /* used for prompts */
+  union scm_vm_stack_element *return_fp, *call_fp;
+  /* Since nargs can only describe the length of a valid argv array in
+     elements and each element is at least 4 bytes, nargs will not be
+     greater than INTMAX/2 and therefore we don't have to check for
+     overflow here or below.  */
+  size_t return_nlocals = 1, call_nlocals = nargs + 1, frame_size = 2;
+  scm_t_ptrdiff stack_reserve_words;
   size_t i;
 
   thread = SCM_I_CURRENT_THREAD;
@@ -1220,34 +1211,41 @@ scm_call_n (SCM proc, SCM *argv, size_t nargs)
 
   SCM_CHECK_STACK;
 
-  /* Check that we have enough space: 3 words for the boot continuation,
-     and 3 + nargs for the procedure application.  */
-  base_frame_size = 3 + 3 + nargs;
-  vm_push_sp (vp, vp->sp + base_frame_size);
-  base = vp->sp + 1 - base_frame_size;
+  /* It's not valid for argv to point into the stack already.  */
+  if ((void *) argv < (void *) vp->stack_top &&
+      (void *) argv >= (void *) vp->sp)
+    abort();
 
-  /* Since it's possible to receive the arguments on the stack itself,
-     shuffle up the arguments first.  */
-  for (i = nargs; i > 0; i--)
-    base[6 + i - 1] = argv[i - 1];
+  /* Check that we have enough space for the two stack frames: the
+     innermost one that makes the call, and its continuation which
+     receives the resulting value(s) and returns from the engine
+     call.  */
+  stack_reserve_words = call_nlocals + frame_size + return_nlocals + frame_size;
+  vm_push_sp (vp, vp->sp - stack_reserve_words);
 
-  /* Push the boot continuation, which calls PROC and returns its
-     result(s).  */
-  base[0] = SCM_PACK (vp->fp); /* dynamic link */
-  base[1] = SCM_PACK (vp->ip); /* ra */
-  base[2] = vm_boot_continuation;
-  vp->fp = &base[2];
+  call_fp = vp->sp + call_nlocals;
+  return_fp = call_fp + frame_size + return_nlocals;
+
+  SCM_FRAME_SET_RETURN_ADDRESS (return_fp, vp->ip);
+  SCM_FRAME_SET_DYNAMIC_LINK (return_fp, vp->fp);
+  SCM_FRAME_LOCAL (return_fp, 0) = vm_boot_continuation;
+
   vp->ip = (scm_t_uint32 *) vm_boot_continuation_code;
+  vp->fp = call_fp;
 
-  /* The pending call to PROC. */
-  base[3] = SCM_PACK (vp->fp); /* dynamic link */
-  base[4] = SCM_PACK (vp->ip); /* ra */
-  base[5] = proc;
-  vp->fp = &base[5];
+  SCM_FRAME_SET_RETURN_ADDRESS (call_fp, vp->ip);
+  SCM_FRAME_SET_DYNAMIC_LINK (call_fp, return_fp);
+  SCM_FRAME_LOCAL (call_fp, 0) = proc;
+  for (i = 0; i < nargs; i++)
+    SCM_FRAME_LOCAL (call_fp, i + 1) = argv[i];
 
   {
-    int resume = SCM_I_SETJMP (registers);
-      
+    scm_i_jmp_buf registers;
+    int resume;
+    const void *prev_cookie = vp->resumable_prompt_cookie;
+    SCM ret;
+
+    resume = SCM_I_SETJMP (registers);
     if (SCM_UNLIKELY (resume))
       {
         scm_gc_after_nonlocal_exit ();
@@ -1255,7 +1253,11 @@ scm_call_n (SCM proc, SCM *argv, size_t nargs)
         vm_dispatch_abort_hook (vp);
       }
 
-    return vm_engines[vp->engine](thread, vp, &registers, resume);
+    vp->resumable_prompt_cookie = &registers;
+    ret = vm_engines[vp->engine](thread, vp, &registers, resume);
+    vp->resumable_prompt_cookie = prev_cookie;
+
+    return ret;
   }
 }
 
@@ -1449,7 +1451,7 @@ SCM_DEFINE (scm_call_with_stack_overflow_handler,
   SCM new_limit, ret;
 
   vp = scm_the_vm ();
-  stack_size = vp->sp - vp->stack_base;
+  stack_size = vp->stack_top - vp->sp;
 
   c_limit = scm_to_ptrdiff_t (limit);
   if (c_limit <= 0)
@@ -1474,7 +1476,7 @@ SCM_DEFINE (scm_call_with_stack_overflow_handler,
   scm_dynwind_unwind_handler (unwind_overflow_handler, &data,
                               SCM_F_WIND_EXPLICITLY);
 
-  /* Reset vp->sp_max_since_gc so that the VM checks actually
+  /* Reset vp->sp_min_since_gc so that the VM checks actually
      trigger.  */
   return_unused_stack_to_os (vp);
 

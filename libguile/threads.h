@@ -27,7 +27,6 @@
 #include "libguile/__scm.h"
 #include "libguile/procs.h"
 #include "libguile/throw.h"
-#include "libguile/root.h"
 #include "libguile/dynstack.h"
 #include "libguile/iselect.h"
 #include "libguile/continuations.h"
@@ -47,30 +46,26 @@ SCM_API scm_t_bits scm_tc16_thread;
 SCM_API scm_t_bits scm_tc16_mutex;
 SCM_API scm_t_bits scm_tc16_condvar;
 
+struct scm_thread_wake_data;
+
 typedef struct scm_i_thread {
   struct scm_i_thread *next_thread;
 
   SCM handle;
   scm_i_pthread_t pthread;
 
-  SCM cleanup_handler;
-  SCM join_queue;
-
-  scm_i_pthread_mutex_t admin_mutex;
-  SCM mutexes;
-  scm_i_pthread_mutex_t *held_mutex;
-
   SCM result;
-  int canceled;
   int exited;
 
   /* Boolean indicating whether the thread is in guile mode.  */
   int guile_mode;
+  /* Boolean indicating whether to call GC_unregister_my_thread () when
+     this thread exits.  */
+  int needs_unregister;
 
-  SCM sleep_object;
-  scm_i_pthread_mutex_t *sleep_mutex;
+  struct scm_thread_wake_data *wake;
   scm_i_pthread_cond_t sleep_cond;
-  int sleep_fd, sleep_pipe[2];
+  int sleep_pipe[2];
 
   /* Thread-local freelists; see gc-inline.h.  */
   void **freelists;
@@ -78,19 +73,17 @@ typedef struct scm_i_thread {
 
   /* Other thread local things.
    */
-  SCM dynamic_state;
+  scm_t_dynamic_state *dynamic_state;
 
   /* The dynamic stack.  */
   scm_t_dynstack dynstack;
 
   /* For system asyncs.
    */
-  SCM active_asyncs;            /* The thunks to be run at the next
-                                   safe point */
+  SCM pending_asyncs;            /* The thunks to be run at the next
+                                    safe point.  Accessed atomically. */
   unsigned int block_asyncs;    /* Non-zero means that asyncs should
                                    not be run. */
-  unsigned int pending_asyncs;  /* Non-zero means that asyncs might be pending.
-				 */
 
   /* The current continuation root and the stack base for it.
 
@@ -116,10 +109,6 @@ typedef struct scm_i_thread {
   void *register_backing_store_base;
   scm_t_contregs *pending_rbs_continuation;
 #endif
-
-  /* Whether this thread is in a critical section. */
-  int critical_section_level;
-
 } scm_i_thread;
 
 #define SCM_I_IS_THREAD(x)    SCM_SMOB_PREDICATE (scm_tc16_thread, x)
@@ -138,10 +127,8 @@ SCM_API SCM scm_spawn_thread (scm_t_catch_body body, void *body_data,
 SCM_API void *scm_without_guile (void *(*func)(void *), void *data);
 SCM_API void *scm_with_guile (void *(*func)(void *), void *data);
 
-SCM_INTERNAL void scm_i_reset_fluid (size_t);
 SCM_INTERNAL void scm_threads_prehistory (void *);
 SCM_INTERNAL void scm_init_threads (void);
-SCM_INTERNAL void scm_init_thread_procs (void);
 SCM_INTERNAL void scm_init_threads_default_dynamic_state (void);
 
 SCM_INTERNAL void scm_i_dynwind_pthread_mutex_lock_block_asyncs (scm_i_pthread_mutex_t *mutex);
@@ -149,21 +136,18 @@ SCM_INTERNAL void scm_i_dynwind_pthread_mutex_lock_block_asyncs (scm_i_pthread_m
 SCM_API SCM scm_call_with_new_thread (SCM thunk, SCM handler);
 SCM_API SCM scm_yield (void);
 SCM_API SCM scm_cancel_thread (SCM t);
-SCM_API SCM scm_set_thread_cleanup_x (SCM thread, SCM proc);
-SCM_API SCM scm_thread_cleanup (SCM thread);
 SCM_API SCM scm_join_thread (SCM t);
 SCM_API SCM scm_join_thread_timed (SCM t, SCM timeout, SCM timeoutval);
 SCM_API SCM scm_thread_p (SCM t);
 
 SCM_API SCM scm_make_mutex (void);
 SCM_API SCM scm_make_recursive_mutex (void);
-SCM_API SCM scm_make_mutex_with_flags (SCM flags);
+SCM_API SCM scm_make_mutex_with_kind (SCM kind);
 SCM_API SCM scm_lock_mutex (SCM m);
-SCM_API SCM scm_lock_mutex_timed (SCM m, SCM timeout, SCM owner);
+SCM_API SCM scm_timed_lock_mutex (SCM m, SCM timeout);
 SCM_API void scm_dynwind_lock_mutex (SCM mutex);
 SCM_API SCM scm_try_mutex (SCM m);
 SCM_API SCM scm_unlock_mutex (SCM m);
-SCM_API SCM scm_unlock_mutex_timed (SCM m, SCM cond, SCM timeout);
 SCM_API SCM scm_mutex_p (SCM o);
 SCM_API SCM scm_mutex_locked_p (SCM m);
 SCM_API SCM scm_mutex_owner (SCM m);
@@ -182,8 +166,6 @@ SCM_API SCM scm_all_threads (void);
 
 SCM_API int scm_c_thread_exited_p (SCM thread);
 SCM_API SCM scm_thread_exited_p (SCM thread);
-
-SCM_API void scm_dynwind_critical_section (SCM mutex);
 
 #ifdef BUILDING_LIBGUILE
 

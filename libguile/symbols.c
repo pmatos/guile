@@ -1,5 +1,5 @@
-/* Copyright (C) 1995, 1996, 1997, 1998, 2000, 2001, 2003, 2004,
- *   2006, 2009, 2011, 2013 Free Software Foundation, Inc.
+/* Copyright (C) 1995-1998, 2000, 2001, 2003, 2004, 2006, 2009, 2011,
+ *   2013, 2015 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -164,10 +164,10 @@ utf8_string_equals_wide_string (const scm_t_uint8 *narrow, size_t nlen,
       ucs4_t c;
       int nbytes;
 
-      nbytes = u8_mbtouc (&c, narrow + byte_idx, nlen - byte_idx);
+      nbytes = u8_mbtoucr (&c, narrow + byte_idx, nlen - byte_idx);
       if (nbytes == 0)
         break;
-      else if (c == 0xfffd)
+      else if (nbytes < 0)
         /* Bad UTF-8.  */
         return 0;
       else if (c != wide[char_idx])
@@ -449,7 +449,7 @@ SCM_DEFINE (scm_symbol_fset_x, "symbol-fset!", 2, 0, 0,
 #define FUNC_NAME s_scm_symbol_fset_x
 {
   SCM_VALIDATE_SYMBOL (1, s);
-  SCM_SETCAR (SCM_CELL_OBJECT_3 (s), val);
+  scm_set_car_x (SCM_CELL_OBJECT_3 (s), val);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -461,7 +461,7 @@ SCM_DEFINE (scm_symbol_pset_x, "symbol-pset!", 2, 0, 0,
 #define FUNC_NAME s_scm_symbol_pset_x
 {
   SCM_VALIDATE_SYMBOL (1, s);
-  SCM_SETCDR (SCM_CELL_OBJECT_3 (s), val);
+  scm_set_cdr_x (SCM_CELL_OBJECT_3 (s), val);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME

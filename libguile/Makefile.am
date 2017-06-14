@@ -1,7 +1,7 @@
 ## Process this file with Automake to create Makefile.in
 ##
 ##   Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2006, 2007,
-##     2008, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+##     2008, 2009, 2010, 2011, 2012, 2013, 2014, 2016 Free Software Foundation, Inc.
 ##
 ##   This file is part of GUILE.
 ##
@@ -120,11 +120,11 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_CFLAGS = $(GUILE_CFLAGS) $(AM_CFLAGS)
 
 libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 	alist.c					\
-	arbiters.c				\
 	array-handle.c				\
 	array-map.c				\
 	arrays.c				\
 	async.c					\
+	atomic.c				\
 	backtrace.c				\
 	boolean.c				\
 	bitvectors.c				\
@@ -143,6 +143,7 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 	evalext.c				\
 	expand.c				\
 	extensions.c				\
+	fdes-finalizers.c			\
 	feature.c				\
 	filesys.c				\
 	finalizers.c				\
@@ -191,7 +192,6 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 	random.c				\
 	rdelim.c				\
 	read.c					\
-	root.c					\
 	rw.c					\
 	scmsigs.c				\
 	script.c				\
@@ -212,6 +212,7 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 	strports.c				\
 	struct.c				\
 	symbols.c				\
+	syntax.c				\
 	threads.c				\
 	throw.c					\
 	trees.c					\
@@ -229,11 +230,11 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 
 DOT_X_FILES =					\
 	alist.x					\
-	arbiters.x				\
 	array-handle.x				\
 	array-map.x				\
 	arrays.x				\
 	async.x					\
+	atomic.x				\
 	backtrace.x				\
 	boolean.x				\
 	bitvectors.x				\
@@ -252,6 +253,7 @@ DOT_X_FILES =					\
 	evalext.x				\
 	expand.x				\
 	extensions.x				\
+	fdes-finalizers.x			\
 	feature.x				\
 	filesys.x				\
 	fluids.x				\
@@ -295,7 +297,6 @@ DOT_X_FILES =					\
 	random.x				\
 	rdelim.x				\
 	read.x					\
-	root.x					\
 	rw.x					\
 	scmsigs.x				\
 	script.x				\
@@ -316,6 +317,7 @@ DOT_X_FILES =					\
 	strports.x				\
 	struct.x				\
 	symbols.x				\
+	syntax.x				\
 	threads.x				\
 	throw.x					\
 	trees.x					\
@@ -335,11 +337,11 @@ EXTRA_DOT_X_FILES = @EXTRA_DOT_X_FILES@
 
 DOT_DOC_FILES = 				\
 	alist.doc				\
-	arbiters.doc				\
 	array-handle.doc			\
 	array-map.doc				\
 	arrays.doc				\
 	async.doc				\
+	atomic.doc				\
 	backtrace.doc				\
 	boolean.doc				\
 	bitvectors.doc				\
@@ -358,6 +360,7 @@ DOT_DOC_FILES = 				\
 	evalext.doc				\
 	expand.doc				\
 	extensions.doc				\
+	fdes-finalizers.doc			\
 	feature.doc				\
 	filesys.doc 				\
 	fluids.doc				\
@@ -397,7 +400,6 @@ DOT_DOC_FILES = 				\
 	random.doc				\
 	rdelim.doc				\
 	read.doc				\
-	root.doc				\
 	rw.doc					\
 	scmsigs.doc				\
 	script.doc				\
@@ -418,6 +420,7 @@ DOT_DOC_FILES = 				\
 	strports.doc				\
 	struct.doc				\
 	symbols.doc				\
+	syntax.doc				\
 	threads.doc				\
 	throw.doc				\
 	trees.doc				\
@@ -443,9 +446,9 @@ vm-operations.h: vm-engine.c
 	| sed -e 's,VM_DEFINE_OP (\(.*\)).*,  M (\1) \\,' >> $@
 	@echo '' >> $@
 
-BUILT_SOURCES = cpp-E.c cpp-SIG.c libpath.h \
-    scmconfig.h \
-    $(DOT_I_FILES) vm-operations.h $(DOT_X_FILES) $(EXTRA_DOT_X_FILES)
+BUILT_INCLUDES = vm-operations.h scmconfig.h
+BUILT_SOURCES = cpp-E.c cpp-SIG.c libpath.h $(BUILT_INCLUDES) \
+    $(DOT_X_FILES) $(EXTRA_DOT_X_FILES)
 
 # Force the generation of `guile-procedures.texi' because the top-level
 # Makefile expects it to be built.
@@ -455,8 +458,8 @@ EXTRA_libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES = _scm.h		\
     memmove.c strerror.c			\
     dynl.c regex-posix.c			\
     posix.c net_db.c socket.c			\
-    debug-malloc.c mkstemp.c			\
-    win32-uname.c				\
+    debug-malloc.c				\
+    posix-w32.c					\
     locale-categories.h
 
 ## delete guile-snarf.awk from the installation bindir, in case it's
@@ -504,8 +507,13 @@ noinst_HEADERS = conv-integer.i.c conv-uinteger.i.c		\
                  elf.h						\
                  srfi-14.i.c					\
                  quicksort.i.c                                  \
-                 win32-uname.h					\
-		 private-options.h ports-internal.h
+                 atomics-internal.h				\
+                 cache-internal.h				\
+                 posix-w32.h					\
+		 private-options.h 				\
+		 ports-internal.h 				\
+		 syntax.h 					\
+		 weak-list.h
 
 # vm instructions
 noinst_HEADERS += vm-engine.c
@@ -560,11 +568,11 @@ modincludedir = $(pkgincludedir)/$(GUILE_EFFECTIVE_VERSION)/libguile
 modinclude_HEADERS =				\
 	__scm.h					\
 	alist.h					\
-	arbiters.h				\
 	array-handle.h				\
 	array-map.h				\
 	arrays.h				\
 	async.h					\
+	atomic.h				\
 	backtrace.h				\
 	bdw-gc.h				\
 	boolean.h				\
@@ -586,6 +594,7 @@ modinclude_HEADERS =				\
 	evalext.h				\
 	expand.h				\
 	extensions.h				\
+	fdes-finalizers.h			\
 	feature.h				\
 	finalizers.h				\
 	filesys.h				\
@@ -639,7 +648,6 @@ modinclude_HEADERS =				\
 	rdelim.h				\
 	read.h					\
 	regex-posix.h				\
-	root.h					\
 	rw.h					\
 	scmsigs.h				\
 	script.h				\
@@ -694,7 +702,7 @@ EXTRA_DIST = ChangeLog-scm ChangeLog-threads				\
     cpp-E.syms cpp-E.c cpp-SIG.syms cpp-SIG.c				\
     c-tokenize.lex							\
     scmconfig.h.top libgettext.h unidata_to_charset.pl libguile.map	\
-    libguile-2.2-gdb.scm
+    vm-operations.h libguile-2.2-gdb.scm
 #    $(DOT_DOC_FILES) $(EXTRA_DOT_DOC_FILES) \
 #    guile-procedures.txt guile.texi
 
@@ -738,7 +746,8 @@ libpath.h: $(srcdir)/Makefile.in  $(top_builddir)/config.status
 		>> libpath.tmp
 	@echo '	{ "LIBS",	   "@GUILE_LIBS@" }, \' >> libpath.tmp
 	@echo '	{ "CFLAGS",	   "@GUILE_CFLAGS@" }, \' >> libpath.tmp
-	@echo '	{ "buildstamp",    "'`date -u +'%Y-%m-%d %T'`'" }, \' >> libpath.tmp
+	@BUILD_DATE="$${SOURCE_DATE_EPOCH:-`date '+%s'`}" ; \
+	 echo '	{ "buildstamp",    "'`date -u +'%Y-%m-%d %T' -d @$$BUILD_DATE`'" }, \' >> libpath.tmp
 	@echo '}' >> libpath.tmp
 	$(AM_V_GEN)mv libpath.tmp libpath.h
 
@@ -752,9 +761,9 @@ SUFFIXES = .x .doc
 .c.doc:
 	$(AM_V_SNARF)./guile-snarf-docs -o $@ $< -- $(snarfcppopts)
 
-$(DOT_X_FILES) $(EXTRA_DOT_X_FILES): scmconfig.h snarf.h guile-snarf.in version.h
+$(DOT_X_FILES) $(EXTRA_DOT_X_FILES): $(BUILT_INCLUDES) snarf.h guile-snarf.in version.h
 
-$(DOT_DOC_FILES) $(EXTRA_DOT_DOC_FILES): scmconfig.h snarf.h guile-snarf-docs.in guile_filter_doc_snarfage$(EXEEXT)
+$(DOT_DOC_FILES) $(EXTRA_DOT_DOC_FILES): $(BUILT_INCLUDES) snarf.h guile-snarf-docs.in guile_filter_doc_snarfage$(EXEEXT)
 
 error.x: cpp-E.c
 posix.x: cpp-SIG.c
@@ -762,7 +771,7 @@ load.x: libpath.h
 dynl.x: libpath.h
 
 alldotdocfiles    = $(DOT_DOC_FILES) $(EXTRA_DOT_DOC_FILES)
-snarf2checkedtexi = GUILE_AUTO_COMPILE=0 $(top_builddir)/meta/uninstalled-env guild snarf-check-and-output-texi
+snarf2checkedtexi = GUILE_AUTO_COMPILE=0 $(top_builddir)/meta/build-env guild snarf-check-and-output-texi
 dotdoc2texi       = cat $(alldotdocfiles) | $(snarf2checkedtexi)
 
 guile.texi: $(alldotdocfiles) guile$(EXEEXT)
@@ -815,13 +824,13 @@ MKDEP = gcc -M -MG $(DEFS) $(AM_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
 
 # Write $(srcdir)/cpp-{E,SIG}.syms.NEW if there are any not-yet-seen
 # ("new" to us) E* or SIG* symbols in <errno.h> or <signal.h>, respectively.
-chknew-E chknew-SIG:						\
+chknew-E chknew-SIG:
 	@bit=`echo $@ | sed s/^chknew-//` ;			\
 	old="$(srcdir)/cpp-$$bit.syms" ;			\
 	echo "#include <$${bit}.h>"				\
 	 | sed 's/E/errno/;s/SIG/signal/'			\
 	 | gcc -dM -E -						\
-	 | sed 's/^#define //;/^'$$bit'[A-Z][A-Z]*/!d;s/ .*//'	\
+	 | sed 's/^#define //;/^'$$bit'[0-9A-Z][0-9A-Z]* /!d;s/ .*//'	\
 	 | sort | diff -u $$old - | sed '1,2d;/^+/!d;s/^.//'	\
 	 > TMP ;						\
 	if [ -s TMP ] ; then new="$$old.NEW" ;			\

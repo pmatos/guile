@@ -2,7 +2,7 @@
 ;;;; Jim Blandy <jimb@red-bean.com> --- May 1999
 ;;;;
 ;;;; 	Copyright (C) 1999, 2001, 2004, 2006, 2007, 2009, 2010,
-;;;;      2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
+;;;;      2011, 2012, 2013, 2014, 2015, 2017 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -23,6 +23,7 @@
   #:use-module (test-suite guile-test)
   #:use-module (ice-9 popen)
   #:use-module (ice-9 rdelim)
+  #:use-module (ice-9 threads)
   #:use-module (rnrs bytevectors)
   #:use-module ((ice-9 binary-ports) #:select (open-bytevector-input-port
                                                open-bytevector-output-port
@@ -601,20 +602,18 @@
                           (pass-if "unread residue"
                                    (string=? (read-line) "moon"))))
 
-;;; non-blocking mode on a port.  create a pipe and set O_NONBLOCK on
-;;; the reading end.  try to read a byte: should get EAGAIN or
-;;; EWOULDBLOCK error.
-(let* ((p (pipe))
-       (r (car p)))
-  (fcntl r F_SETFL (logior (fcntl r F_GETFL) O_NONBLOCK))
-  (pass-if "non-blocking-I/O"
-           (catch 'system-error
-                  (lambda () (read-char r) #f)
-                  (lambda (key . args)
-                    (and (eq? key 'system-error)
-                         (let ((errno (car (list-ref args 3))))
-                           (or (= errno EAGAIN)
-                               (= errno EWOULDBLOCK))))))))
+(when (provided? 'threads)
+  (let* ((p (pipe))
+         (r (car p))
+         (w (cdr p)))
+    (fcntl r F_SETFL (logior (fcntl r F_GETFL) O_NONBLOCK))
+    (let ((thread (call-with-new-thread
+                   (lambda ()
+                     (usleep (* 250 1000))
+                     (write-char #\a w)
+                     (force-output w)))))
+      (pass-if-equal "non-blocking-I/O" #\a (read-char r))
+      (join-thread thread))))
 
 
 ;;;; Pipe (popen) ports.
@@ -637,8 +636,10 @@
              (equal? in-string "Mommy, why does everybody have a bomb?\n")))
   (delete-file filename))
 
-(pass-if-equal "pipe, fdopen, and _IOLBF"
+(pass-if-equal "pipe, fdopen, and line buffering"
     "foo\nbar\n"
+  (unless (provided? 'fork)
+          (throw 'unresolved))
   (let ((in+out (pipe))
         (pid    (primitive-fork)))
     (if (zero? pid)
@@ -647,7 +648,7 @@
           (lambda ()
             (close-port (car in+out))
             (let ((port (cdr in+out)))
-              (setvbuf port _IOLBF )
+              (setvbuf port 'line )
               ;; Strings containing '\n' or should be flushed; others
               ;; should be kept in PORT's buffer.
               (display "foo\n" port)
@@ -736,6 +737,45 @@
     (pass-if "output check"
              (string=? text result)))
 
+  (pass-if-exception "truncating input string fails"
+      exception:wrong-type-arg
+    (call-with-input-string "hej"
+      (lambda (p)
+        (truncate-file p 0))))
+
+  (pass-if-equal "truncating output string" "hej"
+    (call-with-output-string
+      (lambda (p)
+        (truncate-file p 0)
+        (display "hej" p))))
+
+  (pass-if-exception "truncating output string before position"
+      exception:out-of-range
+    (call-with-output-string
+      (lambda (p)
+        (display "hej" p)
+        (truncate-file p 0))))
+
+  (pass-if-equal "truncating output string at position" "hej"
+    (call-with-output-string
+      (lambda (p)
+        (display "hej" p)
+        (truncate-file p 3))))
+
+  (pass-if-equal "truncating output string after seek" ""
+    (call-with-output-string
+      (lambda (p)
+        (display "hej" p)
+        (seek p 0 SEEK_SET)
+        (truncate-file p 0))))
+
+  (pass-if-equal "truncating output string after seek to end" "hej"
+    (call-with-output-string
+      (lambda (p)
+        (display "hej" p)
+        (seek p 0 SEEK_SET)
+        (truncate-file p 3))))
+
   (pass-if "%default-port-encoding is ignored"
     (let ((str "ĉu bone?"))
       ;; Latin-1 cannot represent ‘ĉ’.
@@ -822,21 +862,32 @@
   ;; Mini DSL to test decoding error handling.
   (letrec-syntax ((decoding-error?
                    (syntax-rules ()
-                     ((_ port exp)
+                     ((_ port proc)
                       (catch 'decoding-error
                         (lambda ()
-                          (pk 'exp exp)
+                          (pk 'proc (proc port))
                           #f)
                         (lambda (key subr message errno p)
+                          (define (skip-over-error)
+                            (let ((strategy (port-conversion-strategy p)))
+                              (set-port-conversion-strategy! p 'substitute)
+                              ;; If `proc' is `read-char', this will
+                              ;; skip over the bad bytes.
+                              (let ((c (proc p)))
+                                (unless (eqv? c #\xFFFD)
+                                  (error "unexpected char" c))
+                                (set-port-conversion-strategy! p strategy)
+                                #t)))
                           (and (eq? p port)
-                               (not (= 0 errno))))))))
+                               (not (= 0 errno))
+                               (skip-over-error)))))))
                   (make-check
                    (syntax-rules (-> error eof)
                      ((_ port (proc -> error))
                       (if (eq? 'substitute
                                (port-conversion-strategy port))
-                          (eqv? (proc port) #\?)
-                          (decoding-error? port (proc port))))
+                          (eqv? (proc port) #\xFFFD)
+                          (decoding-error? port proc)))
                      ((_ port (proc -> eof))
                       (eof-object? (proc port)))
                      ((_ port (proc -> char))
@@ -1519,13 +1570,13 @@
       exception:wrong-type-arg
     (let ((port (open-input-file "/dev/null")))
       (close-port port)
-      (setvbuf port _IOFBF)))
+      (setvbuf port 'block)))
 
   (pass-if-exception "string port"
       exception:wrong-type-arg
     (let ((port (open-input-string "Hey!")))
       (close-port port)
-      (setvbuf port _IOFBF)))
+      (setvbuf port 'block)))
 
   (pass-if "line/column number preserved"
     ;; In Guile 2.0.5, `setvbuf' would erroneously decrease the port's
@@ -1540,7 +1591,7 @@
                    (col  (port-column p)))
                (and (= line 0) (= col 1)
                     (begin
-                      (setvbuf p _IOFBF 777)
+                      (setvbuf p 'block 777)
                       (let ((line* (port-line p))
                             (col*  (port-column p)))
                         (and (= line line*)
@@ -1855,14 +1906,15 @@
       (with-fluids ((%file-port-name-canonicalization 'relative))
         (port-filename (open-input-file "/dev/null")))))
 
+  (pass-if-equal "relative canonicalization with /dev/.." "dev/null"
+    (with-load-path (cons "/dev/.." %load-path)
+      (with-fluids ((%file-port-name-canonicalization 'relative))
+        (port-filename (open-input-file "/dev/null")))))
+
   (pass-if-equal "relative canonicalization from ice-9" "ice-9/q.scm"
-    ;; If an entry in %LOAD-PATH is not canonical, then
-    ;; `scm_i_relativize_path' is unable to do its job.
-    (if (equal? (map canonicalize-path %load-path) %load-path)
-        (with-fluids ((%file-port-name-canonicalization 'relative))
-          (port-filename
-           (open-input-file (%search-load-path "ice-9/q.scm"))))
-        (throw 'unresolved)))
+    (with-fluids ((%file-port-name-canonicalization 'relative))
+      (port-filename
+       (open-input-file (%search-load-path "ice-9/q.scm")))))
 
   (pass-if-equal "absolute canonicalization from ice-9"
       (canonicalize-path

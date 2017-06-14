@@ -1,4 +1,4 @@
-/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -37,15 +37,17 @@ enum {
 
 struct scm_vm {
   scm_t_uint32 *ip;		/* instruction pointer */
-  SCM *sp;			/* stack pointer */
-  SCM *fp;			/* frame pointer */
-  SCM *stack_limit;		/* stack limit address */
+  union scm_vm_stack_element *sp; /* stack pointer */
+  union scm_vm_stack_element *fp; /* frame pointer */
+  union scm_vm_stack_element *stack_limit; /* stack limit address */
   int trace_level;              /* traces enabled if trace_level > 0 */
-  SCM *sp_max_since_gc;         /* highest sp since last gc */
+  union scm_vm_stack_element *sp_min_since_gc; /* deepest sp since last gc */
   size_t stack_size;		/* stack size */
-  SCM *stack_base;		/* stack base address */
+  union scm_vm_stack_element *stack_bottom; /* lowest address in allocated stack */
+  union scm_vm_stack_element *stack_top; /* highest address in allocated stack */
   SCM overflow_handler_stack;   /* alist of max-stack-size -> thunk */
   SCM hooks[SCM_VM_NUM_HOOKS];	/* hooks */
+  const void *resumable_prompt_cookie; /* opaque cookie */
   int engine;                   /* which vm engine we're using */
 };
 
@@ -78,13 +80,19 @@ SCM_INTERNAL void scm_i_vm_free_stack (struct scm_vm *vp);
 #define SCM_F_VM_CONT_REWINDABLE 0x2
 
 struct scm_vm_cont {
-  SCM *sp;
-  SCM *fp;
+  /* IP of newest frame.  */
   scm_t_uint32 *ra;
+  /* Offset of FP of newest frame, relative to stack top.  */
+  scm_t_ptrdiff fp_offset;
+  /* Besides being the stack size, this is also the offset of the SP of
+     the newest frame.  */
   scm_t_ptrdiff stack_size;
-  SCM *stack_base;
-  scm_t_ptrdiff reloc;
+  /* Stack bottom, which also keeps saved stack alive for GC.  */
+  union scm_vm_stack_element *stack_bottom;
+  /* Saved dynamic stack, with prompts relocated to record saved SP/FP
+     offsets from the stack top of this scm_vm_cont.  */
   scm_t_dynstack *dynstack;
+  /* See the continuation is partial and/or rewindable.  */
   scm_t_uint32 flags;
 };
 
@@ -97,13 +105,16 @@ SCM_API SCM scm_load_compiled_with_vm (SCM file);
 
 SCM_INTERNAL SCM scm_i_call_with_current_continuation (SCM proc);
 SCM_INTERNAL SCM scm_i_capture_current_stack (void);
-SCM_INTERNAL SCM scm_i_vm_capture_stack (SCM *stack_base, SCM *fp, SCM *sp,
+SCM_INTERNAL SCM scm_i_vm_capture_stack (union scm_vm_stack_element *stack_top,
+                                         union scm_vm_stack_element *fp,
+                                         union scm_vm_stack_element *sp,
                                          scm_t_uint32 *ra,
                                          scm_t_dynstack *dynstack,
                                          scm_t_uint32 flags);
 SCM_INTERNAL int scm_i_vm_cont_to_frame (SCM cont, struct scm_frame *frame);
 SCM_INTERNAL void scm_i_vm_cont_print (SCM x, SCM port,
                                        scm_print_state *pstate);
+SCM_INTERNAL int scm_i_vm_is_boot_continuation_code (scm_t_uint32 *ip);
 SCM_INTERNAL void scm_bootstrap_vm (void);
 SCM_INTERNAL void scm_init_vm (void);
 

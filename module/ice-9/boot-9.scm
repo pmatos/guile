@@ -1,6 +1,6 @@
 ;;; -*- mode: scheme; coding: utf-8; -*-
 
-;;;; Copyright (C) 1995-2014  Free Software Foundation, Inc.
+;;;; Copyright (C) 1995-2014, 2016  Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -38,6 +38,11 @@
 
 (eval-when (compile)
   (set-current-module (resolve-module '(guile))))
+
+;; Prevent this file being loaded more than once in a session.  Just
+;; doesn't make sense!
+(if (current-module)
+    (error "re-loading ice-9/boot-9.scm not allowed"))
 
 
 
@@ -149,53 +154,27 @@ a-cont
       ((@@ primitive pop-fluid))
       (apply values vals))))
 
-
-
-;;; {Low-Level Port Code}
-;;;
-
-;; These are used to request the proper mode to open files in.
-;;
-(define OPEN_READ "r")
-(define OPEN_WRITE "w")
-(define OPEN_BOTH "r+")
-
-(define *null-device* "/dev/null")
-
-;; NOTE: Later in this file, this is redefined to support keywords
-(define (open-input-file str)
-  "Takes a string naming an existing file and returns an input port
-capable of delivering characters from the file.  If the file
-cannot be opened, an error is signalled."
-  (open-file str OPEN_READ))
-
-;; NOTE: Later in this file, this is redefined to support keywords
-(define (open-output-file str)
-  "Takes a string naming an output file to be created and returns an
-output port capable of writing characters to a new file by that
-name.  If the file cannot be opened, an error is signalled.  If a
-file with the given name already exists, the effect is unspecified."
-  (open-file str OPEN_WRITE))
-
-(define (open-io-file str) 
-  "Open file with name STR for both input and output."
-  (open-file str OPEN_BOTH))
+(define (with-dynamic-state state thunk)
+  "Call @var{proc} while @var{state} is the current dynamic state object.
+@var{thunk} must be a procedure of no arguments."
+  ((@@ primitive push-dynamic-state) state)
+  (call-with-values thunk
+    (lambda vals
+      ((@@ primitive pop-dynamic-state))
+      (apply values vals))))
 
 
 
 ;;; {Simple Debugging Tools}
 ;;;
 
-;; peek takes any number of arguments, writes them to the
-;; current ouput port, and returns the last argument.
-;; It is handy to wrap around an expression to look at
-;; a value each time is evaluated, e.g.:
-;;
-;;      (+ 10 (troublesome-fn))
-;;      => (+ 10 (pk 'troublesome-fn-returned (troublesome-fn)))
-;;
-
 (define (peek . stuff)
+  "Write arguments to the current output port, and return the last argument.
+
+This is handy for tracing function calls, e.g.:
+
+(+ 10 (troublesome-fn))
+=> (+ 10 (pk 'troublesome-fn-returned (troublesome-fn)))"
   (newline)
   (display ";;; ")
   (write stuff)
@@ -220,11 +199,11 @@ file with the given name already exists, the effect is unspecified."
   (if (not (memq sym *features*))
       (set! *features* (cons sym *features*))))
 
-;; Return #t iff FEATURE is available to this Guile interpreter.  In SLIB,
-;; provided? also checks to see if the module is available.  We should do that
-;; too, but don't.
+;; In SLIB, provided? also checks to see if the module is available.  We
+;; should do that too, but don't.
 
 (define (provided? feature)
+  "Return #t iff FEATURE is available to this Guile interpreter."
   (and (memq feature *features*) #t))
 
 
@@ -315,11 +294,13 @@ file with the given name already exists, the effect is unspecified."
              (for-eachn (cdr l1) (map cdr rest))))))))
 
 
-;; Temporary definition used in the include-from-path expansion;
-;; replaced later.
+;; Temporary definitions used by `include'; replaced later.
 
-(define (absolute-file-name? file-name)
-  #t)
+(define (absolute-file-name? file-name) #t)
+(define (open-input-file str) (open-file str "r"))
+
+;; Temporary definition; replaced by a parameter later.
+(define (allow-legacy-syntax-objects?) #f)
 
 ;;; {and-map and or-map}
 ;;;
@@ -327,13 +308,10 @@ file with the given name already exists, the effect is unspecified."
 ;;; (or-map fn lst) is like (or (fn (car lst)) (fn (cadr lst)) (fn...) ...)
 ;;;
 
-;; and-map f l
-;;
-;; Apply f to successive elements of l until exhaustion or f returns #f.
-;; If returning early, return #f.  Otherwise, return the last value returned
-;; by f.  If f has never been called because l is empty, return #t.
-;;
 (define (and-map f lst)
+  "Apply F to successive elements of LST until exhaustion or F returns #f.
+If returning early, return #f.  Otherwise, return the last value returned
+by F.  If F has never been called because LST is empty, return #t."
   (let loop ((result #t)
              (l lst))
     (and result
@@ -341,12 +319,9 @@ file with the given name already exists, the effect is unspecified."
                   result)
              (loop (f (car l)) (cdr l))))))
 
-;; or-map f l
-;;
-;; Apply f to successive elements of l until exhaustion or while f returns #f.
-;; If returning early, return the return value of f.
-;;
 (define (or-map f lst)
+  "Apply F to successive elements of LST until exhaustion or while F returns #f.
+If returning early, return the return value of F."
   (let loop ((result #f)
              (l lst))
     (or result
@@ -381,9 +356,8 @@ file with the given name already exists, the effect is unspecified."
              (char_pred (string-ref s (1- end))))
         (string-every-c-code char_pred s start end))))
 
-;; A variant of string-fill! that we keep for compatability
-;;
 (define (substring-fill! str start end fill)
+  "A variant of string-fill! that we keep for compatibility."
   (string-fill! str fill start end))
 
 
@@ -402,6 +376,13 @@ file with the given name already exists, the effect is unspecified."
 (define (module-ref module sym)
   (let ((v (module-variable module sym)))
     (if v (variable-ref v) (error "badness!" (pk module) (pk sym)))))
+(define module-generate-unique-id!
+  (let ((next-id 0))
+    (lambda (m)
+      (let ((i next-id))
+        (set! next-id (+ i 1))
+        i))))
+(define module-gensym gensym)
 (define (resolve-module . args)
   #f)
 
@@ -739,48 +720,59 @@ information is unavailable."
 (define with-throw-handler #f)
 (let ((%eh (module-ref (current-module) '%exception-handler)))
   (define (make-exception-handler catch-key prompt-tag pre-unwind)
-    (vector (fluid-ref %eh) catch-key prompt-tag pre-unwind))
-  (define (exception-handler-prev handler) (vector-ref handler 0))
-  (define (exception-handler-catch-key handler) (vector-ref handler 1))
-  (define (exception-handler-prompt-tag handler) (vector-ref handler 2))
-  (define (exception-handler-pre-unwind handler) (vector-ref handler 3))
+    (vector catch-key prompt-tag pre-unwind))
+  (define (exception-handler-catch-key handler) (vector-ref handler 0))
+  (define (exception-handler-prompt-tag handler) (vector-ref handler 1))
+  (define (exception-handler-pre-unwind handler) (vector-ref handler 2))
 
-  (define %running-pre-unwind (make-fluid '()))
+  (define %running-pre-unwind (make-fluid #f))
+  (define (pre-unwind-handler-running? handler)
+    (let lp ((depth 0))
+      (let ((running (fluid-ref* %running-pre-unwind depth)))
+        (and running
+             (or (eq? running handler) (lp (1+ depth)))))))
 
-  (define (dispatch-exception handler key args)
-    (unless handler
-      (when (eq? key 'quit)
-        (primitive-exit (cond
-                         ((not (pair? args)) 0)
-                         ((integer? (car args)) (car args))
-                         ((not (car args)) 1)
-                         (else 0))))
-      (format (current-error-port) "guile: uncaught throw to ~a: ~a\n" key args)
-      (primitive-exit 1))
-
-    (let ((catch-key (exception-handler-catch-key handler))
-          (prev (exception-handler-prev handler)))
-      (if (or (eqv? catch-key #t) (eq? catch-key key))
-          (let ((prompt-tag (exception-handler-prompt-tag handler))
-                (pre-unwind (exception-handler-pre-unwind handler)))
-            (if pre-unwind
-                ;; Instead of using a "running" set, it would be a lot
-                ;; cleaner semantically to roll back the exception
-                ;; handler binding to the one that was in place when the
-                ;; pre-unwind handler was installed, and keep it like
-                ;; that for the rest of the dispatch.  Unfortunately
-                ;; that is incompatible with existing semantics.  We'll
-                ;; see if we can change that later on.
-                (let ((running (fluid-ref %running-pre-unwind)))
-                  (with-fluid* %running-pre-unwind (cons handler running)
-                    (lambda ()
-                      (unless (memq handler running)
-                        (apply pre-unwind key args))
-                      (if prompt-tag
-                          (apply abort-to-prompt prompt-tag key args)
-                          (dispatch-exception prev key args)))))
-                (apply abort-to-prompt prompt-tag key args)))
-          (dispatch-exception prev key args))))
+  (define (dispatch-exception depth key args)
+    (cond
+     ((fluid-ref* %eh depth)
+      => (lambda (handler)
+           (let ((catch-key (exception-handler-catch-key handler)))
+             (if (or (eqv? catch-key #t) (eq? catch-key key))
+                 (let ((prompt-tag (exception-handler-prompt-tag handler))
+                       (pre-unwind (exception-handler-pre-unwind handler)))
+                   (cond
+                    ((and pre-unwind
+                          (not (pre-unwind-handler-running? handler)))
+                     ;; Prevent errors from within the pre-unwind
+                     ;; handler's invocation from being handled by this
+                     ;; handler.
+                     (with-fluid* %running-pre-unwind handler
+                       (lambda ()
+                         ;; FIXME: Currently the "running" flag only
+                         ;; applies to the pre-unwind handler; the
+                         ;; post-unwind handler is still called if the
+                         ;; error is explicitly rethrown.  Instead it
+                         ;; would be better to cause a recursive throw to
+                         ;; skip all parts of this handler.  Unfortunately
+                         ;; that is incompatible with existing semantics.
+                         ;; We'll see if we can change that later on.
+                         (apply pre-unwind key args)
+                         (dispatch-exception depth key args))))
+                    (prompt-tag
+                     (apply abort-to-prompt prompt-tag key args))
+                    (else
+                     (dispatch-exception (1+ depth) key args))))
+                 (dispatch-exception (1+ depth) key args)))))
+     ((eq? key 'quit)
+      (primitive-exit (cond
+                       ((not (pair? args)) 0)
+                       ((integer? (car args)) (car args))
+                       ((not (car args)) 1)
+                       (else 0))))
+     (else
+      (format (current-error-port) "guile: uncaught throw to ~a: ~a\n"
+              key args)
+      (primitive-exit 1))))
 
   (define (throw key . args)
     "Invoke the catch form matching @var{key}, passing @var{args} to the
@@ -792,7 +784,7 @@ If there is no handler at all, Guile prints an error and then exits."
     (unless (symbol? key)
       (throw 'wrong-type-arg "throw" "Wrong type argument in position ~a: ~a"
              (list 1 key) (list key)))
-    (dispatch-exception (fluid-ref %eh) key args))
+    (dispatch-exception 0 key args))
 
   (define* (catch k thunk handler #:optional pre-unwind-handler)
     "Invoke @var{thunk} in the dynamic context of @var{handler} for
@@ -893,12 +885,14 @@ for key @var{k}, then invoke @var{thunk}."
           (define (default-printer)
             (format port "Throw to key `~a' with args `~s'." key args))
 
-          (if frame
-              (let ((proc (frame-procedure frame)))
-                (print-location frame port)
-                (format port "In procedure ~a:\n"
-                        (or (false-if-exception (procedure-name proc))
-                            proc))))
+          (when frame
+            (print-location frame port)
+            ;; When booting, false-if-exception isn't defined yet.
+            (let ((name (catch #t
+                          (lambda () (frame-procedure-name frame))
+                          (lambda _ #f))))
+              (when name
+                (format port "In procedure ~a:\n" name))))
 
           (print-location frame port)
           (catch #t
@@ -1193,11 +1187,6 @@ VALUE."
 ;;
 ;; It should print OBJECT to PORT.
 
-(define (inherit-print-state old-port new-port)
-  (if (get-print-state old-port)
-      (port-with-print-state new-port (get-print-state old-port))
-      new-port))
-
 ;; 0: type-name, 1: fields, 2: constructor
 (define record-type-vtable
   (let ((s (make-vtable (string-append standard-vtable-fields "prprpw")
@@ -1437,33 +1426,14 @@ CONV is not applied to the initial value."
 
 
 ;;; Once parameters have booted, define the default prompt tag as being
-;;; a parameter.
+;;; a parameter, and make allow-legacy-syntax-objects? a parameter.
 ;;;
 
 (set! default-prompt-tag (make-parameter (default-prompt-tag)))
 
-
-
-;;; Current ports as parameters.
-;;;
-
-(let ()
-  (define-syntax-rule (port-parameterize! binding fluid predicate msg)
-    (begin
-      (set! binding (fluid->parameter (module-ref (current-module) 'fluid)
-                                      (lambda (x)
-                                        (if (predicate x) x
-                                            (error msg x)))))
-      (hashq-remove! (%get-pre-modules-obarray) 'fluid)))
-  
-  (port-parameterize! current-input-port %current-input-port-fluid
-                      input-port? "expected an input port")
-  (port-parameterize! current-output-port %current-output-port-fluid
-                      output-port? "expected an output port")
-  (port-parameterize! current-error-port %current-error-port-fluid
-                      output-port? "expected an output port")
-  (port-parameterize! current-warning-port %current-warning-port-fluid
-                      output-port? "expected an output port"))
+;; Because code compiled with Guile 2.2.0 embeds legacy syntax objects
+;; into its compiled macros, we have to default to true, sadly.
+(set! allow-legacy-syntax-objects? (make-parameter #t))
 
 
 
@@ -1481,140 +1451,6 @@ CONV is not applied to the initial value."
 ;;; {High-Level Port Routines}
 ;;;
 
-(define* (open-input-file
-          file #:key (binary #f) (encoding #f) (guess-encoding #f))
-  "Takes a string naming an existing file and returns an input port
-capable of delivering characters from the file.  If the file
-cannot be opened, an error is signalled."
-  (open-file file (if binary "rb" "r")
-             #:encoding encoding
-             #:guess-encoding guess-encoding))
-
-(define* (open-output-file file #:key (binary #f) (encoding #f))
-  "Takes a string naming an output file to be created and returns an
-output port capable of writing characters to a new file by that
-name.  If the file cannot be opened, an error is signalled.  If a
-file with the given name already exists, the effect is unspecified."
-  (open-file file (if binary "wb" "w")
-             #:encoding encoding))
-
-(define* (call-with-input-file
-          file proc #:key (binary #f) (encoding #f) (guess-encoding #f))
-  "PROC should be a procedure of one argument, and FILE should be a
-string naming a file.  The file must
-already exist. These procedures call PROC
-with one argument: the port obtained by opening the named file for
-input or output.  If the file cannot be opened, an error is
-signalled.  If the procedure returns, then the port is closed
-automatically and the values yielded by the procedure are returned.
-If the procedure does not return, then the port will not be closed
-automatically unless it is possible to prove that the port will
-never again be used for a read or write operation."
-  (let ((p (open-input-file file
-                            #:binary binary
-                            #:encoding encoding
-                            #:guess-encoding guess-encoding)))
-    (call-with-values
-      (lambda () (proc p))
-      (lambda vals
-        (close-input-port p)
-        (apply values vals)))))
-
-(define* (call-with-output-file file proc #:key (binary #f) (encoding #f))
-  "PROC should be a procedure of one argument, and FILE should be a
-string naming a file.  The behaviour is unspecified if the file
-already exists. These procedures call PROC
-with one argument: the port obtained by opening the named file for
-input or output.  If the file cannot be opened, an error is
-signalled.  If the procedure returns, then the port is closed
-automatically and the values yielded by the procedure are returned.
-If the procedure does not return, then the port will not be closed
-automatically unless it is possible to prove that the port will
-never again be used for a read or write operation."
-  (let ((p (open-output-file file #:binary binary #:encoding encoding)))
-    (call-with-values
-      (lambda () (proc p))
-      (lambda vals
-        (close-output-port p)
-        (apply values vals)))))
-
-(define (with-input-from-port port thunk)
-  (parameterize ((current-input-port port))
-    (thunk)))
-
-(define (with-output-to-port port thunk)
-  (parameterize ((current-output-port port))
-    (thunk)))
-
-(define (with-error-to-port port thunk)
-  (parameterize ((current-error-port port))
-    (thunk)))
-
-(define* (with-input-from-file
-          file thunk #:key (binary #f) (encoding #f) (guess-encoding #f))
-  "THUNK must be a procedure of no arguments, and FILE must be a
-string naming a file.  The file must already exist. The file is opened for
-input, an input port connected to it is made
-the default value returned by `current-input-port',
-and the THUNK is called with no arguments.
-When the THUNK returns, the port is closed and the previous
-default is restored.  Returns the values yielded by THUNK.  If an
-escape procedure is used to escape from the continuation of these
-procedures, their behavior is implementation dependent."
-  (call-with-input-file file
-   (lambda (p) (with-input-from-port p thunk))
-   #:binary binary
-   #:encoding encoding
-   #:guess-encoding guess-encoding))
-
-(define* (with-output-to-file file thunk #:key (binary #f) (encoding #f))
-  "THUNK must be a procedure of no arguments, and FILE must be a
-string naming a file.  The effect is unspecified if the file already exists.
-The file is opened for output, an output port connected to it is made
-the default value returned by `current-output-port',
-and the THUNK is called with no arguments.
-When the THUNK returns, the port is closed and the previous
-default is restored.  Returns the values yielded by THUNK.  If an
-escape procedure is used to escape from the continuation of these
-procedures, their behavior is implementation dependent."
-  (call-with-output-file file
-   (lambda (p) (with-output-to-port p thunk))
-   #:binary binary
-   #:encoding encoding))
-
-(define* (with-error-to-file file thunk #:key (binary #f) (encoding #f))
-  "THUNK must be a procedure of no arguments, and FILE must be a
-string naming a file.  The effect is unspecified if the file already exists.
-The file is opened for output, an output port connected to it is made
-the default value returned by `current-error-port',
-and the THUNK is called with no arguments.
-When the THUNK returns, the port is closed and the previous
-default is restored.  Returns the values yielded by THUNK.  If an
-escape procedure is used to escape from the continuation of these
-procedures, their behavior is implementation dependent."
-  (call-with-output-file file
-   (lambda (p) (with-error-to-port p thunk))
-   #:binary binary
-   #:encoding encoding))
-
-(define (call-with-input-string string proc)
-  "Calls the one-argument procedure @var{proc} with a newly created
-input port from which @var{string}'s contents may be read.  The value
-yielded by the @var{proc} is returned."
-  (proc (open-input-string string)))
-
-(define (with-input-from-string string thunk)
-  "THUNK must be a procedure of no arguments.
-The test of STRING  is opened for
-input, an input port connected to it is made, 
-and the THUNK is called with no arguments.
-When the THUNK returns, the port is closed.
-Returns the values yielded by THUNK.  If an
-escape procedure is used to escape from the continuation of these
-procedures, their behavior is implementation dependent."
-  (call-with-input-string string
-   (lambda (p) (with-input-from-port p thunk))))
-
 (define (call-with-output-string proc)
   "Calls the one-argument procedure @var{proc} with a newly created output
 port.  When the function returns, the string composed of the characters
@@ -1622,18 +1458,6 @@ written into the port is returned."
   (let ((port (open-output-string)))
     (proc port)
     (get-output-string port)))
-
-(define (with-output-to-string thunk)
-  "Calls THUNK and returns its output as a string."
-  (call-with-output-string
-   (lambda (p) (with-output-to-port p thunk))))
-
-(define (with-error-to-string thunk)
-  "Calls THUNK and returns its error output as a string."
-  (call-with-output-string
-   (lambda (p) (with-error-to-port p thunk))))
-
-(define the-eof-object (call-with-input-string "" (lambda (p) (read-char p))))
 
 
 
@@ -1756,94 +1580,8 @@ written into the port is returned."
 
 
 
-;;; {File Descriptors and Ports}
+;;; {C Environment}
 ;;;
-
-(define file-position ftell)
-(define* (file-set-position port offset #:optional (whence SEEK_SET))
-  (seek port offset whence))
-
-(define (move->fdes fd/port fd)
-  (cond ((integer? fd/port)
-         (dup->fdes fd/port fd)
-         (close fd/port)
-         fd)
-        (else
-         (primitive-move->fdes fd/port fd)
-         (set-port-revealed! fd/port 1)
-         fd/port)))
-
-(define (release-port-handle port)
-  (let ((revealed (port-revealed port)))
-    (if (> revealed 0)
-        (set-port-revealed! port (- revealed 1)))))
-
-(define dup->port
-  (case-lambda
-    ((port/fd mode)
-     (fdopen (dup->fdes port/fd) mode))
-    ((port/fd mode new-fd)
-     (let ((port (fdopen (dup->fdes port/fd new-fd) mode)))
-       (set-port-revealed! port 1)
-       port))))
-
-(define dup->inport
-  (case-lambda
-    ((port/fd)
-     (dup->port port/fd "r"))
-    ((port/fd new-fd)
-     (dup->port port/fd "r" new-fd))))
-
-(define dup->outport
-  (case-lambda
-    ((port/fd)
-     (dup->port port/fd "w"))
-    ((port/fd new-fd)
-     (dup->port port/fd "w" new-fd))))
-
-(define dup
-  (case-lambda
-    ((port/fd)
-     (if (integer? port/fd)
-         (dup->fdes port/fd)
-         (dup->port port/fd (port-mode port/fd))))
-    ((port/fd new-fd)
-     (if (integer? port/fd)
-         (dup->fdes port/fd new-fd)
-         (dup->port port/fd (port-mode port/fd) new-fd)))))
-
-(define (duplicate-port port modes)
-  (dup->port port modes))
-
-(define (fdes->inport fdes)
-  (let loop ((rest-ports (fdes->ports fdes)))
-    (cond ((null? rest-ports)
-           (let ((result (fdopen fdes "r")))
-             (set-port-revealed! result 1)
-             result))
-          ((input-port? (car rest-ports))
-           (set-port-revealed! (car rest-ports)
-                               (+ (port-revealed (car rest-ports)) 1))
-           (car rest-ports))
-          (else
-           (loop (cdr rest-ports))))))
-
-(define (fdes->outport fdes)
-  (let loop ((rest-ports (fdes->ports fdes)))
-    (cond ((null? rest-ports)
-           (let ((result (fdopen fdes "w")))
-             (set-port-revealed! result 1)
-             result))
-          ((output-port? (car rest-ports))
-           (set-port-revealed! (car rest-ports)
-                               (+ (port-revealed (car rest-ports)) 1))
-           (car rest-ports))
-          (else
-           (loop (cdr rest-ports))))))
-
-(define (port->fdes port)
-  (set-port-revealed! port (+ (port-revealed port) 1))
-  (fileno port))
 
 (define (setenv name value)
   (if value
@@ -1958,8 +1696,7 @@ written into the port is returned."
     (call-with-prompt
      prompt-tag
      (lambda ()
-       (with-fluids ((%stacks (acons tag prompt-tag
-                                     (or (fluid-ref %stacks) '()))))
+       (with-fluids ((%stacks (cons tag prompt-tag)))
          (thunk)))
      (lambda (k . args)
        (%start-stack tag (lambda () (apply k args)))))))
@@ -1972,10 +1709,10 @@ written into the port is returned."
 ;;; {Loading by paths}
 ;;;
 
-;;; Load a Scheme source file named NAME, searching for it in the
-;;; directories listed in %load-path, and applying each of the file
-;;; name extensions listed in %load-extensions.
 (define (load-from-path name)
+  "Load a Scheme source file named NAME, searching for it in the
+directories listed in %load-path, and applying each of the file
+name extensions listed in %load-extensions."
   (start-stack 'load-stack
                (primitive-load-path name)))
 
@@ -2259,15 +1996,15 @@ written into the port is returned."
      submodules
      submodule-binder
      public-interface
-     filename)))
+     filename
+     next-unique-id)))
 
 
 ;; make-module &opt size uses binder
 ;;
-;; Create a new module, perhaps with a particular size of obarray,
-;; initial uses list, or binding procedure.
-;;
 (define* (make-module #:optional (size 31) (uses '()) (binder #f))
+  "Create a new module, perhaps with a particular size of obarray,
+initial uses list, or binding procedure."
   (if (not (integer? size))
       (error "Illegal size to make-module." size))
   (if (not (and (list? uses)
@@ -2283,7 +2020,7 @@ written into the port is returned."
                       (make-hash-table)
                       '()
                       (make-weak-key-hash-table 31) #f
-                      (make-hash-table 7) #f #f #f))
+                      (make-hash-table 7) #f #f #f 0))
 
 
 
@@ -2296,15 +2033,15 @@ written into the port is returned."
   (cons module proc))
 
 (define* (module-observe-weak module observer-id #:optional (proc observer-id))
-  ;; Register PROC as an observer of MODULE under name OBSERVER-ID (which can
-  ;; be any Scheme object).  PROC is invoked and passed MODULE any time
-  ;; MODULE is modified.  PROC gets unregistered when OBSERVER-ID gets GC'd
-  ;; (thus, it is never unregistered if OBSERVER-ID is an immediate value,
-  ;; for instance).
+  "Register PROC as an observer of MODULE under name OBSERVER-ID (which can
+be any Scheme object).  PROC is invoked and passed MODULE any time
+MODULE is modified.  PROC gets unregistered when OBSERVER-ID gets GC'd
+(thus, it is never unregistered if OBSERVER-ID is an immediate value,
+for instance).
 
-  ;; The two-argument version is kept for backward compatibility: when called
-  ;; with two arguments, the observer gets unregistered when closure PROC
-  ;; gets GC'd (making it impossible to use an anonymous lambda for PROC).
+The two-argument version is kept for backward compatibility: when called
+with two arguments, the observer gets unregistered when closure PROC
+gets GC'd (making it impossible to use an anonymous lambda for PROC)."
   (hashq-set! (module-weak-observers module) observer-id proc))
 
 (define (module-unobserve token)
@@ -2315,31 +2052,33 @@ written into the port is returned."
         (set-module-observers! module (delq1! id (module-observers module)))))
   *unspecified*)
 
-(define module-defer-observers #f)
-(define module-defer-observers-mutex (make-mutex 'recursive))
-(define module-defer-observers-table (make-hash-table))
+;; Hash table of module -> #t indicating modules that changed while
+;; observers were deferred, or #f if observers are not being deferred.
+(define module-defer-observers (make-parameter #f))
 
 (define (module-modified m)
-  (if module-defer-observers
-      (hash-set! module-defer-observers-table m #t)
-      (module-call-observers m)))
+  (cond
+   ((module-defer-observers) => (lambda (tab) (hashq-set! tab m #t)))
+   (else (module-call-observers m))))
 
 ;;; This function can be used to delay calls to observers so that they
 ;;; can be called once only in the face of massive updating of modules.
 ;;;
 (define (call-with-deferred-observers thunk)
-  (dynamic-wind
-      (lambda ()
-        (lock-mutex module-defer-observers-mutex)
-        (set! module-defer-observers #t))
-      thunk
-      (lambda ()
-        (set! module-defer-observers #f)
-        (hash-for-each (lambda (m dummy)
-                         (module-call-observers m))
-                       module-defer-observers-table)
-        (hash-clear! module-defer-observers-table)
-        (unlock-mutex module-defer-observers-mutex))))
+  (cond
+   ((module-defer-observers) (thunk))
+   (else
+    (let ((modules (make-hash-table)))
+      (dynamic-wind (lambda () #t)
+                    (lambda ()
+                      (parameterize ((module-defer-observers modules))
+                        (thunk)))
+                    (lambda ()
+                      (let ((changed (hash-map->list cons modules)))
+                        (hash-clear! modules)
+                        (for-each (lambda (pair)
+                                    (module-call-observers (car pair)))
+                                  changed))))))))
 
 (define (module-call-observers m)
   (for-each (lambda (proc) (proc m)) (module-observers m))
@@ -2368,13 +2107,10 @@ written into the port is returned."
 ;;; of M.''
 ;;;
 
-;; module-search fn m
-;;
-;; return the first non-#f result of FN applied to M and then to
-;; the modules in the uses of m, and so on recursively.  If all applications
-;; return #f, then so does this function.
-;;
 (define (module-search fn m v)
+  "Return the first non-#f result of FN applied to M and then to
+the modules in the uses of M, and so on recursively.  If all applications
+return #f, then so does this function."
   (define (loop pos)
     (and (pair? pos)
          (or (module-search fn (car pos) v)
@@ -2389,21 +2125,15 @@ written into the port is returned."
 ;;; of S in M has been set to some well-defined value.
 ;;;
 
-;; module-locally-bound? module symbol
-;;
-;; Is a symbol bound (interned and defined) locally in a given module?
-;;
 (define (module-locally-bound? m v)
+  "Is symbol V bound (interned and defined) locally in module M?"
   (let ((var (module-local-variable m v)))
     (and var
          (variable-bound? var))))
 
-;; module-bound? module symbol
-;;
-;; Is a symbol bound (interned and defined) anywhere in a given module
-;; or its uses?
-;;
 (define (module-bound? m v)
+  "Is symbol V bound (interned and defined) anywhere in module M or its
+uses?"
   (let ((var (module-variable m v)))
     (and var
          (variable-bound? var))))
@@ -2435,22 +2165,16 @@ written into the port is returned."
 (define (module-obarray-remove! ob key)
   ((if (symbol? key) hashq-remove! hash-remove!) ob key))
 
-;; module-symbol-locally-interned? module symbol
-;;
-;; is a symbol interned (not neccessarily defined) locally in a given module
-;; or its uses?  Interned symbols shadow inherited bindings even if
-;; they are not themselves bound to a defined value.
-;;
 (define (module-symbol-locally-interned? m v)
+  "Is symbol V interned (not neccessarily defined) locally in module M
+or its uses?  Interned symbols shadow inherited bindings even if they
+are not themselves bound to a defined value."
   (not (not (module-obarray-get-handle (module-obarray m) v))))
 
-;; module-symbol-interned? module symbol
-;;
-;; is a symbol interned (not neccessarily defined) anywhere in a given module
-;; or its uses?  Interned symbols shadow inherited bindings even if
-;; they are not themselves bound to a defined value.
-;;
 (define (module-symbol-interned? m v)
+  "Is symbol V interned (not neccessarily defined) anywhere in module M
+or its uses?  Interned symbols shadow inherited bindings even if they
+are not themselves bound to a defined value."
   (module-search module-symbol-locally-interned? m v))
 
 
@@ -2482,14 +2206,10 @@ written into the port is returned."
 ;;; variable is dereferenced.
 ;;;
 
-;; module-symbol-binding module symbol opt-value
-;;
-;; return the binding of a variable specified by name within
-;; a given module, signalling an error if the variable is unbound.
-;; If the OPT-VALUE is passed, then instead of signalling an error,
-;; return OPT-VALUE.
-;;
 (define (module-symbol-local-binding m v . opt-val)
+  "Return the binding of variable V specified by name within module M,
+signalling an error if the variable is unbound.  If the OPT-VALUE is
+passed, then instead of signalling an error, return OPT-VALUE."
   (let ((var (module-local-variable m v)))
     (if (and var (variable-bound? var))
         (variable-ref var)
@@ -2497,14 +2217,10 @@ written into the port is returned."
             (car opt-val)
             (error "Locally unbound variable." v)))))
 
-;; module-symbol-binding module symbol opt-value
-;;
-;; return the binding of a variable specified by name within
-;; a given module, signalling an error if the variable is unbound.
-;; If the OPT-VALUE is passed, then instead of signalling an error,
-;; return OPT-VALUE.
-;;
 (define (module-symbol-binding m v . opt-val)
+  "Return the binding of variable V specified by name within module M,
+signalling an error if the variable is unbound.  If the OPT-VALUE is
+passed, then instead of signalling an error, return OPT-VALUE."
   (let ((var (module-variable m v)))
     (if (and var (variable-bound? var))
         (variable-ref var)
@@ -2518,15 +2234,12 @@ written into the port is returned."
 ;;; {Adding Variables to Modules}
 ;;;
 
-;; module-make-local-var! module symbol
-;;
-;; ensure a variable for V in the local namespace of M.
-;; If no variable was already there, then create a new and uninitialzied
-;; variable.
-;;
 ;; This function is used in modules.c.
 ;;
 (define (module-make-local-var! m v)
+  "Ensure a variable for V in the local namespace of M.
+If no variable was already there, then create a new and uninitialized
+variable."
   (or (let ((b (module-obarray-ref (module-obarray m) v)))
         (and (variable? b)
              (begin
@@ -2540,13 +2253,10 @@ written into the port is returned."
         (module-add! m v local-var)
         local-var)))
 
-;; module-ensure-local-variable! module symbol
-;;
-;; Ensure that there is a local variable in MODULE for SYMBOL.  If
-;; there is no binding for SYMBOL, create a new uninitialized
-;; variable.  Return the local variable.
-;;
 (define (module-ensure-local-variable! module symbol)
+  "Ensure that there is a local variable in MODULE for SYMBOL.  If
+there is no binding for SYMBOL, create a new uninitialized
+variable.  Return the local variable."
   (or (module-local-variable module symbol)
       (let ((var (make-undefined-variable)))
         (module-add! module symbol var)
@@ -2554,9 +2264,8 @@ written into the port is returned."
 
 ;; module-add! module symbol var
 ;;
-;; ensure a particular variable for V in the local namespace of M.
-;;
 (define (module-add! m v var)
+  "Ensure a particular variable for V in the local namespace of M."
   (if (not (variable? var))
       (error "Bad variable to module-add!" var))
   (if (not (symbol? v))
@@ -2564,11 +2273,8 @@ written into the port is returned."
   (module-obarray-set! (module-obarray m) v var)
   (module-modified m))
 
-;; module-remove!
-;;
-;; make sure that a symbol is undefined in the local namespace of M.
-;;
 (define (module-remove! m v)
+  "Make sure that symbol V is undefined in the local namespace of M."
   (module-obarray-remove! (module-obarray m) v)
   (module-modified m))
 
@@ -2578,9 +2284,8 @@ written into the port is returned."
 
 ;; MODULE-FOR-EACH -- exported
 ;;
-;; Call PROC on each symbol in MODULE, with arguments of (SYMBOL VARIABLE).
-;;
 (define (module-for-each proc module)
+  "Call PROC on each symbol in MODULE, with arguments of (SYMBOL VARIABLE)."
   (hash-for-each proc (module-obarray module)))
 
 (define (module-map proc module)
@@ -2622,12 +2327,10 @@ written into the port is returned."
 
 ;;; {MODULE-REF -- exported}
 ;;;
-
-;; Returns the value of a variable called NAME in MODULE or any of its
-;; used modules.  If there is no such variable, then if the optional third
-;; argument DEFAULT is present, it is returned; otherwise an error is signaled.
-;;
 (define (module-ref module name . rest)
+  "Returns the value of a variable called NAME in MODULE or any of its
+used modules.  If there is no such variable, then if the optional third
+argument DEFAULT is present, it is returned; otherwise an error is signaled."
   (let ((variable (module-variable module name)))
     (if (and variable (variable-bound? variable))
         (variable-ref variable)
@@ -2638,10 +2341,9 @@ written into the port is returned."
 
 ;; MODULE-SET! -- exported
 ;;
-;; Sets the variable called NAME in MODULE (or in a module that MODULE uses)
-;; to VALUE; if there is no such variable, an error is signaled.
-;;
 (define (module-set! module name value)
+  "Sets the variable called NAME in MODULE (or in a module that MODULE uses)
+to VALUE; if there is no such variable, an error is signaled."
   (let ((variable (module-variable module name)))
     (if variable
         (variable-set! variable value)
@@ -2649,10 +2351,9 @@ written into the port is returned."
 
 ;; MODULE-DEFINE! -- exported
 ;;
-;; Sets the variable called NAME in MODULE to VALUE; if there is no such
-;; variable, it is added first.
-;;
 (define (module-define! module name value)
+  "Sets the variable called NAME in MODULE to VALUE; if there is no such
+variable, it is added first."
   (let ((variable (module-local-variable module name)))
     (if variable
         (begin
@@ -2663,18 +2364,14 @@ written into the port is returned."
 
 ;; MODULE-DEFINED? -- exported
 ;;
-;; Return #t iff NAME is defined in MODULE (or in a module that MODULE
-;; uses)
-;;
 (define (module-defined? module name)
+  "Return #t iff NAME is defined in MODULE (or in a module that MODULE
+uses)."
   (let ((variable (module-variable module name)))
     (and variable (variable-bound? variable))))
 
-;; MODULE-USE! module interface
-;;
-;; Add INTERFACE to the list of interfaces used by MODULE.
-;;
 (define (module-use! module interface)
+  "Add INTERFACE to the list of interfaces used by MODULE."
   (if (not (or (eq? module interface)
                (memq interface (module-uses module))))
       (begin
@@ -2686,12 +2383,9 @@ written into the port is returned."
         (hash-clear! (module-import-obarray module))
         (module-modified module))))
 
-;; MODULE-USE-INTERFACES! module interfaces
-;;
-;; Same as MODULE-USE!, but only notifies module observers after all
-;; interfaces are added to the inports list.
-;;
 (define (module-use-interfaces! module interfaces)
+  "Same as MODULE-USE!, but only notifies module observers after all
+interfaces are added to the inports list."
   (let* ((cur (module-uses module))
          (new (let lp ((in interfaces) (out '()))
                 (if (null? in)
@@ -2863,6 +2557,11 @@ written into the port is returned."
   (let ((m (make-module 0)))
     (set-module-obarray! m (%get-pre-modules-obarray))
     (set-module-name! m '(guile))
+
+    ;; Inherit next-unique-id from preliminary stub of
+    ;; %module-get-next-unique-id! defined above.
+    (set-module-next-unique-id! m (module-generate-unique-id! #f))
+
     m))
 
 ;; The root interface is a module that uses the same obarray as the
@@ -2890,6 +2589,11 @@ written into the port is returned."
   (if (equal? name '(guile))
       the-root-module
       (error "unexpected module to resolve during module boot" name)))
+
+(define (module-generate-unique-id! m)
+  (let ((i (module-next-unique-id m)))
+    (set-module-next-unique-id! m (+ i 1))
+    i))
 
 ;; Cheat.  These bindings are needed by modules.c, but we don't want
 ;; to move their real definition here because that would be unnatural.
@@ -2920,6 +2624,21 @@ written into the port is returned."
             (set-module-name! mod name)
             (nested-define-module! (resolve-module '() #f) name mod)
             (accessor mod))))))
+
+(define* (module-gensym #:optional (id " mg") (m (current-module)))
+  "Return a fresh symbol in the context of module M, based on ID (a
+string or symbol).  As long as M is a valid module, this procedure is
+deterministic."
+  (define (->string number)
+    (number->string number 16))
+
+  (if m
+      (string->symbol
+       (string-append id "-"
+                      (->string (hash (module-name m) most-positive-fixnum))
+                      "-"
+                      (->string (module-generate-unique-id! m))))
+      (gensym id)))
 
 (define (make-modules-in module name)
   (or (nested-ref-module module name)
@@ -3029,40 +2748,6 @@ written into the port is returned."
              (eq? (car (last-pair use-list)) the-scm-module))
         (set-module-uses! module (reverse (cdr (reverse use-list)))))))
 
-;; Return a module that is an interface to the module designated by
-;; NAME.
-;;
-;; `resolve-interface' takes four keyword arguments:
-;;
-;;   #:select SELECTION
-;;
-;; SELECTION is a list of binding-specs to be imported; A binding-spec
-;; is either a symbol or a pair of symbols (ORIG . SEEN), where ORIG
-;; is the name in the used module and SEEN is the name in the using
-;; module.  Note that SEEN is also passed through RENAMER, below.  The
-;; default is to select all bindings.  If you specify no selection but
-;; a renamer, only the bindings that already exist in the used module
-;; are made available in the interface.  Bindings that are added later
-;; are not picked up.
-;;
-;;   #:hide BINDINGS
-;;
-;; BINDINGS is a list of bindings which should not be imported.
-;;
-;;   #:prefix PREFIX
-;;
-;; PREFIX is a symbol that will be appended to each exported name.
-;; The default is to not perform any renaming.
-;;
-;;   #:renamer RENAMER
-;;
-;; RENAMER is a procedure that takes a symbol and returns its new
-;; name.  The default is not perform any renaming.
-;;
-;; Signal "no code for module" error if module name is not resolvable
-;; or its public interface is not available.  Signal "no binding"
-;; error if selected binding does not exist in the used module.
-;;
 (define* (resolve-interface name #:key
                             (select #f)
                             (hide '())
@@ -3071,6 +2756,39 @@ written into the port is returned."
                                          (symbol-prefix-proc prefix)
                                          identity))
                             version)
+  "Return a module that is an interface to the module designated by
+NAME.
+
+`resolve-interface' takes four keyword arguments:
+
+  #:select SELECTION
+
+SELECTION is a list of binding-specs to be imported; A binding-spec
+is either a symbol or a pair of symbols (ORIG . SEEN), where ORIG
+is the name in the used module and SEEN is the name in the using
+module.  Note that SEEN is also passed through RENAMER, below.  The
+default is to select all bindings.  If you specify no selection but
+a renamer, only the bindings that already exist in the used module
+are made available in the interface.  Bindings that are added later
+are not picked up.
+
+  #:hide BINDINGS
+
+BINDINGS is a list of bindings which should not be imported.
+
+  #:prefix PREFIX
+
+PREFIX is a symbol that will be appended to each exported name.
+The default is to not perform any renaming.
+
+  #:renamer RENAMER
+
+RENAMER is a procedure that takes a symbol and returns its new
+name.  The default is not perform any renaming.
+
+Signal \"no code for module\" error if module name is not resolvable
+or its public interface is not available.  Signal \"no binding\"
+error if selected binding does not exist in the used module."
   (let* ((module (resolve-module name #t version #:ensure #f))
          (public-i (and module (module-public-interface module))))
     (unless public-i
@@ -3089,7 +2807,6 @@ written into the port is returned."
                              (orig (if direct? bspec (car bspec)))
                              (seen (if direct? bspec (cdr bspec)))
                              (var (or (module-local-variable public-i orig)
-                                      (module-local-variable module orig)
                                       (error
                                        ;; fixme: format manually for now
                                        (simple-format
@@ -3119,77 +2836,71 @@ written into the port is returned."
 ;; sure to update "modules.c" as well.
 
 (define* (define-module* name
-           #:key filename pure version (duplicates '())
-           (imports '()) (exports '()) (replacements '())
-           (re-exports '()) (autoloads '()) transformer)
+           #:key filename pure version (imports '()) (exports '())
+           (replacements '()) (re-exports '()) (autoloads '())
+           (duplicates #f) transformer)
   (define (list-of pred l)
     (or (null? l)
         (and (pair? l) (pred (car l)) (list-of pred (cdr l)))))
+  (define (valid-import? x)
+    (list? x))
   (define (valid-export? x)
     (or (symbol? x) (and (pair? x) (symbol? (car x)) (symbol? (cdr x)))))
   (define (valid-autoload? x)
     (and (pair? x) (list-of symbol? (car x)) (list-of symbol? (cdr x))))
   
-  (define (resolve-imports imports)
-    (define (resolve-import import-spec)
-      (if (list? import-spec)
-          (apply resolve-interface import-spec)
-          (error "unexpected use-module specification" import-spec)))
-    (let lp ((imports imports) (out '()))
-      (cond
-       ((null? imports) (reverse! out))
-       ((pair? imports)
-        (lp (cdr imports)
-            (cons (resolve-import (car imports)) out)))
-       (else (error "unexpected tail of imports list" imports)))))
-
   ;; We could add a #:no-check arg, set by the define-module macro, if
   ;; these checks are taking too much time.
   ;;
   (let ((module (resolve-module name #f)))
     (beautify-user-module! module)
-    (if filename
-        (set-module-filename! module filename))
-    (if pure
-        (purify-module! module))
-    (if version
-        (begin 
-          (if (not (list-of integer? version))
-              (error "expected list of integers for version"))
-          (set-module-version! module version)
-          (set-module-version! (module-public-interface module) version)))
-    (let ((imports (resolve-imports imports)))
-      (call-with-deferred-observers
-       (lambda ()
-         (if (pair? imports)
-             (module-use-interfaces! module imports))
-         (if (list-of valid-export? exports)
-             (if (pair? exports)
-                 (module-export! module exports))
-             (error "expected exports to be a list of symbols or symbol pairs"))
-         (if (list-of valid-export? replacements)
-             (if (pair? replacements)
-                 (module-replace! module replacements))
-             (error "expected replacements to be a list of symbols or symbol pairs"))
-         (if (list-of valid-export? re-exports)
-             (if (pair? re-exports)
-                 (module-re-export! module re-exports))
-             (error "expected re-exports to be a list of symbols or symbol pairs"))
-         ;; FIXME
-         (if (not (null? autoloads))
-             (apply module-autoload! module autoloads))
-         ;; Wait until modules have been loaded to resolve duplicates
-         ;; handlers.
-         (if (pair? duplicates)
-             (let ((handlers (lookup-duplicates-handlers duplicates)))
-               (set-module-duplicates-handlers! module handlers))))))
+    (when filename
+      (set-module-filename! module filename))
+    (when pure
+      (purify-module! module))
+    (when version
+      (unless (list-of integer? version)
+        (error "expected list of integers for version"))
+      (set-module-version! module version)
+      (set-module-version! (module-public-interface module) version))
+    (call-with-deferred-observers
+     (lambda ()
+       (unless (list-of valid-import? imports)
+         (error "expected imports to be a list of import specifications"))
+       (unless (list-of valid-export? exports)
+         (error "expected exports to be a list of symbols or symbol pairs"))
+       (unless (list-of valid-export? replacements)
+         (error "expected replacements to be a list of symbols or symbol pairs"))
+       (unless (list-of valid-export? re-exports)
+         (error "expected re-exports to be a list of symbols or symbol pairs"))
+       (module-export! module exports)
+       (module-replace! module replacements)
+       (unless (null? imports)
+         (let ((imports (map (lambda (import-spec)
+                               (apply resolve-interface import-spec))
+                             imports)))
+           (module-use-interfaces! module imports)))
+       (module-re-export! module re-exports)
+       ;; FIXME: Avoid use of `apply'.
+       (apply module-autoload! module autoloads)
+       (let ((duplicates (or duplicates
+                             ;; Avoid stompling a previously installed
+                             ;; duplicates handlers if possible.
+                             (and (not (module-duplicates-handlers module))
+                                  ;; Note: If you change this default,
+                                  ;; change it also in
+                                  ;; `default-duplicate-binding-procedures'.
+                                  '(replace warn-override-core warn last)))))
+         (when duplicates
+           (let ((handlers (lookup-duplicates-handlers duplicates)))
+             (set-module-duplicates-handlers! module handlers))))))
 
-    (if transformer
-        (if (and (pair? transformer) (list-of symbol? transformer))
-            (let ((iface (resolve-interface transformer))
-                  (sym (car (last-pair transformer))))
-              (set-module-transformer! module (module-ref iface sym)))
-            (error "expected transformer to be a module name" transformer)))
+    (when transformer
+      (unless (and (pair? transformer) (list-of symbol? transformer))
+        (error "expected transformer to be a module name" transformer))
+      (let ((iface (resolve-interface transformer))
+            (sym (car (last-pair transformer))))
+        (set-module-transformer! module (module-ref iface sym))))
     
     (run-hook module-defined-hook module)
     module))
@@ -3220,7 +2931,7 @@ written into the port is returned."
               #:warning "Failed to autoload ~a in ~a:\n" sym name))))
     (module-constructor (make-hash-table 0) '() b #f #f name 'autoload #f
                         (make-hash-table 0) '() (make-weak-value-hash-table 31) #f
-                        (make-hash-table 0) #f #f #f)))
+                        (make-hash-table 0) #f #f #f 0)))
 
 (define (module-autoload! module . args)
   "Have @var{module} automatically load the module named @var{name} when one
@@ -3732,12 +3443,11 @@ but it fails to load."
   (lambda formals body ...))
 
 
-;; Export a local variable
-
 ;; This function is called from "modules.c".  If you change it, be
 ;; sure to update "modules.c" as well.
 
 (define (module-export! m names)
+  "Export a local variable."
   (let ((public-i (module-public-interface m)))
     (for-each (lambda (name)
                 (let* ((internal-name (if (pair? name) (car name) name))
@@ -3758,9 +3468,8 @@ but it fails to load."
                   (module-add! public-i external-name var)))
               names)))
 
-;; Export all local variables from a module
-;;
 (define (module-export-all! mod)
+  "Export all local variables from a module."
   (define (fresh-interface!)
     (let ((iface (make-module)))
       (set-module-name! iface (module-name mod))
@@ -3772,9 +3481,8 @@ but it fails to load."
                    (fresh-interface!))))
     (set-module-obarray! iface (module-obarray mod))))
 
-;; Re-export a imported variable
-;;
 (define (module-re-export! m names)
+  "Re-export an imported variable."
   (let ((public-i (module-public-interface m)))
     (for-each (lambda (name)
                 (let* ((internal-name (if (pair? name) (car name) name))
@@ -3923,14 +3631,23 @@ but it fails to load."
                 (list handler-names)))))
 
 (define default-duplicate-binding-procedures
-  (make-mutable-parameter #f))
+  (case-lambda
+    (()
+     (or (module-duplicates-handlers (current-module))
+         ;; Note: If you change this default, change it also in
+         ;; `define-module*'.
+         (lookup-duplicates-handlers
+          '(replace warn-override-core warn last))))
+    ((procs)
+     (set-module-duplicates-handlers! (current-module) procs))))
 
 (define default-duplicate-binding-handler
-  (make-mutable-parameter '(replace warn-override-core warn last)
-                          (lambda (handler-names)
-                            (default-duplicate-binding-procedures
-                              (lookup-duplicates-handlers handler-names))
-                            handler-names)))
+  (case-lambda
+    (()
+     (map procedure-name (default-duplicate-binding-procedures)))
+    ((handlers)
+     (default-duplicate-binding-procedures
+       (lookup-duplicates-handlers handlers)))))
 
 
 
@@ -3956,8 +3673,8 @@ but it fails to load."
 
 (define %auto-compilation-options
   ;; Default `compile-file' option when auto-compiling.
-  '(#:warnings (unbound-variable arity-mismatch format
-                duplicate-case-datum bad-case-datum)))
+  '(#:warnings (unbound-variable macro-use-before-definition arity-mismatch
+                format duplicate-case-datum bad-case-datum)))
 
 (define* (load-in-vicinity dir file-name #:optional reader)
   "Load source file FILE-NAME in vicinity of directory DIR.  Use a
@@ -4019,19 +3736,23 @@ when none is available, reading FILE-NAME with READER."
      #:opts %auto-compilation-options
      #:env (current-module)))
 
-  ;; Returns the .go file corresponding to `name'.  Does not search load
-  ;; paths, only the fallback path.  If the .go file is missing or out
-  ;; of date, and auto-compilation is enabled, will try
-  ;; auto-compilation, just as primitive-load-path does internally.
-  ;; primitive-load is unaffected.  Returns #f if auto-compilation
-  ;; failed or was disabled.
+  (define (load-thunk-from-file file)
+    (let ((loader (resolve-interface '(system vm loader))))
+      ((module-ref loader 'load-thunk-from-file) file)))
+
+  ;; Returns a thunk loaded from the .go file corresponding to `name'.
+  ;; Does not search load paths, only the fallback path.  If the .go
+  ;; file is missing or out of date, and auto-compilation is enabled,
+  ;; will try auto-compilation, just as primitive-load-path does
+  ;; internally.  primitive-load is unaffected.  Returns #f if
+  ;; auto-compilation failed or was disabled.
   ;;
   ;; NB: Unless we need to compile the file, this function should not
   ;; cause (system base compile) to be loaded up.  For that reason
   ;; compiled-file-name partially duplicates functionality from (system
   ;; base compile).
 
-  (define (fresh-compiled-file-name name scmstat go-file-name)
+  (define (fresh-compiled-thunk name scmstat go-file-name)
     ;; Return GO-FILE-NAME after making sure that it contains a freshly
     ;; compiled version of source file NAME with stat SCMSTAT; return #f
     ;; on failure.
@@ -4039,19 +3760,19 @@ when none is available, reading FILE-NAME with READER."
      (let ((gostat (and (not %fresh-auto-compile)
                         (stat go-file-name #f))))
        (if (and gostat (more-recent? gostat scmstat))
-           go-file-name
+           (load-thunk-from-file go-file-name)
            (begin
-             (if gostat
-                 (format (current-warning-port)
-                         ";;; note: source file ~a\n;;;       newer than compiled ~a\n"
-                         name go-file-name))
+             (when gostat
+               (format (current-warning-port)
+                       ";;; note: source file ~a\n;;;       newer than compiled ~a\n"
+                       name go-file-name))
              (cond
               (%load-should-auto-compile
                (%warn-auto-compilation-enabled)
                (format (current-warning-port) ";;; compiling ~a\n" name)
                (let ((cfn (compile name)))
                  (format (current-warning-port) ";;; compiled ~a\n" cfn)
-                 cfn))
+                 (load-thunk-from-file cfn)))
               (else #f)))))
      #:warning "WARNING: compilation of ~a failed:\n" name))
 
@@ -4070,28 +3791,36 @@ when none is available, reading FILE-NAME with READER."
        #:warning "Stat of ~a failed:\n" abs-file-name))
 
     (define (pre-compiled)
-      (and=> (search-path %load-compiled-path (sans-extension file-name)
-                          %load-compiled-extensions #t)
-             (lambda (go-file-name)
-               (let ((gostat (stat go-file-name #f)))
-                 (and gostat (more-recent? gostat scmstat)
-                      go-file-name)))))
+      (or-map
+       (lambda (dir)
+         (or-map
+          (lambda (ext)
+            (let ((candidate (string-append (in-vicinity dir file-name) ext)))
+              (let ((gostat (stat candidate #f)))
+                (and gostat
+                     (more-recent? gostat scmstat)
+                     (false-if-exception
+                      (load-thunk-from-file candidate)
+                      #:warning "WARNING: failed to load compiled file ~a:\n"
+                      candidate)))))
+          %load-compiled-extensions))
+       %load-compiled-path))
 
     (define (fallback)
       (and=> (false-if-exception (canonicalize-path abs-file-name))
              (lambda (canon)
                (and=> (fallback-file-name canon)
                       (lambda (go-file-name)
-                        (fresh-compiled-file-name abs-file-name
-                                                  scmstat
-                                                  go-file-name))))))
+                        (fresh-compiled-thunk abs-file-name
+                                              scmstat
+                                              go-file-name))))))
 
     (let ((compiled (and scmstat (or (pre-compiled) (fallback)))))
       (if compiled
           (begin
             (if %load-hook
                 (%load-hook abs-file-name))
-            (load-compiled compiled))
+            (compiled))
           (start-stack 'load-stack
                        (primitive-load abs-file-name)))))
 
@@ -4320,6 +4049,24 @@ when none is available, reading FILE-NAME with READER."
 
 
 
+;;; {Ports}
+;;;
+
+;; Allow code in (guile) to use port bindings.
+(module-use! the-root-module (resolve-interface '(ice-9 ports)))
+;; Allow users of (guile) to see port bindings.
+(module-use! the-scm-module (resolve-interface '(ice-9 ports)))
+
+
+
+;;; {Threads}
+;;;
+
+;; Load (ice-9 threads), initializing some internal data structures.
+(resolve-interface '(ice-9 threads))
+
+
+
 ;;; SRFI-4 in the default environment.  FIXME: we should figure out how
 ;;; to deprecate this.
 ;;;
@@ -4334,7 +4081,7 @@ when none is available, reading FILE-NAME with READER."
 ;;; modules, removing them from the (guile) module.
 ;;;
 
-(define-module (system syntax))
+(define-module (system syntax internal))
 
 (let ()
   (define (steal-bindings! from to ids)
@@ -4346,11 +4093,16 @@ when none is available, reading FILE-NAME with READER."
      ids)
     (module-export! to ids))
 
-  (steal-bindings! the-root-module (resolve-module '(system syntax))
-                   '(syntax-local-binding
-                     syntax-module
+  (steal-bindings! the-root-module (resolve-module '(system syntax internal))
+                   '(syntax?
+                     syntax-local-binding
+                     %syntax-module
                      syntax-locally-bound-identifiers
-                     syntax-session-id)))
+                     syntax-session-id
+                     make-syntax
+                     syntax-expression
+                     syntax-wrap
+                     syntax-module)))
 
 
 

@@ -51,7 +51,6 @@
 #include "libguile/print.h"
 #include "libguile/procprop.h"
 #include "libguile/programs.h"
-#include "libguile/root.h"
 #include "libguile/smob.h"
 #include "libguile/srcprop.h"
 #include "libguile/stackchk.h"
@@ -196,6 +195,12 @@ env_set (SCM env, int depth, int width, SCM val)
   VECTOR_SET (env, width + 1, val);
 }
 
+static void error_missing_value (SCM proc, SCM kw)
+{
+  scm_error_scm (scm_from_latin1_symbol ("keyword-argument-error"), proc,
+                 scm_from_locale_string ("Keyword argument has no value"), SCM_EOL,
+                 scm_list_1 (kw));
+}
 
 static void error_invalid_keyword (SCM proc, SCM obj)
 {
@@ -424,33 +429,34 @@ eval (SCM x, SCM env)
     case SCM_M_CALL_WITH_PROMPT:
       {
         struct scm_vm *vp;
-        SCM k, res;
+        SCM k, handler, res;
         scm_i_jmp_buf registers;
-        /* We need the handler after nonlocal return to the setjmp, so
-           make sure it is volatile.  */
-        volatile SCM handler;
+        const void *prev_cookie;
+        scm_t_ptrdiff saved_stack_depth;
 
         k = EVAL1 (CAR (mx), env);
         handler = EVAL1 (CDDR (mx), env);
         vp = scm_the_vm ();
 
+        saved_stack_depth = vp->stack_top - vp->sp;
+
         /* Push the prompt onto the dynamic stack. */
         scm_dynstack_push_prompt (&SCM_I_CURRENT_THREAD->dynstack,
-                                  SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY
-                                  | SCM_F_DYNSTACK_PROMPT_PUSH_NARGS,
+                                  SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY,
                                   k,
-                                  vp->fp - vp->stack_base,
-                                  vp->sp - vp->stack_base,
+                                  vp->stack_top - vp->fp,
+                                  saved_stack_depth,
                                   vp->ip,
                                   &registers);
 
+        prev_cookie = vp->resumable_prompt_cookie;
         if (SCM_I_SETJMP (registers))
           {
             /* The prompt exited nonlocally. */
+            vp->resumable_prompt_cookie = prev_cookie;
             scm_gc_after_nonlocal_exit ();
             proc = handler;
-            vp = scm_the_vm ();
-            args = scm_i_prompt_pop_abort_args_x (vp);
+            args = scm_i_prompt_pop_abort_args_x (vp, saved_stack_depth);
             goto apply_proc;
           }
         
@@ -832,28 +838,40 @@ prepare_boot_closure_env_for_apply (SCM proc, SCM args,
           {
             SCM walk;
 
-            if (scm_is_pair (args) && scm_is_pair (CDR (args)))
-              for (; scm_is_pair (args) && scm_is_pair (CDR (args));
-                   args = CDR (args))
-                {
-                  SCM k = CAR (args), v = CADR (args);
-                  if (!scm_is_keyword (k))
+            while (scm_is_pair (args))
+              {
+                SCM k = CAR (args);
+                args = CDR (args);
+                if (!scm_is_keyword (k))
+                  {
+                    if (scm_is_true (rest))
+                      continue;
+                    else
+                      break;
+                  }
+                for (walk = kw; scm_is_pair (walk); walk = CDR (walk))
+                  if (scm_is_eq (k, CAAR (walk)))
                     {
-                      if (scm_is_true (rest))
-                        continue;
+                      if (scm_is_pair (args))
+                        {
+                          SCM v = CAR (args);
+                          args = CDR (args);
+                          env_set (env, 0, SCM_I_INUM (CDAR (walk)), v);
+                          break;
+                        }
                       else
-                        break;
+                        error_missing_value (proc, k);
                     }
-                  for (walk = kw; scm_is_pair (walk); walk = CDR (walk))
-                    if (scm_is_eq (k, CAAR (walk)))
-                      {
-                        env_set (env, 0, SCM_I_INUM (CDAR (walk)), v);
-                        args = CDR (args);
-                        break;
-                      }
-                  if (scm_is_null (walk) && scm_is_false (aok))
-                    error_unrecognized_keyword (proc, k);
-                }
+                if (scm_is_null (walk))
+                  {
+                    if (scm_is_false (aok))
+                      error_unrecognized_keyword (proc, k);
+                    else if (!scm_is_pair (args))
+                      /* Advance past argument of unrecognized
+                         keyword, if present.  */
+                      args = CDR (args);
+                  }
+              }
             if (scm_is_pair (args) && scm_is_false (rest))
               error_invalid_keyword (proc, CAR (args));
           }
@@ -884,7 +902,8 @@ prepare_boot_closure_env_for_eval (SCM proc, unsigned int argc,
       *out_body = BOOT_CLOSURE_BODY (proc);
       *inout_env = new_env;
     }
-  else if (BOOT_CLOSURE_IS_REST (proc) && argc >= nreq)
+  else if (!BOOT_CLOSURE_IS_FIXED (proc) &&
+           BOOT_CLOSURE_IS_REST (proc) && argc >= nreq)
     {
       SCM rest;
       int i;
@@ -921,16 +940,16 @@ static int
 boot_closure_print (SCM closure, SCM port, scm_print_state *pstate)
 {
   SCM args;
-  scm_puts_unlocked ("#<boot-closure ", port);
+  scm_puts ("#<boot-closure ", port);
   scm_uintprint (SCM_UNPACK (closure), 16, port);
-  scm_putc_unlocked (' ', port);
+  scm_putc (' ', port);
   args = scm_make_list (scm_from_int (BOOT_CLOSURE_NUM_REQUIRED_ARGS (closure)),
                         scm_from_latin1_symbol ("_"));
   if (!BOOT_CLOSURE_IS_FIXED (closure) && BOOT_CLOSURE_HAS_REST_ARGS (closure))
     args = scm_cons_star (scm_from_latin1_symbol ("_"), args);
   /* FIXME: optionals and rests */
   scm_display (args, port);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return 1;
 }
 

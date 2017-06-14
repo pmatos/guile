@@ -1,5 +1,5 @@
 ;;; 'SCM' type tag decoding.
-;;; Copyright (C) 2014, 2015 Free Software Foundation, Inc.
+;;; Copyright (C) 2014, 2015, 2017 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or modify it
 ;;; under the terms of the GNU Lesser General Public License as published by
@@ -16,13 +16,14 @@
 
 (define-module (system base types)
   #:use-module (rnrs bytevectors)
-  #:use-module (rnrs io ports)
+  #:use-module ((rnrs io ports) #:hide (bytevector->string))
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-9 gnu)
   #:use-module (srfi srfi-11)
   #:use-module (srfi srfi-26)
   #:use-module (srfi srfi-60)
+  #:use-module (system syntax internal)
   #:use-module (ice-9 match)
   #:use-module (ice-9 iconv)
   #:use-module (ice-9 format)
@@ -41,9 +42,6 @@
             inferior-object-kind
             inferior-object-sub-kind
             inferior-object-address
-
-            inferior-fluid?
-            inferior-fluid-number
 
             inferior-struct?
             inferior-struct-name
@@ -99,7 +97,7 @@
           (let ((port (make-custom-binary-input-port "ffi-memory"
                                                      read-memory!
                                                      #f #f #f)))
-            (setvbuf port _IONBF)
+            (setvbuf port 'none)
             port)))
 
     (memory-backend dereference-word open #f)))
@@ -117,8 +115,12 @@ SIZE is omitted, return an unbounded port to the memory at ADDRESS."
      (let ((open (memory-backend-open backend)))
        (open address #f)))
     ((_ backend address size)
-     (let ((open (memory-backend-open backend)))
-       (open address size)))))
+     (if (zero? size)
+         ;; GDB's 'open-memory' raises an error when size
+         ;; is zero, so we must handle that case specially.
+         (open-bytevector-input-port '#vu8())
+         (let ((open (memory-backend-open backend)))
+           (open address size))))))
 
 (define (get-word port)
   "Read a word from PORT and return it as an integer."
@@ -239,29 +241,30 @@ the matching bits, possibly with bitwise operations to extract it from BITS."
 (define %tc8-flag (+ %tc3-imm24 0))
 
 ;; Cell types.
-(define %tc3-struct 1)
-(define %tc7-symbol 5)
-(define %tc7-variable 7)
-(define %tc7-vector 13)
-(define %tc7-wvect 15)
-(define %tc7-string 21)
-(define %tc7-number 23)
-(define %tc7-hashtable 29)
-(define %tc7-pointer 31)
-(define %tc7-fluid 37)
-(define %tc7-stringbuf 39)
-(define %tc7-dynamic-state 45)
-(define %tc7-frame 47)
-(define %tc7-keyword 53)
-(define %tc7-program 69)
-(define %tc7-vm-continuation 71)
-(define %tc7-bytevector 77)
-(define %tc7-weak-set 85)
-(define %tc7-weak-table 87)
-(define %tc7-array 93)
-(define %tc7-bitvector 95)
-(define %tc7-port 125)
-(define %tc7-smob 127)
+(define %tc3-struct #x01)
+(define %tc7-symbol #x05)
+(define %tc7-variable #x07)
+(define %tc7-vector #x0d)
+(define %tc7-wvect #x0f)
+(define %tc7-string #x15)
+(define %tc7-number #x17)
+(define %tc7-hashtable #x1d)
+(define %tc7-pointer #x1f)
+(define %tc7-fluid #x25)
+(define %tc7-stringbuf #x27)
+(define %tc7-dynamic-state #x2d)
+(define %tc7-frame #x2f)
+(define %tc7-keyword #x35)
+(define %tc7-syntax #x3d)
+(define %tc7-program #x45)
+(define %tc7-vm-continuation #x47)
+(define %tc7-bytevector #x4d)
+(define %tc7-weak-set #x55)
+(define %tc7-weak-table #x57)
+(define %tc7-array #x5d)
+(define %tc7-bitvector #x5f)
+(define %tc7-port #x7d)
+(define %tc7-smob #x77)
 
 (define %tc16-bignum (+ %tc7-number (* 1 256)))
 (define %tc16-real (+ %tc7-number (* 2 256)))
@@ -306,21 +309,6 @@ the matching bits, possibly with bitwise operations to extract it from BITS."
             (format port " ~x>" (object-address struct)))))))
 
 (set-record-type-printer! <inferior-struct> print-inferior-struct)
-
-;; Fluids.
-(define-record-type <inferior-fluid>
-  (inferior-fluid number value)
-  inferior-fluid?
-  (number inferior-fluid-number)
-  (value  inferior-fluid-value))
-
-(set-record-type-printer! <inferior-fluid>
-                          (lambda (fluid port)
-                            (match fluid
-                              (($ <inferior-fluid> number)
-                               (format port "#<fluid ~a ~x>"
-                                       number
-                                       (object-address fluid))))))
 
 ;; Object type to represent complex objects from the inferior process that
 ;; cannot be really converted to usable Scheme objects in the current
@@ -440,7 +428,7 @@ using BACKEND."
                                                 ('big "UTF-32BE")))))
           (((_ & #x7f = %tc7-bytevector) len address)
            (let ((bv-port (memory-port backend address len)))
-             (get-bytevector-all bv-port)))
+             (get-bytevector-n bv-port len)))
           ((((len << 8) || %tc7-vector))
            (let ((words  (get-bytevector-n port (* len %word-size)))
                  (vector (make-vector len)))
@@ -455,8 +443,8 @@ using BACKEND."
                vector)))
           (((_ & #x7f = %tc7-wvect))
            (inferior-object 'weak-vector address))   ; TODO: show elements
-          ((((n << 8) || %tc7-fluid) init-value)
-           (inferior-fluid n #f))                    ; TODO: show current value
+          (((_ & #x7f = %tc7-fluid) init-value)
+           (inferior-object 'fluid address))
           (((_ & #x7f = %tc7-dynamic-state))
            (inferior-object 'dynamic-state address))
           ((((flags+type << 8) || %tc7-port))
@@ -478,6 +466,10 @@ using BACKEND."
            (make-pointer address))
           (((_ & #x7f = %tc7-keyword) symbol)
            (symbol->keyword (cell->object symbol backend)))
+          (((_ & #x7f = %tc7-syntax) expression wrap module)
+           (make-syntax (cell->object expression backend)
+                        (cell->object wrap backend)
+                        (cell->object module backend)))
           (((_ & #x7f = %tc7-vm-continuation))
            (inferior-object 'vm-continuation address))
           (((_ & #x7f = %tc7-weak-set))

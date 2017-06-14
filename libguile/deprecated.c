@@ -26,6 +26,9 @@
 
 #define SCM_BUILDING_DEPRECATED_CODE
 
+#include <sys/types.h>
+#include <unistd.h>
+
 #include "libguile/_scm.h"
 #include "libguile/deprecation.h"
 
@@ -202,7 +205,6 @@ scm_init_deprecated_goops (void)
   scm_class_output_port = scm_variable_ref (scm_c_lookup ("<output-port>"));
   scm_class_input_output_port = scm_variable_ref (scm_c_lookup ("<input-output-port>"));
 
-  scm_port_class = scm_i_port_class;
   scm_smob_class = scm_i_smob_class;
 }
 
@@ -487,10 +489,480 @@ scm_slot_exists_using_class_p (SCM class, SCM obj, SCM slot_name)
 
 
 
+#define FETCH_STORE(fet,mem,sto)                        \
+  do {                                                  \
+    scm_i_scm_pthread_mutex_lock (&scm_i_misc_mutex);   \
+    (fet) = (mem);                                      \
+    (mem) = (sto);                                      \
+    scm_i_pthread_mutex_unlock (&scm_i_misc_mutex);     \
+  } while (0)
+
+static scm_t_bits scm_tc16_arbiter;
+
+
+#define SCM_LOCK_VAL         (scm_tc16_arbiter | (1L << 16))
+#define SCM_UNLOCK_VAL       scm_tc16_arbiter
+#define SCM_ARB_LOCKED(arb)  ((SCM_CELL_WORD_0 (arb)) & (1L << 16))
+
+
+static int 
+arbiter_print (SCM exp, SCM port, scm_print_state *pstate)
+{
+  scm_puts ("#<arbiter ", port);
+  if (SCM_ARB_LOCKED (exp))
+    scm_puts ("locked ", port);
+  scm_iprin1 (SCM_PACK (SCM_SMOB_DATA (exp)), port, pstate);
+  scm_putc ('>', port);
+  return !0;
+}
+
+SCM_DEFINE (scm_make_arbiter, "make-arbiter", 1, 0, 0, 
+	    (SCM name),
+	    "Return an arbiter object, initially unlocked.  Currently\n"
+	    "@var{name} is only used for diagnostic output.")
+#define FUNC_NAME s_scm_make_arbiter
+{
+  scm_c_issue_deprecation_warning
+    ("Arbiters are deprecated.  "
+     "Use mutexes or atomic variables instead.");
+
+  SCM_RETURN_NEWSMOB (scm_tc16_arbiter, SCM_UNPACK (name));
+}
+#undef FUNC_NAME
+
+
+/* The atomic FETCH_STORE here is so two threads can't both see the arbiter
+   unlocked and return #t.  The arbiter itself wouldn't be corrupted by
+   this, but two threads both getting #t would be contrary to the intended
+   semantics.  */
+
+SCM_DEFINE (scm_try_arbiter, "try-arbiter", 1, 0, 0, 
+	    (SCM arb),
+	    "If @var{arb} is unlocked, then lock it and return @code{#t}.\n"
+	    "If @var{arb} is already locked, then do nothing and return\n"
+	    "@code{#f}.")
+#define FUNC_NAME s_scm_try_arbiter
+{
+  scm_t_bits old;
+  scm_t_bits *loc;
+  SCM_VALIDATE_SMOB (1, arb, arbiter);
+  loc = (scm_t_bits*)SCM_SMOB_OBJECT_N_LOC (arb, 0);
+  FETCH_STORE (old, *loc, SCM_LOCK_VAL);
+  return scm_from_bool (old == SCM_UNLOCK_VAL);
+}
+#undef FUNC_NAME
+
+
+/* The atomic FETCH_STORE here is so two threads can't both see the arbiter
+   locked and return #t.  The arbiter itself wouldn't be corrupted by this,
+   but we don't want two threads both thinking they were the unlocker.  The
+   intended usage is for the code which locked to be responsible for
+   unlocking, but we guarantee the return value even if multiple threads
+   compete.  */
+
+SCM_DEFINE (scm_release_arbiter, "release-arbiter", 1, 0, 0,
+	    (SCM arb),
+	    "If @var{arb} is locked, then unlock it and return @code{#t}.\n"
+	    "If @var{arb} is already unlocked, then do nothing and return\n"
+	    "@code{#f}.\n"
+	    "\n"
+	    "Typical usage is for the thread which locked an arbiter to\n"
+	    "later release it, but that's not required, any thread can\n"
+	    "release it.")
+#define FUNC_NAME s_scm_release_arbiter
+{
+  scm_t_bits old;
+  scm_t_bits *loc;
+  SCM_VALIDATE_SMOB (1, arb, arbiter);
+  loc = (scm_t_bits*)SCM_SMOB_OBJECT_N_LOC (arb, 0);
+  FETCH_STORE (old, *loc, SCM_UNLOCK_VAL);
+  return scm_from_bool (old == SCM_LOCK_VAL);
+}
+#undef FUNC_NAME
+
+
+
+
+/* User asyncs. */
+
+static scm_t_bits tc16_async;
+
+/* cmm: this has SCM_ prefix because SCM_MAKE_VALIDATE expects it.
+   this is ugly.  */
+#define SCM_ASYNCP(X)		SCM_TYP16_PREDICATE (tc16_async, X)
+#define VALIDATE_ASYNC(pos, a)	SCM_MAKE_VALIDATE_MSG(pos, a, ASYNCP, "user async")
+
+#define ASYNC_GOT_IT(X)        (SCM_SMOB_FLAGS (X))
+#define SET_ASYNC_GOT_IT(X, V) (SCM_SET_SMOB_FLAGS ((X), ((V))))
+#define ASYNC_THUNK(X)         SCM_SMOB_OBJECT_1 (X)
+
+
+SCM_DEFINE (scm_async, "async", 1, 0, 0,
+	    (SCM thunk),
+	    "Create a new async for the procedure @var{thunk}.")
+#define FUNC_NAME s_scm_async
+{
+  scm_c_issue_deprecation_warning
+    ("\"User asyncs\" are deprecated.  Use closures instead.");
+
+  SCM_RETURN_NEWSMOB (tc16_async, SCM_UNPACK (thunk));
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_async_mark, "async-mark", 1, 0, 0,
+            (SCM a),
+	    "Mark the async @var{a} for future execution.")
+#define FUNC_NAME s_scm_async_mark
+{
+  VALIDATE_ASYNC (1, a);
+  SET_ASYNC_GOT_IT (a, 1);
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_run_asyncs, "run-asyncs", 1, 0, 0,
+	    (SCM list_of_a),
+	    "Execute all thunks from the asyncs of the list @var{list_of_a}.")
+#define FUNC_NAME s_scm_run_asyncs
+{
+  while (! SCM_NULL_OR_NIL_P (list_of_a))
+    {
+      SCM a;
+      SCM_VALIDATE_CONS (1, list_of_a);
+      a = SCM_CAR (list_of_a);
+      VALIDATE_ASYNC (SCM_ARG1, a);
+      if (ASYNC_GOT_IT (a))
+	{
+	  SET_ASYNC_GOT_IT (a, 0);
+	  scm_call_0 (ASYNC_THUNK (a));
+	}
+      list_of_a = SCM_CDR (list_of_a);
+    }
+  return SCM_BOOL_T;
+}
+#undef FUNC_NAME
+
+
+static scm_i_pthread_mutex_t critical_section_mutex;
+static SCM dynwind_critical_section_mutex;
+
+void
+scm_critical_section_start (void)
+{
+  scm_c_issue_deprecation_warning
+    ("Critical sections are deprecated.  Instead use dynwinds and "
+     "\"scm_dynwind_pthread_mutex_lock\" together with "
+     "\"scm_dynwind_block_asyncs\" if appropriate.");
+
+  scm_i_pthread_mutex_lock (&critical_section_mutex);
+  SCM_I_CURRENT_THREAD->block_asyncs++;
+}
+
+void
+scm_critical_section_end (void)
+{
+  SCM_I_CURRENT_THREAD->block_asyncs--;
+  scm_i_pthread_mutex_unlock (&critical_section_mutex);
+  scm_async_tick ();
+}
+
+void
+scm_dynwind_critical_section (SCM mutex)
+{
+  scm_c_issue_deprecation_warning
+    ("Critical sections are deprecated.  Instead use dynwinds and "
+     "\"scm_dynwind_pthread_mutex_lock\" together with "
+     "\"scm_dynwind_block_asyncs\" if appropriate.");
+
+  if (scm_is_false (mutex))
+    mutex = dynwind_critical_section_mutex;
+  scm_dynwind_lock_mutex (mutex);
+  scm_dynwind_block_asyncs ();
+}
+
+
+
+
+SCM
+scm_make_mutex_with_flags (SCM flags)
+{
+  SCM kind = SCM_UNDEFINED;
+
+  scm_c_issue_deprecation_warning
+    ("'scm_make_mutex_with_flags' is deprecated.  "
+     "Use 'scm_make_mutex_with_kind' instead.");
+
+  if (!scm_is_null (flags))
+    {
+      if (!scm_is_null (scm_cdr (flags)))
+	scm_misc_error (NULL, "too many mutex options: ~a", scm_list_1 (flags));
+      kind = scm_car (flags);
+    }
+
+  return scm_make_mutex_with_kind (kind);
+}
+
+SCM
+scm_lock_mutex_timed (SCM m, SCM timeout, SCM owner)
+{
+  scm_c_issue_deprecation_warning
+    ("'scm_lock_mutex_timed' is deprecated.  "
+     "Use 'scm_timed_lock_mutex' instead.");
+
+  if (!SCM_UNBNDP (owner) && !scm_is_false (owner))
+    scm_c_issue_deprecation_warning
+      ("The 'owner' argument to 'scm_lock_mutex_timed' is deprecated.  "
+       "Use SRFI-18 directly if you need this concept.");
+
+  return scm_timed_lock_mutex (m, timeout);
+}
+
+SCM
+scm_unlock_mutex_timed (SCM mx, SCM cond, SCM timeout)
+{
+  scm_c_issue_deprecation_warning
+    ("'scm_unlock_mutex_timed' is deprecated.  "
+     "Use just plain old 'scm_unlock_mutex' instead, or otherwise "
+     "'scm_wait_condition_variable' if you need to.");
+
+  if (!SCM_UNBNDP (cond) &&
+      scm_is_false (scm_timed_wait_condition_variable (cond, mx, timeout)))
+    return SCM_BOOL_F;
+
+  return scm_unlock_mutex (mx);
+}
+
+
+
+SCM
+scm_from_contiguous_array (SCM bounds, const SCM *elts, size_t len)
+#define FUNC_NAME "scm_from_contiguous_array"
+{
+  size_t k, rlen = 1;
+  scm_t_array_dim *s;
+  SCM ra;
+  scm_t_array_handle h;
+
+  scm_c_issue_deprecation_warning
+    ("`scm_from_contiguous_array' is deprecated. Use make-array and array-copy!\n"
+     "instead.\n");
+  
+  ra = scm_i_shap2ra (bounds);
+  SCM_SET_ARRAY_CONTIGUOUS_FLAG (ra);
+  s = SCM_I_ARRAY_DIMS (ra);
+  k = SCM_I_ARRAY_NDIM (ra);
+
+  while (k--)
+    {
+      s[k].inc = rlen;
+      SCM_ASSERT_RANGE (1, bounds, s[k].lbnd <= s[k].ubnd + 1);
+      rlen = (s[k].ubnd - s[k].lbnd + 1) * s[k].inc;
+    }
+  if (rlen != len)
+    SCM_MISC_ERROR ("element length and dimensions do not match", SCM_EOL);
+
+  SCM_I_ARRAY_SET_V (ra, scm_c_make_vector (rlen, SCM_UNDEFINED));
+  scm_array_get_handle (ra, &h);
+  memcpy (h.writable_elements, elts, rlen * sizeof(SCM));
+  scm_array_handle_release (&h);
+
+  if (1 == SCM_I_ARRAY_NDIM (ra) && 0 == SCM_I_ARRAY_BASE (ra))
+    if (0 == s->lbnd)
+      return SCM_I_ARRAY_V (ra);
+  return ra;
+}
+#undef FUNC_NAME
+
+
+
+/* {call-with-dynamic-root}
+ *
+ * Suspending the current thread to evaluate a thunk on the
+ * same C stack but under a new root.
+ *
+ * Calls to call-with-dynamic-root return exactly once (unless
+ * the process is somehow exitted).  */
+
+/* cwdr fills out both of these structures, and then passes a pointer
+   to them through scm_internal_catch to the cwdr_body and
+   cwdr_handler functions, to tell them how to behave and to get
+   information back from them.
+
+   A cwdr is a lot like a catch, except there is no tag (all
+   exceptions are caught), and the body procedure takes the arguments
+   passed to cwdr as A1 and ARGS.  The handler is also special since
+   it is not directly run from scm_internal_catch.  It is executed
+   outside the new dynamic root. */
+
+struct cwdr_body_data {
+  /* Arguments to pass to the cwdr body function.  */
+  SCM a1, args;
+
+  /* Scheme procedure to use as body of cwdr.  */
+  SCM body_proc;
+};
+
+struct cwdr_handler_data {
+  /* Do we need to run the handler? */
+  int run_handler;
+
+  /* The tag and args to pass it. */
+  SCM tag, args;
+};
+
+
+/* Invoke the body of a cwdr, assuming that the throw handler has
+   already been set up.  DATA points to a struct set up by cwdr that
+   says what proc to call, and what args to apply it to.
+
+   With a little thought, we could replace this with scm_body_thunk,
+   but I don't want to mess with that at the moment.  */
+static SCM
+cwdr_body (void *data)
+{
+  struct cwdr_body_data *c = (struct cwdr_body_data *) data;
+
+  return scm_apply (c->body_proc, c->a1, c->args);
+}
+
+/* Record the fact that the body of the cwdr has thrown.  Record
+   enough information to invoke the handler later when the dynamic
+   root has been deestablished.  */
+
+static SCM
+cwdr_handler (void *data, SCM tag, SCM args)
+{
+  struct cwdr_handler_data *c = (struct cwdr_handler_data *) data;
+
+  c->run_handler = 1;
+  c->tag = tag;
+  c->args = args;
+  return SCM_UNSPECIFIED;
+}
+
+SCM 
+scm_internal_cwdr (scm_t_catch_body body, void *body_data,
+		   scm_t_catch_handler handler, void *handler_data,
+		   SCM_STACKITEM *stack_start)
+{
+  struct cwdr_handler_data my_handler_data;
+  scm_t_dynstack *dynstack = &SCM_I_CURRENT_THREAD->dynstack;
+  SCM answer;
+  scm_t_dynstack *old_dynstack;
+
+  /* Exit caller's dynamic state.
+   */
+  old_dynstack = scm_dynstack_capture_all (dynstack);
+  scm_dynstack_unwind (dynstack, SCM_DYNSTACK_FIRST (dynstack));
+
+  scm_dynwind_begin (SCM_F_DYNWIND_REWINDABLE);
+  scm_dynwind_current_dynamic_state (scm_current_dynamic_state ());
+
+  my_handler_data.run_handler = 0;
+  answer = scm_i_with_continuation_barrier (body, body_data,
+					    cwdr_handler, &my_handler_data,
+					    NULL, NULL);
+
+  scm_dynwind_end ();
+
+  /* Enter caller's dynamic state.
+   */
+  scm_dynstack_wind (dynstack, SCM_DYNSTACK_FIRST (old_dynstack));
+
+  /* Now run the real handler iff the body did a throw. */
+  if (my_handler_data.run_handler)
+    return handler (handler_data, my_handler_data.tag, my_handler_data.args);
+  else
+    return answer;
+}
+
+/* The original CWDR for invoking Scheme code with a Scheme handler. */
+
+static SCM 
+cwdr (SCM proc, SCM a1, SCM args, SCM handler, SCM_STACKITEM *stack_start)
+{
+  struct cwdr_body_data c;
+  
+  c.a1 = a1;
+  c.args = args;
+  c.body_proc = proc;
+
+  return scm_internal_cwdr (cwdr_body, &c,
+			    scm_handle_by_proc, &handler,
+			    stack_start);
+}
+
+SCM_DEFINE (scm_call_with_dynamic_root, "call-with-dynamic-root", 2, 0, 0,
+           (SCM thunk, SCM handler),
+	    "Call @var{thunk} with a new dynamic state and within\n"
+	    "a continuation barrier.  The @var{handler} catches all\n"
+	    "otherwise uncaught throws and executes within the same\n"
+	    "dynamic context as @var{thunk}.")
+#define FUNC_NAME s_scm_call_with_dynamic_root
+{
+  SCM_STACKITEM stack_place;
+  scm_c_issue_deprecation_warning
+    ("call-with-dynamic-root is deprecated.  There is no replacement.");
+  return cwdr (thunk, SCM_EOL, SCM_EOL, handler, &stack_place);
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_dynamic_root, "dynamic-root", 0, 0, 0, 
+           (),
+	    "Return an object representing the current dynamic root.\n\n"
+	    "These objects are only useful for comparison using @code{eq?}.\n")
+#define FUNC_NAME s_scm_dynamic_root
+{
+  scm_c_issue_deprecation_warning
+    ("dynamic-root is deprecated.  There is no replacement.");
+  return SCM_I_CURRENT_THREAD->continuation_root;
+}
+#undef FUNC_NAME
+
+SCM
+scm_apply_with_dynamic_root (SCM proc, SCM a1, SCM args, SCM handler)
+{
+  SCM_STACKITEM stack_place;
+  scm_c_issue_deprecation_warning
+    ("scm_apply_with_dynamic_root is deprecated.  There is no replacement.");
+  return cwdr (proc, a1, args, handler, &stack_place);
+}
+
+
+
+
+SCM
+scm_make_dynamic_state (SCM parent)
+{
+  scm_c_issue_deprecation_warning
+    ("scm_make_dynamic_state is deprecated.  Dynamic states are "
+     "now immutable; just use the parent directly.");
+  return SCM_UNBNDP (parent) ? scm_current_dynamic_state () : parent;
+}
+
+
+
+
+int
+SCM_FDES_RANDOM_P (int fdes)
+{
+  scm_c_issue_deprecation_warning
+    ("SCM_FDES_RANDOM_P is deprecated.  Use lseek (fd, 0, SEEK_CUR).");
+
+  return (lseek (fdes, 0, SEEK_CUR) == -1) ? 0 : 1;
+}
+
+
 
 void
 scm_i_init_deprecated ()
 {
+  scm_tc16_arbiter = scm_make_smob_type ("arbiter", 0);
+  scm_set_smob_print (scm_tc16_arbiter, arbiter_print);
+  tc16_async = scm_make_smob_type ("async", 0);
+  scm_i_pthread_mutex_init (&critical_section_mutex,
+			    scm_i_pthread_mutexattr_recursive);
+  dynwind_critical_section_mutex = scm_make_recursive_mutex ();
 #include "libguile/deprecated.x"
 }
 

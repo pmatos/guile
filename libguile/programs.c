@@ -1,4 +1,4 @@
-/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014, 2017 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include "_scm.h"
+#include "instructions.h"
 #include "modules.h"
 #include "programs.h"
 #include "procprop.h" /* scm_sym_name */
@@ -103,24 +104,24 @@ scm_i_program_print (SCM program, SCM port, scm_print_state *pstate)
   if (SCM_PROGRAM_IS_CONTINUATION (program))
     {
       /* twingliness */
-      scm_puts_unlocked ("#<continuation ", port);
+      scm_puts ("#<continuation ", port);
       scm_uintprint (SCM_UNPACK (program), 16, port);
-      scm_putc_unlocked ('>', port);
+      scm_putc ('>', port);
     }
   else if (SCM_PROGRAM_IS_PARTIAL_CONTINUATION (program))
     {
       /* twingliness */
-      scm_puts_unlocked ("#<partial-continuation ", port);
+      scm_puts ("#<partial-continuation ", port);
       scm_uintprint (SCM_UNPACK (program), 16, port);
-      scm_putc_unlocked ('>', port);
+      scm_putc ('>', port);
     }
   else if (scm_is_false (write_program) || print_error)
     {
-      scm_puts_unlocked ("#<program ", port);
+      scm_puts ("#<program ", port);
       scm_uintprint (SCM_UNPACK (program), 16, port);
-      scm_putc_unlocked (' ', port);
+      scm_putc (' ', port);
       scm_uintprint ((scm_t_uintptr) SCM_PROGRAM_CODE (program), 16, port);
-      scm_putc_unlocked ('>', port);
+      scm_putc ('>', port);
     }
   else
     {
@@ -144,19 +145,21 @@ SCM_DEFINE (scm_program_p, "program?", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_primitive_p, "primitive?", 1, 0, 0,
-	    (SCM obj),
+SCM_DEFINE (scm_primitive_code_p, "primitive-code?", 1, 0, 0,
+	    (SCM code),
 	    "")
-#define FUNC_NAME s_scm_primitive_p
+#define FUNC_NAME s_scm_primitive_code_p
 {
-  return scm_from_bool (SCM_PRIMITIVE_P (obj));
+  const scm_t_uint32 * ptr = (const scm_t_uint32 *) scm_to_uintptr_t (code);
+
+  return scm_from_bool (scm_i_primitive_code_p (ptr));
 }
 #undef FUNC_NAME
 
 SCM_DEFINE (scm_primitive_call_ip, "primitive-call-ip", 1, 0, 0,
 	    (SCM prim),
 	    "")
-#define FUNC_NAME s_scm_primitive_p
+#define FUNC_NAME s_scm_primitive_call_ip
 {
   SCM_MAKE_VALIDATE (1, prim, PRIMITIVE_P);
 
@@ -234,25 +237,75 @@ SCM_DEFINE (scm_program_free_variable_set_x, "program-free-variable-set!", 3, 0,
 }
 #undef FUNC_NAME
 
+/* It's hacky, but it manages to cover all of the non-keyword cases.  */
+static int
+try_parse_arity (SCM program, int *req, int *opt, int *rest)
+{
+  scm_t_uint32 *code = SCM_PROGRAM_CODE (program);
+  scm_t_uint32 slots, min;
+
+  switch (code[0] & 0xff) {
+  case scm_op_assert_nargs_ee:
+    slots = code[0] >> 8;
+    *req = slots - 1;
+    *opt = 0;
+    *rest = 0;
+    return 1;
+  case scm_op_assert_nargs_ee_locals:
+    slots = (code[0] >> 8) & 0xfff;
+    *req = slots - 1;
+    *opt = 0;
+    *rest = 0;
+    return 1;
+  case scm_op_assert_nargs_le:
+    slots = code[0] >> 8;
+    *req = 0;
+    *opt = slots - 1;
+    *rest = 0;
+    return 1;
+  case scm_op_bind_rest:
+    slots = code[0] >> 8;
+    *req = 0;
+    *opt = slots - 1;
+    *rest = 1;
+    return 1;
+  case scm_op_assert_nargs_ge:
+    min = code[0] >> 8;
+    switch (code[1] & 0xff) {
+    case scm_op_assert_nargs_le:
+      slots = code[1] >> 8;
+      *req = min - 1;
+      *opt = slots - 1 - *req;
+      *rest = 0;
+      return 1;
+    case scm_op_bind_rest:
+      slots = code[1] >> 8;
+      *req = min - 1;
+      *opt = slots - min;
+      *rest = 1;
+      return 1;
+    default:
+      return 0;
+    }
+  case scm_op_continuation_call:
+  case scm_op_compose_continuation:
+    *req = 0;
+    *opt = 0;
+    *rest = 1;
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 int
 scm_i_program_arity (SCM program, int *req, int *opt, int *rest)
 {
   static SCM program_minimum_arity = SCM_BOOL_F;
   SCM l;
 
-  if (SCM_PRIMITIVE_P (program))
-    return scm_i_primitive_arity (program, req, opt, rest);
-
-  if (SCM_PROGRAM_IS_FOREIGN (program))
-    return scm_i_foreign_arity (program, req, opt, rest);
-
-  if (SCM_PROGRAM_IS_CONTINUATION (program)
-      || SCM_PROGRAM_IS_PARTIAL_CONTINUATION (program))
-    {
-      *req = *opt = 0;
-      *rest = 1;
-      return 1;
-    }
+  if (try_parse_arity (program, req, opt, rest))
+    return 1;
 
   if (scm_is_false (program_minimum_arity) && scm_module_system_booted_p)
     program_minimum_arity =

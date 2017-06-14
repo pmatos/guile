@@ -18,62 +18,62 @@
 
 ;;; Commentary:
 ;;;
-;;; A pass that prunes successors of expressions that bail out.
+;;; A pass that replaces free references to recursive functions with
+;;; bound references.
 ;;;
 ;;; Code:
 
 (define-module (language cps self-references)
   #:use-module (ice-9 match)
+  #:use-module ((srfi srfi-1) #:select (fold))
   #:use-module (language cps)
+  #:use-module (language cps utils)
+  #:use-module (language cps intmap)
+  #:use-module (language cps intset)
   #:export (resolve-self-references))
 
-(define* (resolve-self-references fun #:optional (env '()))
+(define* (resolve-self-references cps #:optional (label 0) (env empty-intmap))
   (define (subst var)
-    (or (assq-ref env var) var))
+    (intmap-ref env var (lambda (var) var)))
 
-  (define (visit-cont cont)
-    (rewrite-cps-cont cont
-      (($ $cont label ($ $kargs names vars body))
-       (label ($kargs names vars ,(visit-term body))))
-      (($ $cont label ($ $kfun src meta self tail clause))
-       (label ($kfun src meta self ,tail
-                ,(and clause (visit-cont clause)))))
-      (($ $cont label ($ $kclause arity body alternate))
-       (label ($kclause ,arity ,(visit-cont body)
-                        ,(and alternate (visit-cont alternate)))))
-      (_ ,cont)))
+  (define (rename-exp label cps names vars k src exp)
+    (let ((exp (rewrite-exp exp
+                 ((or ($ $const) ($ $prim)) ,exp)
+                 (($ $call proc args)
+                  ($call (subst proc) ,(map subst args)))
+                 (($ $callk k proc args)
+                  ($callk k (subst proc) ,(map subst args)))
+                 (($ $primcall name args)
+                  ($primcall name ,(map subst args)))
+                 (($ $branch k ($ $values (arg)))
+                  ($branch k ($values ((subst arg)))))
+                 (($ $branch k ($ $primcall name args))
+                  ($branch k ($primcall name ,(map subst args))))
+                 (($ $values args)
+                  ($values ,(map subst args)))
+                 (($ $prompt escape? tag handler)
+                  ($prompt escape? (subst tag) handler)))))
+      (intmap-replace! cps label
+                       (build-cont
+                         ($kargs names vars ($continue k src ,exp))))))
 
-  (define (visit-term term)
-    (rewrite-cps-term term
-      (($ $letk conts body)
-       ($letk ,(map visit-cont conts)
-         ,(visit-term body)))
-      (($ $continue k src exp)
-       ($continue k src ,(visit-exp exp)))))
-
-  (define (visit-exp exp)
-    (rewrite-cps-exp exp
-      ((or ($ $const) ($ $prim)) ,exp)
-      (($ $fun body)
-       ($fun ,(resolve-self-references body env)))
-      (($ $rec names vars funs)
-       ($rec names vars (map visit-recursive-fun funs vars)))
-      (($ $call proc args)
-       ($call (subst proc) ,(map subst args)))
-      (($ $callk k proc args)
-       ($callk k (subst proc) ,(map subst args)))
-      (($ $primcall name args)
-       ($primcall name ,(map subst args)))
-      (($ $branch k exp)
-       ($branch k ,(visit-exp exp)))
-      (($ $values args)
-       ($values ,(map subst args)))
-      (($ $prompt escape? tag handler)
-       ($prompt escape? (subst tag) handler))))
-
-  (define (visit-recursive-fun fun var)
-    (rewrite-cps-exp fun
-      (($ $fun (and cont ($ $cont _ ($ $kfun src meta self))))
-       ($fun ,(resolve-self-references cont (acons var self env))))))
-
-  (visit-cont fun))
+  (define (visit-exp cps label names vars k src exp)
+    (match exp
+      (($ $fun label)
+       (resolve-self-references cps label env))
+      (($ $rec names vars (($ $fun labels) ...))
+       (fold (lambda (label var cps)
+               (match (intmap-ref cps label)
+                 (($ $kfun src meta self)
+                  (resolve-self-references cps label
+                                           (intmap-add env var self)))))
+             cps labels vars))
+      (_ (rename-exp label cps names vars k src exp))))
+  
+  (intset-fold (lambda (label cps)
+                 (match (intmap-ref cps label)
+                   (($ $kargs names vars ($ $continue k src exp))
+                    (visit-exp cps label names vars k src exp))
+                   (_ cps)))
+               (compute-function-body cps label)
+               cps))

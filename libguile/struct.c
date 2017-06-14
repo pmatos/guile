@@ -936,22 +936,22 @@ scm_print_struct (SCM exp, SCM port, scm_print_state *pstate)
     {
       SCM vtable = SCM_STRUCT_VTABLE (exp);
       SCM name = scm_struct_vtable_name (vtable);
-      scm_puts_unlocked ("#<", port);
+      scm_puts ("#<", port);
       if (scm_is_true (name))
 	{
           scm_display (name, port);
-          scm_putc_unlocked (' ', port);
+          scm_putc (' ', port);
         }
       else
 	{
           if (SCM_VTABLE_FLAG_IS_SET (vtable, SCM_VTABLE_FLAG_VTABLE))
-            scm_puts_unlocked ("vtable:", port);
+            scm_puts ("vtable:", port);
           else
-            scm_puts_unlocked ("struct:", port);
+            scm_puts ("struct:", port);
           scm_uintprint (SCM_UNPACK (vtable), 16, port);
-          scm_putc_unlocked (' ', port);
+          scm_putc (' ', port);
           scm_write (SCM_VTABLE_LAYOUT (vtable), port);
-          scm_putc_unlocked (' ', port);
+          scm_putc (' ', port);
         }
       scm_uintprint (SCM_UNPACK (exp), 16, port);
       /* hackety hack */
@@ -959,19 +959,19 @@ scm_print_struct (SCM exp, SCM port, scm_print_state *pstate)
         {
           if (scm_is_true (SCM_STRUCT_PROCEDURE (exp)))
             {
-              scm_puts_unlocked (" proc: ", port);
+              scm_puts (" proc: ", port);
               if (scm_is_true (scm_procedure_p (SCM_STRUCT_PROCEDURE (exp))))
                 scm_write (SCM_STRUCT_PROCEDURE (exp), port);
               else
-                scm_puts_unlocked ("(not a procedure?)", port);
+                scm_puts ("(not a procedure?)", port);
             }
           if (SCM_STRUCT_SETTER_P (exp))
             {
-              scm_puts_unlocked (" setter: ", port);
+              scm_puts (" setter: ", port);
               scm_write (SCM_STRUCT_SETTER (exp), port);
             }
         }
-      scm_putc_unlocked ('>', port);
+      scm_putc ('>', port);
     }
 }
 
@@ -990,10 +990,10 @@ scm_init_struct ()
      OBJ once OBJ has undergone class redefinition.  */
   GC_REGISTER_DISPLACEMENT (2 * sizeof (scm_t_bits));
 
-  required_vtable_fields = scm_from_locale_string (SCM_VTABLE_BASE_LAYOUT);
+  required_vtable_fields = scm_from_latin1_string (SCM_VTABLE_BASE_LAYOUT);
   scm_c_define ("standard-vtable-fields", required_vtable_fields);
-  required_applicable_fields = scm_from_locale_string (SCM_APPLICABLE_BASE_LAYOUT);
-  required_applicable_with_setter_fields = scm_from_locale_string (SCM_APPLICABLE_WITH_SETTER_BASE_LAYOUT);
+  required_applicable_fields = scm_from_latin1_string (SCM_APPLICABLE_BASE_LAYOUT);
+  required_applicable_with_setter_fields = scm_from_latin1_string (SCM_APPLICABLE_WITH_SETTER_BASE_LAYOUT);
 
   scm_standard_vtable_vtable =
     scm_i_make_vtable_vtable (required_vtable_fields);

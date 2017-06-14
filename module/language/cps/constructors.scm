@@ -25,80 +25,82 @@
 
 (define-module (language cps constructors)
   #:use-module (ice-9 match)
-  #:use-module (srfi srfi-26)
   #:use-module (language cps)
+  #:use-module (language cps utils)
+  #:use-module (language cps with-cps)
+  #:use-module (language cps intmap)
   #:export (inline-constructors))
 
-(define (inline-constructors* fun)
-  (define (visit-cont cont)
-    (rewrite-cps-cont cont
-      (($ $cont sym ($ $kargs names syms body))
-       (sym ($kargs names syms ,(visit-term body))))
-      (($ $cont sym ($ $kfun src meta self tail clause))
-       (sym ($kfun src meta self ,tail ,(and clause (visit-cont clause)))))
-      (($ $cont sym ($ $kclause arity body alternate))
-       (sym ($kclause ,arity ,(visit-cont body)
-                      ,(and alternate (visit-cont alternate)))))
-      (($ $cont)
-       ,cont)))
-  (define (visit-term term)
-    (rewrite-cps-term term
-      (($ $letk conts body)
-       ($letk ,(map visit-cont conts)
-         ,(visit-term body)))
-      (($ $continue k src ($ $primcall 'list args))
-       ,(let-fresh (kvalues) (val)
-          (build-cps-term
-            ($letk ((kvalues ($kargs ('val) (val)
-                               ($continue k src
-                                 ($primcall 'values (val))))))
-              ,(let lp ((args args) (k kvalues))
-                 (match args
-                   (()
-                    (build-cps-term
-                      ($continue k src ($const '()))))
-                   ((arg . args)
-                    (let-fresh (ktail) (tail)
-                      (build-cps-term
-                        ($letk ((ktail ($kargs ('tail) (tail)
-                                         ($continue k src
-                                           ($primcall 'cons (arg tail))))))
-                          ,(lp args ktail)))))))))))
-      (($ $continue k src ($ $primcall 'vector args))
-       ,(let-fresh (kalloc) (vec len init)
-          (define (initialize args n)
-            (match args
-              (()
-               (build-cps-term
-                 ($continue k src ($primcall 'values (vec)))))
-              ((arg . args)
-               (let-fresh (knext) (idx)
-                 (build-cps-term
-                   ($letk ((knext ($kargs () ()
-                                    ,(initialize args (1+ n)))))
-                     ($letconst (('idx idx n))
-                       ($continue knext src
-                         ($primcall 'vector-set! (vec idx arg))))))))))
-          (build-cps-term
-            ($letk ((kalloc ($kargs ('vec) (vec)
-                              ,(initialize args 0))))
-              ($letconst (('len len (length args))
-                          ('init init #f))
-                ($continue kalloc src
-                  ($primcall 'make-vector (len init))))))))
-      (($ $continue k src (and fun ($ $fun)))
-       ($continue k src ,(visit-fun fun)))
-      (($ $continue k src ($ $rec names syms funs))
-       ($continue k src ($rec names syms (map visit-fun funs))))
-      (($ $continue)
-       ,term)))
-  (define (visit-fun fun)
-    (rewrite-cps-exp fun
-      (($ $fun body)
-       ($fun ,(inline-constructors* body)))))
+(define (inline-list out k src args)
+  (define (build-list out args k)
+    (match args
+      (()
+       (with-cps out
+         (build-term ($continue k src ($const '())))))
+      ((arg . args)
+       (with-cps out
+         (letv tail)
+         (letk ktail ($kargs ('tail) (tail)
+                       ($continue k src
+                         ($primcall 'cons (arg tail)))))
+         ($ (build-list args ktail))))))
+  (with-cps out
+    (letv val)
+    (letk kvalues ($kargs ('val) (val)
+                    ($continue k src
+                      ($primcall 'values (val)))))
+    ($ (build-list args kvalues))))
 
-  (visit-cont fun))
+(define (inline-vector out k src args)
+  (define (initialize out vec args n)
+    (match args
+      (()
+       (with-cps out
+         (build-term ($continue k src ($primcall 'values (vec))))))
+      ((arg . args)
+       (with-cps out
+         (let$ next (initialize vec args (1+ n)))
+         (letk knext ($kargs () () ,next))
+         (letv u64)
+         (letk kunbox ($kargs ('idx) (u64)
+                        ($continue knext src
+                          ($primcall 'vector-set! (vec u64 arg)))))
+         ($ (with-cps-constants ((idx n))
+              (build-term ($continue kunbox src
+                            ($primcall 'scm->u64 (idx))))))))))
+  (with-cps out
+    (letv vec)
+    (let$ body (initialize vec args 0))
+    (letk kalloc ($kargs ('vec) (vec) ,body))
+    ($ (with-cps-constants ((len (length args))
+                            (init #f))
+         (letv u64)
+         (letk kunbox ($kargs ('len) (u64)
+                        ($continue kalloc src
+                          ($primcall 'make-vector (u64 init)))))
+         (build-term ($continue kunbox src
+                       ($primcall 'scm->u64 (len))))))))
 
-(define (inline-constructors fun)
-  (with-fresh-name-state fun
-    (inline-constructors* fun)))
+(define (find-constructor-inliner name)
+  (match name
+    ('list inline-list)
+    ('vector inline-vector)
+    (_ #f)))
+
+(define (inline-constructors conts)
+  (with-fresh-name-state conts
+    (persistent-intmap
+     (intmap-fold
+      (lambda (label cont out)
+        (match cont
+          (($ $kargs names vars ($ $continue k src ($ $primcall name args)))
+           (let ((inline (find-constructor-inliner name)))
+             (if inline
+                 (call-with-values (lambda () (inline out k src args))
+                   (lambda (out term)
+                     (intmap-replace! out label
+                                      (build-cont ($kargs names vars ,term)))))
+                 out)))
+          (_ out)))
+      conts
+      conts))))

@@ -1,6 +1,6 @@
 ;;; Guile VM specific syntaxes and utilities
 
-;; Copyright (C) 2001, 2009 Free Software Foundation, Inc
+;; Copyright (C) 2001, 2009, 2016 Free Software Foundation, Inc
 
 ;;; This library is free software; you can redistribute it and/or
 ;;; modify it under the terms of the GNU Lesser General Public
@@ -72,7 +72,7 @@
                            '()
                            (cons (car slots) (lp (cdr slots))))))
                (opts (list-tail slots (length reqs)))
-               (tail (gensym)))
+               (tail (module-gensym "defrec")))
           `(define (,(symbol-append 'make- stem) ,@reqs . ,tail)
              (let ,(map (lambda (o)
                           `(,(car o) (cond ((null? ,tail) ,(cadr o))
@@ -146,35 +146,7 @@
                    (car in)
                    out)))))))
 
-;; So, dear reader. It is pleasant indeed around this fire or at this
-;; cafe or in this room, is it not? I think so too.
-;;
-;; This macro used to generate code that looked like this:
-;;
-;;  `(((record-predicate ,record-type) ,r)
-;;    (let ,(map (lambda (slot)
-;;                 (if (pair? slot)
-;;                     `(,(car slot) ((record-accessor ,record-type ',(cadr slot)) ,r))
-;;                     `(,slot ((record-accessor ,record-type ',slot) ,r))))
-;;               slots)
-;;      ,@body)))))
-;;
-;; But this was a hot spot, so computing all those predicates and
-;; accessors all the time was getting expensive, so we did a terrible
-;; thing: we decided that since above we're already defining accessors
-;; and predicates with computed names, we might as well just rely on that fact here.
-;;
-;; It's a bit nasty, I agree. But it is fast.
-;;
-;;scheme@(guile-user)> (with-statprof #:hz 1000 #:full-stacks? #t (resolve-module '(oop goops)))%     cumulative   self             
-;; time   seconds     seconds      name
-;;   8.82      0.03      0.01  glil->assembly
-;;   8.82      0.01      0.01  record-type-fields
-;;   5.88      0.01      0.01  %compute-initargs
-;;   5.88      0.01      0.01  list-index
-
-
-;;; So ugly... but I am too ignorant to know how to make it better.
+;;; FIXME: Re-write uses of `record-case' to use `match' instead.
 (define-syntax record-case
   (lambda (x)
     (syntax-case x ()
@@ -243,8 +215,8 @@
 ;; code looks good.
 
 (define-macro (transform-record type-and-common record . clauses)
-  (let ((r (gensym))
-        (rtd (gensym))
+  (let ((r (module-gensym "rec"))
+        (rtd (module-gensym "rtd"))
         (type-stem (trim-brackets (car type-and-common))))
     (define (make-stem s)
       (symbol-append type-stem '- s))

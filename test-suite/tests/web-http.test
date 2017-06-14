@@ -1,6 +1,6 @@
-;;;; web-uri.test --- URI library          -*- mode: scheme; coding: utf-8; -*-
+;;;; web-http.test --- HTTP library        -*- mode: scheme; coding: utf-8; -*-
 ;;;;
-;;;; 	Copyright (C) 2010, 2011, 2014 Free Software Foundation, Inc.
+;;;; 	Copyright (C) 2010-2011, 2014-2017 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -20,6 +20,7 @@
 (define-module (test-suite web-http)
   #:use-module (web uri)
   #:use-module (web http)
+  #:use-module (rnrs bytevectors)
   #:use-module (rnrs io ports)
   #:use-module (ice-9 regex)
   #:use-module (ice-9 control)
@@ -38,13 +39,30 @@
                #t
                (error "unexpected exception" message args))))))))
 
-(define-syntax pass-if-parse
+(define-syntax pass-if-only-parse
   (syntax-rules ()
     ((_ sym str val)
      (pass-if (format #f "~a: ~s -> ~s" 'sym str val)
        (and (equal? (parse-header 'sym str)
                     val)
             (valid-header? 'sym val))))))
+
+(define-syntax-rule (pass-if-reparse sym val)
+  (pass-if-equal (format #f "~a: ~s reparse" 'sym val) val
+    (let ((str (call-with-output-string
+                 (lambda (port)
+                   (write-header 'sym val port)))))
+      (call-with-values (lambda () (read-header (open-input-string str)))
+        (lambda (sym* val*)
+          (unless (eq? 'sym sym*) (error "unexpected header"))
+          val*)))))
+
+(define-syntax pass-if-parse
+  (syntax-rules ()
+    ((_ sym str val)
+     (begin
+       (pass-if-only-parse sym str val)
+       (pass-if-reparse sym val)))))
 
 (define-syntax pass-if-round-trip
   (syntax-rules ()
@@ -132,32 +150,33 @@
 (with-test-prefix "read-request-line"
   (pass-if-read-request-line "GET / HTTP/1.1"
                              GET
-                             (build-uri 'http
-                                        #:path "/")
+                             (build-uri-reference
+                              #:path "/")
                              (1 . 1))
   (pass-if-read-request-line "GET http://www.w3.org/pub/WWW/TheProject.html HTTP/1.1"
                              GET
-                             (build-uri 'http
-                                        #:host "www.w3.org"
-                                        #:path "/pub/WWW/TheProject.html")
+                             (build-uri-reference
+                              #:scheme 'http
+                              #:host "www.w3.org"
+                              #:path "/pub/WWW/TheProject.html")
                              (1 . 1))
   (pass-if-read-request-line "GET /pub/WWW/TheProject.html HTTP/1.1"
                              GET
-                             (build-uri 'http
-                                        #:path "/pub/WWW/TheProject.html")
+                             (build-uri-reference
+                              #:path "/pub/WWW/TheProject.html")
                              (1 . 1))
   (pass-if-read-request-line "HEAD /etc/hosts?foo=bar HTTP/1.1"
                              HEAD
-                             (build-uri 'http
-                                        #:path "/etc/hosts"
-                                        #:query "foo=bar")
+                             (build-uri-reference
+                              #:path "/etc/hosts"
+                              #:query "foo=bar")
                              (1 . 1)))
 
 (with-test-prefix "write-request-line"
   (pass-if-write-request-line "GET / HTTP/1.1"
                               GET
-                              (build-uri 'http
-                                         #:path "/")
+                              (build-uri-reference
+                               #:path "/")
                               (1 . 1))
   ;;; FIXME: Test fails due to scheme, host always being removed.
   ;;; However, it should be supported to request these be present, and
@@ -170,8 +189,8 @@
   ;;                             (1 . 1))
   (pass-if-write-request-line "GET /pub/WWW/TheProject.html HTTP/1.1"
                               GET
-                              (build-uri 'http
-                                         #:path "/pub/WWW/TheProject.html")
+                              (build-uri-reference
+                               #:path "/pub/WWW/TheProject.html")
                               (1 . 1))
   (pass-if-write-request-line "GET /?foo HTTP/1.1"
                               GET
@@ -179,16 +198,25 @@
                               (1 . 1))
   (pass-if-write-request-line "HEAD /etc/hosts?foo=bar HTTP/1.1"
                               HEAD
-                              (build-uri 'http
-                                         #:path "/etc/hosts"
-                                         #:query "foo=bar")
+                              (build-uri-reference
+                               #:path "/etc/hosts"
+                               #:query "foo=bar")
                               (1 . 1)))
 
 (with-test-prefix "read-response-line"
+  (pass-if-exception "missing CR/LF"
+      `(bad-header . "")
+    (call-with-input-string "HTTP/1.1 200 Almost okay"
+      (lambda (port)
+        (read-response-line port))))
   (pass-if-read-response-line "HTTP/1.0 404 Not Found"
                               (1 . 0) 404 "Not Found")
   (pass-if-read-response-line "HTTP/1.1 200 OK"
-                              (1 . 1) 200 "OK"))
+                              (1 . 1) 200 "OK")
+
+  ;; Empty reason phrases are valid; see <http://bugs.gnu.org/22273>.
+  (pass-if-read-response-line "HTTP/1.1 302 "
+                              (1 . 1) 302 ""))
 
 (with-test-prefix "write-response-line"
   (pass-if-write-response-line "HTTP/1.0 404 Not Found"
@@ -226,6 +254,16 @@
   (pass-if-parse date "Wed, 7 Sep 2011 11:25:00 GMT"
                  (string->date "Wed, 7 Sep 2011 11:25:00 +0000"
                                "~a,~e ~b ~Y ~H:~M:~S ~z"))
+
+  ;; This is a non-conforming date (lack of leading zero for the hours)
+  ;; that some HTTP servers provide.  See <http://bugs.gnu.org/23421>.
+  (pass-if-parse date "Sun, 06 Nov 1994  8:49:37 GMT"
+                 (string->date "Sun, 6 Nov 1994 08:49:37 +0000"
+                               "~a,~e ~b ~Y ~H:~M:~S ~z"))
+  (pass-if-parse date "Sun, 6 Nov 1994  8:49:37 GMT"
+                 (string->date "Sun, 6 Nov 1994 08:49:37 +0000"
+                               "~a,~e ~b ~Y ~H:~M:~S ~z"))
+
   (pass-if-parse-error date "Tue, 15 Nov 1994 08:12:31 EST" date)
   (pass-if-any-error date "Tue, 15 Qux 1994 08:12:31 EST")
 
@@ -261,6 +299,12 @@
   (pass-if-parse content-length "010" 10)
   (pass-if-parse content-location "http://foo/"
                  (build-uri 'http #:host "foo" #:path "/"))
+  (pass-if-parse content-location "//foo/"
+                 (build-uri-reference #:host "foo" #:path "/"))
+  (pass-if-parse content-location "/etc/foo"
+                 (build-uri-reference #:path "/etc/foo"))
+  (pass-if-parse content-location "foo"
+                 (build-uri-reference #:path "foo"))
   (pass-if-parse content-range "bytes 10-20/*" '(bytes (10 . 20) *))
   (pass-if-parse content-range "bytes */*" '(bytes * *))
   (pass-if-parse content-range "bytes */30" '(bytes * 30))
@@ -311,6 +355,8 @@
                          "~a, ~d ~b ~Y ~H:~M:~S ~z"))
   (pass-if-parse if-none-match "\"xyzzy\", W/\"qux\""
                  '(("xyzzy" . #t) ("qux" . #f)))
+  (pass-if-parse if-none-match "xyzzy, W/\"qux\""
+                 '(("xyzzy" . #t) ("qux" . #f)))
   (pass-if-parse if-none-match "*" '*)
   (pass-if-parse if-range "\"foo\"" '("foo" . #t))
   (pass-if-parse if-range  "Tue, 15 Nov 1994 08:12:31 GMT"
@@ -331,6 +377,14 @@
   (pass-if-parse range "bytes=-20,-30" '(bytes (#f . 20) (#f . 30)))
   (pass-if-parse referer "http://foo/bar?baz"
                  (build-uri 'http #:host "foo" #:path "/bar" #:query "baz"))
+  (pass-if-parse referer "//foo/bar?baz"
+                 (build-uri-reference #:host "foo"
+                                      #:path "/bar"
+                                      #:query "baz"))
+  (pass-if-parse referer "/etc/foo"
+                 (build-uri-reference #:path "/etc/foo"))
+  (pass-if-parse referer "foo"
+                 (build-uri-reference #:path "foo"))
   (pass-if-parse te "trailers" '((trailers)))
   (pass-if-parse te "trailers,foo" '((trailers) (foo)))
   (pass-if-parse user-agent "guile" "guile"))
@@ -343,12 +397,13 @@
   (pass-if-parse age "30" 30)
   (pass-if-parse etag "\"foo\"" '("foo" . #t))
   (pass-if-parse etag "W/\"foo\"" '("foo" . #f))
+  (pass-if-parse etag "foo" '("foo" . #t))
   (pass-if-parse location "http://other-place"
                  (build-uri 'http #:host "other-place"))
-  (pass-if-parse location "#foo"
-                 (build-uri-reference #:fragment "foo"))
-  (pass-if-parse location "/#foo"
-                 (build-uri-reference #:path "/" #:fragment "foo"))
+  (pass-if-only-parse location "#foo"
+                      (build-uri-reference #:fragment "foo"))
+  (pass-if-only-parse location "/#foo"
+                      (build-uri-reference #:path "/" #:fragment "foo"))
   (pass-if-parse location "/foo"
                  (build-uri-reference #:path "/foo"))
   (pass-if-parse location "//server/foo"
@@ -368,18 +423,78 @@
 (with-test-prefix "chunked encoding"
   (let* ((s "5\r\nFirst\r\nA\r\n line\n Sec\r\n8\r\nond line\r\n0\r\n")
          (p (make-chunked-input-port (open-input-string s))))
-    (pass-if (equal? "First line\n Second line"
-                     (get-string-all p)))
-    (pass-if (port-eof? (make-chunked-input-port (open-input-string "0\r\n")))))
-  (pass-if
-      (equal? (call-with-output-string
-               (lambda (out-raw)
-                 (let ((out-chunked (make-chunked-output-port out-raw
-                                                              #:keep-alive? #t)))
-                   (display "First chunk" out-chunked)
-                   (force-output out-chunked)
-                   (display "Second chunk" out-chunked)
-                   (force-output out-chunked)
-                   (display "Third chunk" out-chunked)
-                   (close-port out-chunked))))
-              "b\r\nFirst chunk\r\nc\r\nSecond chunk\r\nb\r\nThird chunk\r\n0\r\n")))
+    (pass-if-equal
+        "First line\n Second line"
+        (get-string-all p))
+    (pass-if (port-eof? (make-chunked-input-port (open-input-string "0\r\n"))))
+
+    (pass-if-equal "reads chunks without buffering"
+        ;; Make sure the chunked input port does not read more than what
+        ;; the client asked.  See <http://bugs.gnu.org/19939>
+        `("First " "chunk." "Second " "chunk."
+          (1 1 1 6 6 1 1
+           1 1 1 7 6 1 1))
+      (let* ((str      "C\r\nFirst chunk.\r\nD\r\nSecond chunk.\r\n")
+             (requests '())
+             (read!    (let ((port (open-input-string str)))
+                         (lambda (bv index count)
+                           (set! requests (cons count requests))
+                           (let ((n (get-bytevector-n! port bv index
+                                                       count)))
+                             (if (eof-object? n) 0 n)))))
+             (input    (make-custom-binary-input-port "chunky" read!
+                                                      #f #f #f))
+             (port     (make-chunked-input-port input)))
+        (setvbuf input 'none)
+        (setvbuf port 'none)
+        (list (utf8->string (get-bytevector-n port 6))
+              (utf8->string (get-bytevector-n port 6))
+              (utf8->string (get-bytevector-n port 7))
+              (utf8->string (get-bytevector-n port 6))
+              (reverse requests))))
+
+    (pass-if-equal "reads across chunk boundaries"
+        ;; Same, but read across chunk boundaries.
+        `("First " "chunk.Second " "chunk."
+          (1 1 1 6 6 1 1
+           1 1 1 7 6 1 1))
+      (let* ((str      "C\r\nFirst chunk.\r\nD\r\nSecond chunk.\r\n")
+             (requests '())
+             (read!    (let ((port (open-input-string str)))
+                         (lambda (bv index count)
+                           (set! requests (cons count requests))
+                           (let ((n (get-bytevector-n! port bv index
+                                                       count)))
+                             (if (eof-object? n) 0 n)))))
+             (input    (make-custom-binary-input-port "chunky" read!
+                                                      #f #f #f))
+             (port     (make-chunked-input-port input)))
+        (setvbuf input 'none)
+        (setvbuf port 'none)
+        (list (utf8->string (get-bytevector-n port 6))
+              (utf8->string (get-bytevector-n port 13))
+              (utf8->string (get-bytevector-n port 6))
+              (reverse requests)))))
+
+  (pass-if-equal "EOF instead of chunk header"
+      "Only chunk."
+    ;; Omit the second chunk header, leading to a premature EOF.  This
+    ;; used to cause 'read-chunk-header' to throw to wrong-type-arg.
+    ;; See the backtrace at
+    ;; <http://debbugs.gnu.org/cgi/bugreport.cgi?bug=19976#5>.
+    (let* ((str  "B\r\nOnly chunk.")
+           (port (make-chunked-input-port (open-input-string str))))
+      (get-string-all port)))
+
+  (pass-if-equal
+      (call-with-output-string
+       (lambda (out-raw)
+         (let ((out-chunked (make-chunked-output-port out-raw
+                                                      #:keep-alive? #t)))
+           (display "First chunk" out-chunked)
+           (force-output out-chunked)
+           (display "Second chunk" out-chunked)
+           (force-output out-chunked)
+           (display "Third chunk" out-chunked)
+           (close-port out-chunked))))
+      "b\r\nFirst chunk\r\nc\r\nSecond chunk\r\nb\r\nThird chunk\r\n0\r\n"))

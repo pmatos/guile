@@ -36,11 +36,11 @@
 ;;; a minimum and a maximum.  The precise meaning of a range depends on
 ;;; the type.  For real numbers, the range indicates an inclusive lower
 ;;; and upper bound on the integer value of a type.  For vectors, the
-;;; range indicates the length of the vector.  The range is limited to a
-;;; signed 32-bit value, with the smallest and largest values indicating
-;;; -inf.0 and +inf.0, respectively.  For some types, like pairs, the
-;;; concept of "range" makes no sense.  In these cases we consider the
-;;; range to be -inf.0 to +inf.0.
+;;; range indicates the length of the vector.  The range is the union of
+;;; the signed and unsigned 64-bit ranges.  Additionally, the minimum
+;;; bound of a range may be -inf.0, and the maximum bound may be +inf.0.
+;;; For some types, like pairs, the concept of "range" makes no sense.
+;;; In these cases we consider the range to be -inf.0 to +inf.0.
 ;;;
 ;;; Types are represented as a bitfield.  Fewer bits means a more precise
 ;;; type.  Although normally only values that have a single type will
@@ -57,15 +57,16 @@
 ;;; determined to be the exact integer 0.  The second time, it is an
 ;;; exact integer in the range [0, 1]; the third, [0, 2]; and so on.
 ;;; This analysis will terminate, but only after the positive half of
-;;; the 32-bit range has been fully explored and we decide that the
+;;; the 64-bit range has been fully explored and we decide that the
 ;;; range of N is [0, +inf.0].  At the same time, we want to do range
 ;;; analysis and type analysis at the same time, as there are
 ;;; interactions between them, notably in the case of `sqrt' which
 ;;; returns a complex number if its argument cannot be proven to be
-;;; non-negative.  So what we do is, once the types reach a fixed point,
-;;; we cause control-flow joins that would expand the range of a value
-;;; to saturate that range towards positive or infinity (as
-;;; appropriate).
+;;; non-negative.  So what we do instead is to precisely propagate types
+;;; and ranges when propagating forward, but after the first backwards
+;;; branch is seen, we cause backward branches that would expand the
+;;; range of a value to saturate that range towards positive or negative
+;;; infinity (as appropriate).
 ;;;
 ;;; A naive approach to type analysis would build up a table that has
 ;;; entries for all variables at all program points, but this has
@@ -78,11 +79,12 @@
 (define-module (language cps types)
   #:use-module (ice-9 match)
   #:use-module (language cps)
-  #:use-module (language cps dfg)
+  #:use-module (language cps utils)
   #:use-module (language cps intmap)
+  #:use-module (language cps intset)
   #:use-module (rnrs bytevectors)
-  #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-11)
+  #:use-module ((system syntax internal) #:select (syntax?))
   #:export (;; Specific types.
             &exact-integer
             &flonum
@@ -111,10 +113,15 @@
             &bytevector
             &bitvector
             &array
-            &hash-table
+            &syntax
 
             ;; Union types.
             &number &real
+
+            ;; Untagged types.
+            &f64
+            &u64
+            &s64
 
             infer-types
             lookup-pre-type
@@ -163,7 +170,11 @@
   &bytevector
   &bitvector
   &array
-  &hash-table)
+  &syntax
+
+  &f64
+  &u64
+  &s64)
 
 (define-syntax &no-type (identifier-syntax 0))
 
@@ -171,9 +182,6 @@
   (identifier-syntax (logior &exact-integer &flonum &complex &fraction)))
 (define-syntax &real
   (identifier-syntax (logior &exact-integer &flonum &fraction)))
-
-(define-syntax *max-s32* (identifier-syntax (- (ash 1 31) 1)))
-(define-syntax *min-s32* (identifier-syntax (- 0 (ash 1 31))))
 
 ;; Versions of min and max that do not coerce exact numbers to become
 ;; inexact.
@@ -198,32 +206,50 @@
          (var (identifier? #'var)
               (datum->syntax #'var val)))))))
 
-(define-compile-time-value min-fixnum most-negative-fixnum)
-(define-compile-time-value max-fixnum most-positive-fixnum)
+(define-compile-time-value &s64-min (- #x8000000000000000))
+(define-compile-time-value &s64-max    #x7fffFFFFffffFFFF)
+(define-compile-time-value &u64-max    #xffffFFFFffffFFFF)
+
+(define-syntax &range-min (identifier-syntax &s64-min))
+(define-syntax &range-max (identifier-syntax &u64-max))
+
+;; This is a hack that takes advantage of knowing that
+;; most-positive-fixnum is the size of a word, but with two tag bits and
+;; one sign bit.  We also assume that the current common architectural
+;; restriction of a maximum 48-bit address space means that we won't see
+;; a size_t value above 2^48.
+(define *max-size-t*
+  (min (+ (ash most-positive-fixnum 3) #b111)
+       (1- (ash 1 48))))
+(define *max-codepoint* #x10ffff)
 
 (define-inlinable (make-unclamped-type-entry type min max)
   (vector type min max))
 (define-inlinable (type-entry-type tentry)
   (vector-ref tentry 0))
-(define-inlinable (type-entry-clamped-min tentry)
+(define-inlinable (type-entry-min tentry)
   (vector-ref tentry 1))
-(define-inlinable (type-entry-clamped-max tentry)
+(define-inlinable (type-entry-max tentry)
   (vector-ref tentry 2))
 
-(define-syntax-rule (clamp-range val)
+(define-inlinable (clamp-min val)
   (cond
-   ((< val min-fixnum) min-fixnum)
-   ((< max-fixnum val) max-fixnum)
+   ;; Fast path to avoid comparisons with bignums.
+   ((<= most-negative-fixnum val most-positive-fixnum) val)
+   ((< val &range-min) -inf.0)
+   ((< &range-max val) &range-max)
+   (else val)))
+
+(define-inlinable (clamp-max val)
+  (cond
+   ;; Fast path to avoid comparisons with bignums.
+   ((<= most-negative-fixnum val most-positive-fixnum) val)
+   ((< &range-max val) +inf.0)
+   ((< val &range-min) &range-min)
    (else val)))
 
 (define-inlinable (make-type-entry type min max)
-  (vector type (clamp-range min) (clamp-range max)))
-(define-inlinable (type-entry-min tentry)
-  (let ((min (type-entry-clamped-min tentry)))
-    (if (eq? min min-fixnum) -inf.0 min)))
-(define-inlinable (type-entry-max tentry)
-  (let ((max (type-entry-clamped-max tentry)))
-    (if (eq? max max-fixnum) +inf.0 max)))
+  (vector type (clamp-min min) (clamp-max max)))
 
 (define all-types-entry (make-type-entry &all-types -inf.0 +inf.0))
 
@@ -251,8 +277,29 @@
    ((type-entry<=? a b) b)
    (else (make-type-entry
           (logior (type-entry-type a) (type-entry-type b))
-          (min (type-entry-clamped-min a) (type-entry-clamped-min b))
-          (max (type-entry-clamped-max a) (type-entry-clamped-max b))))))
+          (min (type-entry-min a) (type-entry-min b))
+          (max (type-entry-max a) (type-entry-max b))))))
+
+(define (type-entry-saturating-union a b)
+  (cond
+   ((type-entry<=? b a) a)
+   (else
+    (make-type-entry
+     (logior (type-entry-type a) (type-entry-type b))
+     (let ((a-min (type-entry-min a))
+           (b-min (type-entry-min b)))
+       (cond
+        ((not (< b-min a-min)) a-min)
+        ((< 0 b-min) 0)
+        ((< &range-min b-min) &range-min)
+        (else -inf.0)))
+     (let ((a-max (type-entry-max a))
+           (b-max (type-entry-max b)))
+       (cond
+        ((not (> b-max a-max)) a-max)
+        ((> *max-size-t* b-max) *max-size-t*)
+        ((> &range-max b-max) &range-max)
+        (else +inf.0)))))))
 
 (define (type-entry-intersection a b)
   (cond
@@ -260,8 +307,8 @@
    ((type-entry<=? b a) b)
    (else (make-type-entry
           (logand (type-entry-type a) (type-entry-type b))
-          (max (type-entry-clamped-min a) (type-entry-clamped-min b))
-          (min (type-entry-clamped-max a) (type-entry-clamped-max b))))))
+          (max (type-entry-min a) (type-entry-min b))
+          (min (type-entry-max a) (type-entry-max b))))))
 
 (define (adjoin-var typeset var entry)
   (intmap-add typeset var entry type-entry-union))
@@ -302,6 +349,7 @@ minimum, and maximum."
    ((bytevector? val) (return &bytevector (bytevector-length val)))
    ((bitvector? val) (return &bitvector (bitvector-length val)))
    ((array? val) (return &array (array-rank val)))
+   ((syntax? val) (return &syntax 0))
    ((not (variable-bound? (make-variable val))) (return &unbound #f))
 
    (else (error "unhandled constant" val))))
@@ -320,6 +368,19 @@ minimum, and maximum."
 (define-type-helper &type)
 (define-type-helper &min)
 (define-type-helper &max)
+
+;; Accessors to use in type inferrers where you know that the values
+;; must be in some range for the computation to proceed (not throw an
+;; error).  Note that these accessors should be used even for &u64 and
+;; &s64 values, whose definitions you would think would be apparent
+;; already.  However it could be that the graph isn't sorted, so we see
+;; a use before a definition, in which case we need to clamp the generic
+;; limits to the &u64/&s64 range.
+(define-syntax-rule (&min/0 x) (max (&min x) 0))
+(define-syntax-rule (&max/u64 x) (min (&max x) &u64-max))
+(define-syntax-rule (&min/s64 x) (max (&min x) &s64-min))
+(define-syntax-rule (&max/s64 x) (min (&max x) &s64-max))
+(define-syntax-rule (&max/size x) (min (&max x) *max-size-t*))
 
 (define-syntax-rule (define-type-checker (name arg ...) body ...)
   (hashq-set!
@@ -464,7 +525,7 @@ minimum, and maximum."
           (max (min (&max a) (&max b))))
       (restrict! a type min max)
       (restrict! b type min max))))
-(define-type-inferrer-aliases eq? eqv? equal?)
+(define-type-inferrer-aliases eq? eqv?)
 
 (define-syntax-rule (define-simple-predicate-inferrer predicate type)
   (define-predicate-inferrer (predicate val true?)
@@ -499,7 +560,19 @@ minimum, and maximum."
   ((fluid-ref (&fluid 1)) &all-types)
   ((fluid-set! (&fluid 0 1) &all-types))
   ((push-fluid (&fluid 0 1) &all-types))
-  ((pop-fluid)))
+  ((pop-fluid))
+  ((push-dynamic-state &all-types))
+  ((pop-dynamic-state)))
+
+
+
+
+;;;
+;;; Threads.  We don't currently track threads as an object type.
+;;;
+
+(define-simple-types
+  ((current-thread) &all-types))
 
 
 
@@ -546,27 +619,28 @@ minimum, and maximum."
 
 ;; This max-vector-len computation is a hack.
 (define *max-vector-len* (ash most-positive-fixnum -5))
+(define-syntax-rule (&max/vector x) (min (&max x) *max-vector-len*))
 
-(define-simple-type-checker (make-vector (&exact-integer 0 *max-vector-len*)
+(define-simple-type-checker (make-vector (&u64 0 *max-vector-len*)
                                          &all-types))
 (define-type-inferrer (make-vector size init result)
-  (restrict! size &exact-integer 0 *max-vector-len*)
-  (define! result &vector (max (&min size) 0) (&max size)))
+  (restrict! size &u64 0 *max-vector-len*)
+  (define! result &vector (&min/0 size) (&max/vector size)))
 
 (define-type-checker (vector-ref v idx)
   (and (check-type v &vector 0 *max-vector-len*)
-       (check-type idx &exact-integer 0 (1- (&min v)))))
+       (check-type idx &u64 0 (1- (&min v)))))
 (define-type-inferrer (vector-ref v idx result)
-  (restrict! v &vector (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max v)))
+  (restrict! v &vector (1+ (&min/0 idx)) *max-vector-len*)
+  (restrict! idx &u64 0 (1- (&max/vector v)))
   (define! result &all-types -inf.0 +inf.0))
 
 (define-type-checker (vector-set! v idx val)
   (and (check-type v &vector 0 *max-vector-len*)
-       (check-type idx &exact-integer 0 (1- (&min v)))))
+       (check-type idx &u64 0 (1- (&min v)))))
 (define-type-inferrer (vector-set! v idx val)
-  (restrict! v &vector (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max v))))
+  (restrict! v &vector (1+ (&min/0 idx)) *max-vector-len*)
+  (restrict! idx &u64 0 (1- (&max/vector v))))
 
 (define-type-aliases make-vector make-vector/immediate)
 (define-type-aliases vector-ref vector-ref/immediate)
@@ -575,8 +649,7 @@ minimum, and maximum."
 (define-simple-type-checker (vector-length &vector))
 (define-type-inferrer (vector-length v result)
   (restrict! v &vector 0 *max-vector-len*)
-  (define! result &exact-integer (max (&min v) 0)
-    (min (&max v) *max-vector-len*)))
+  (define! result &u64 (&min/0 v) (&max/vector v)))
 
 
 
@@ -588,35 +661,35 @@ minimum, and maximum."
 ;; No type-checker for allocate-struct, as we can't currently check that
 ;; vt is actually a vtable.
 (define-type-inferrer (allocate-struct vt size result)
-  (restrict! vt &struct vtable-offset-user +inf.0)
-  (restrict! size &exact-integer 0 +inf.0)
-  (define! result &struct (max (&min size) 0) (&max size)))
+  (restrict! vt &struct vtable-offset-user *max-size-t*)
+  (restrict! size &u64 0 *max-size-t*)
+  (define! result &struct (&min/0 size) (&max/size size)))
 
 (define-type-checker (struct-ref s idx)
-  (and (check-type s &struct 0 +inf.0)
-       (check-type idx &exact-integer 0 +inf.0)
+  (and (check-type s &struct 0 *max-size-t*)
+       (check-type idx &u64 0 *max-size-t*)
        ;; FIXME: is the field readable?
        (< (&max idx) (&min s))))
 (define-type-inferrer (struct-ref s idx result)
-  (restrict! s &struct (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max s)))
+  (restrict! s &struct (1+ (&min/0 idx)) *max-size-t*)
+  (restrict! idx &u64 0 (1- (&max/size s)))
   (define! result &all-types -inf.0 +inf.0))
 
 (define-type-checker (struct-set! s idx val)
-  (and (check-type s &struct 0 +inf.0)
-       (check-type idx &exact-integer 0 +inf.0)
+  (and (check-type s &struct 0 *max-size-t*)
+       (check-type idx &u64 0 *max-size-t*)
        ;; FIXME: is the field writable?
        (< (&max idx) (&min s))))
 (define-type-inferrer (struct-set! s idx val)
-  (restrict! s &struct (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max s))))
+  (restrict! s &struct (1+ (&min/0 idx)) *max-size-t*)
+  (restrict! idx &u64 0 (1- (&max/size s))))
 
 (define-type-aliases allocate-struct allocate-struct/immediate)
 (define-type-aliases struct-ref struct-ref/immediate)
 (define-type-aliases struct-set! struct-set!/immediate)
 
-(define-simple-type (struct-vtable (&struct 0 +inf.0))
-  (&struct vtable-offset-user +inf.0))
+(define-simple-type (struct-vtable (&struct 0 *max-size-t*))
+  (&struct vtable-offset-user *max-size-t*))
 
 
 
@@ -625,35 +698,82 @@ minimum, and maximum."
 ;;; Strings.
 ;;;
 
-(define *max-char* (1- (ash 1 24)))
-
 (define-type-checker (string-ref s idx)
-  (and (check-type s &string 0 +inf.0)
-       (check-type idx &exact-integer 0 +inf.0)
+  (and (check-type s &string 0 *max-size-t*)
+       (check-type idx &u64 0 *max-size-t*)
        (< (&max idx) (&min s))))
 (define-type-inferrer (string-ref s idx result)
-  (restrict! s &string (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max s)))
-  (define! result &char 0 *max-char*))
+  (restrict! s &string (1+ (&min/0 idx)) *max-size-t*)
+  (restrict! idx &u64 0 (1- (&max/size s)))
+  (define! result &char 0 *max-codepoint*))
 
 (define-type-checker (string-set! s idx val)
-  (and (check-type s &string 0 +inf.0)
-       (check-type idx &exact-integer 0 +inf.0)
-       (check-type val &char 0 *max-char*)
+  (and (check-type s &string 0 *max-size-t*)
+       (check-type idx &u64 0 *max-size-t*)
+       (check-type val &char 0 *max-codepoint*)
        (< (&max idx) (&min s))))
 (define-type-inferrer (string-set! s idx val)
-  (restrict! s &string (1+ (&min idx)) +inf.0)
-  (restrict! idx &exact-integer 0 (1- (&max s)))
-  (restrict! val &char 0 *max-char*))
+  (restrict! s &string (1+ (&min/0 idx)) *max-size-t*)
+  (restrict! idx &u64 0 (1- (&max/size s)))
+  (restrict! val &char 0 *max-codepoint*))
 
 (define-simple-type-checker (string-length &string))
 (define-type-inferrer (string-length s result)
-  (restrict! s &string 0 +inf.0)
-  (define! result &exact-integer (max (&min s) 0) (&max s)))
+  (restrict! s &string 0 *max-size-t*)
+  (define! result &u64 (&min/0 s) (&max/size s)))
 
-(define-simple-type (number->string &number) (&string 0 +inf.0))
-(define-simple-type (string->number (&string 0 +inf.0))
+(define-simple-type (number->string &number) (&string 0 *max-size-t*))
+(define-simple-type (string->number (&string 0 *max-size-t*))
   ((logior &number &false) -inf.0 +inf.0))
+
+
+
+
+;;;
+;;; Unboxed numbers.
+;;;
+
+(define-type-checker (scm->f64 scm)
+  (check-type scm &real -inf.0 +inf.0))
+(define-type-inferrer (scm->f64 scm result)
+  (restrict! scm &real -inf.0 +inf.0)
+  (define! result &f64 (&min scm) (&max scm)))
+(define-type-aliases scm->f64 load-f64)
+
+(define-type-checker (f64->scm f64)
+  #t)
+(define-type-inferrer (f64->scm f64 result)
+  (define! result &flonum (&min f64) (&max f64)))
+
+(define-type-checker (scm->u64 scm)
+  (check-type scm &exact-integer 0 &u64-max))
+(define-type-inferrer (scm->u64 scm result)
+  (restrict! scm &exact-integer 0 &u64-max)
+  (define! result &u64 (&min/0 scm) (&max/u64 scm)))
+(define-type-aliases scm->u64 load-u64)
+
+(define-type-checker (scm->u64/truncate scm)
+  (check-type scm &exact-integer &range-min &range-max))
+(define-type-inferrer (scm->u64/truncate scm result)
+  (restrict! scm &exact-integer &range-min &range-max)
+  (define! result &u64 0 &u64-max))
+
+(define-type-checker (u64->scm u64)
+  #t)
+(define-type-inferrer (u64->scm u64 result)
+  (define! result &exact-integer (&min/0 u64) (&max/u64 u64)))
+
+(define-type-checker (scm->s64 scm)
+  (check-type scm &exact-integer &s64-min &s64-max))
+(define-type-inferrer (scm->s64 scm result)
+  (restrict! scm &exact-integer &s64-min &s64-max)
+  (define! result &s64 (&min/s64 scm) (&max/s64 scm)))
+(define-type-aliases scm->s64 load-s64)
+
+(define-type-checker (s64->scm s64)
+  #t)
+(define-type-inferrer (s64->scm s64 result)
+  (define! result &exact-integer (&min/s64 s64) (&max/s64 s64)))
 
 
 
@@ -662,49 +782,46 @@ minimum, and maximum."
 ;;; Bytevectors.
 ;;;
 
-(define-simple-type-checker (bytevector-length &bytevector))
-(define-type-inferrer (bytevector-length bv result)
-  (restrict! bv &bytevector 0 +inf.0)
-  (define! result &exact-integer (max (&min bv) 0) (&max bv)))
+(define-simple-type-checker (bv-length &bytevector))
+(define-type-inferrer (bv-length bv result)
+  (restrict! bv &bytevector 0 *max-size-t*)
+  (define! result &u64 (&min/0 bv) (&max/size bv)))
 
-(define-syntax-rule (define-bytevector-accessors ref set type size min max)
+(define-syntax-rule (define-bytevector-accessors ref set type size lo hi)
   (begin
     (define-type-checker (ref bv idx)
-      (and (check-type bv &bytevector 0 +inf.0)
-           (check-type idx &exact-integer 0 +inf.0)
+      (and (check-type bv &bytevector 0 *max-size-t*)
+           (check-type idx &u64 0 *max-size-t*)
            (< (&max idx) (- (&min bv) size))))
     (define-type-inferrer (ref bv idx result)
-      (restrict! bv &bytevector (+ (&min idx) size) +inf.0)
-      (restrict! idx &exact-integer 0 (- (&max bv) size))
-      (define! result type min max))
+      (restrict! bv &bytevector (+ (&min/0 idx) size) *max-size-t*)
+      (restrict! idx &u64 0 (- (&max/size bv) size))
+      (define! result type lo hi))
     (define-type-checker (set bv idx val)
-      (and (check-type bv &bytevector 0 +inf.0)
-           (check-type idx &exact-integer 0 +inf.0)
-           (check-type val type min max)
+      (and (check-type bv &bytevector 0 *max-size-t*)
+           (check-type idx &u64 0 *max-size-t*)
+           (check-type val type lo hi)
            (< (&max idx) (- (&min bv) size))))
     (define-type-inferrer (set! bv idx val)
-      (restrict! bv &bytevector (+ (&min idx) size) +inf.0)
-      (restrict! idx &exact-integer 0 (- (&max bv) size))
-      (restrict! val type min max))))
+      (restrict! bv &bytevector (+ (&min/0 idx) size) *max-size-t*)
+      (restrict! idx &u64 0 (- (&max/size bv) size))
+      (restrict! val type lo hi))))
 
-(define-syntax-rule (define-short-bytevector-accessors ref set size signed?)
-  (define-bytevector-accessors ref set &exact-integer size
-    (if signed? (- (ash 1 (1- (* size 8)))) 0)
-    (1- (ash 1 (if signed? (1- (* size 8)) (* size 8))))))
+(define-bytevector-accessors bv-u8-ref bv-u8-set! &u64 1 0 #xff)
+(define-bytevector-accessors bv-s8-ref bv-s8-set! &s64 1 (- #x80) #x7f)
 
-(define-short-bytevector-accessors bv-u8-ref bv-u8-set! 1 #f)
-(define-short-bytevector-accessors bv-s8-ref bv-s8-set! 1 #t)
-(define-short-bytevector-accessors bv-u16-ref bv-u16-set! 2 #f)
-(define-short-bytevector-accessors bv-s16-ref bv-s16-set! 2 #t)
+(define-bytevector-accessors bv-u16-ref bv-u16-set! &u64 2 0 #xffff)
+(define-bytevector-accessors bv-s16-ref bv-s16-set! &s64 2 (- #x8000) #x7fff)
 
-;; The range analysis only works on signed 32-bit values, so some limits
-;; are out of range.
-(define-bytevector-accessors bv-u32-ref bv-u32-set! &exact-integer 4 0 +inf.0)
-(define-bytevector-accessors bv-s32-ref bv-s32-set! &exact-integer 4 -inf.0 +inf.0)
-(define-bytevector-accessors bv-u64-ref bv-u64-set! &exact-integer 8 0 +inf.0)
-(define-bytevector-accessors bv-s64-ref bv-s64-set! &exact-integer 8 -inf.0 +inf.0)
-(define-bytevector-accessors bv-f32-ref bv-f32-set! &real 4 -inf.0 +inf.0)
-(define-bytevector-accessors bv-f64-ref bv-f64-set! &real 8 -inf.0 +inf.0)
+(define-bytevector-accessors bv-u32-ref bv-u32-set! &u64 4 0 #xffffffff)
+(define-bytevector-accessors bv-s32-ref bv-s32-set! &s64 4
+  (- #x80000000) #x7fffffff)
+
+(define-bytevector-accessors bv-u64-ref bv-u64-set! &u64 8 0 &u64-max)
+(define-bytevector-accessors bv-s64-ref bv-s64-set! &s64 8 &s64-min &s64-max)
+
+(define-bytevector-accessors bv-f32-ref bv-f32-set! &f64 4 -inf.0 +inf.0)
+(define-bytevector-accessors bv-f64-ref bv-f64-set! &f64 8 -inf.0 +inf.0)
 
 
 
@@ -738,17 +855,20 @@ minimum, and maximum."
       (infer-integer-ranges)
       (infer-real-ranges)))
 
+(define-syntax-rule (true-comparison-restrictions op a b a-type b-type)
+  (call-with-values
+      (lambda ()
+        (restricted-comparison-ranges op
+                                      (&type a) (&min a) (&max a)
+                                      (&type b) (&min b) (&max b)))
+    (lambda (min0 max0 min1 max1)
+      (restrict! a a-type min0 max0)
+      (restrict! b b-type min1 max1))))
+
 (define-syntax-rule (define-comparison-inferrer (op inverse))
   (define-predicate-inferrer (op a b true?)
     (when (zero? (logand (logior (&type a) (&type b)) (lognot &number)))
-      (call-with-values
-          (lambda ()
-            (restricted-comparison-ranges (if true? 'op 'inverse)
-                                          (&type a) (&min a) (&max a)
-                                          (&type b) (&min b) (&max b)))
-        (lambda (min0 max0 min1 max1)
-          (restrict! a &real min0 max0)
-          (restrict! b &real min1 max1))))))
+      (true-comparison-restrictions (if true? 'op 'inverse) a b &real &real))))
 
 (define-simple-type-checker (< &real &real))
 (define-comparison-inferrer (< >=))
@@ -761,6 +881,71 @@ minimum, and maximum."
 
 (define-simple-type-checker (> &real &real))
 (define-comparison-inferrer (> <=))
+
+(define-simple-type-checker (u64-= &u64 &u64))
+(define-predicate-inferrer (u64-= a b true?)
+  (when true?
+    (let ((min (max (&min/0 a) (&min/0 b)))
+          (max (min (&max/u64 a) (&max/u64 b))))
+      (restrict! a &u64 min max)
+      (restrict! b &u64 min max))))
+
+(define-simple-type-checker (u64-=-scm &u64 &real))
+(define-predicate-inferrer (u64-=-scm a b true?)
+  (when (and true? (zero? (logand (&type b) (lognot &real))))
+    (let ((min (max (&min/0 a) (&min/0 b)))
+          (max (min (&max/u64 a) (&max/u64 b))))
+      (restrict! a &u64 min max)
+      (restrict! b &real min max))))
+
+(define-simple-type-checker (u64-<-scm &u64 &real))
+(define-predicate-inferrer (u64-<-scm a b true?)
+  (when (and true? (zero? (logand (&type b) (lognot &real))))
+    (true-comparison-restrictions '< a b &u64 &real)))
+
+(define-simple-type-checker (u64-<=-scm &u64 &real))
+(define-predicate-inferrer (u64-<=-scm a b true?)
+  (when (and true? (zero? (logand (&type b) (lognot &real))))
+    (true-comparison-restrictions '<= a b &u64 &real)))
+
+(define-simple-type-checker (u64->=-scm &u64 &real))
+(define-predicate-inferrer (u64->=-scm a b true?)
+  (when (and true? (zero? (logand (&type b) (lognot &real))))
+    (true-comparison-restrictions '>= a b &u64 &real)))
+
+(define-simple-type-checker (u64->-scm &u64 &real))
+(define-predicate-inferrer (u64->-scm a b true?)
+  (when (and true? (zero? (logand (&type b) (lognot &real))))
+    (true-comparison-restrictions '> a b &u64 &real)))
+
+(define (infer-u64-comparison-ranges op min0 max0 min1 max1)
+  (match op
+    ('< (values min0 (min max0 (1- max1)) (max (1+ min0) min1) max1))
+    ('<= (values min0 (min max0 max1) (max min0 min1) max1))
+    ('>= (values (max min0 min1) max0 min1 (min max0 max1)))
+    ('> (values (max min0 (1+ min1)) max0 min1 (min (1- max0) max1)))))
+(define-syntax-rule (define-u64-comparison-inferrer (u64-op op inverse))
+  (define-predicate-inferrer (u64-op a b true?)
+    (call-with-values
+        (lambda ()
+          (infer-u64-comparison-ranges (if true? 'op 'inverse)
+                                       (&min/0 a) (&max/u64 a)
+                                       (&min/0 b) (&max/u64 b)))
+      (lambda (min0 max0 min1 max1)
+        (restrict! a &u64 min0 max0)
+        (restrict! b &u64 min1 max1)))))
+
+(define-simple-type-checker (u64-< &u64 &u64))
+(define-u64-comparison-inferrer (u64-< < >=))
+
+(define-simple-type-checker (u64-<= &u64 &u64))
+(define-u64-comparison-inferrer (u64-<= <= >))
+
+(define-simple-type-checker (u64->= &u64 &u64))
+(define-u64-comparison-inferrer (u64-<= >= <))
+
+(define-simple-type-checker (u64-> &u64 &u64))
+(define-u64-comparison-inferrer (u64-> > <=))
 
 ;; Arithmetic.
 (define-syntax-rule (define-unary-result! a result min max)
@@ -787,63 +972,123 @@ minimum, and maximum."
       ;; One input not a number.  Perhaps we end up dispatching to
       ;; GOOPS.
       (define! result &all-types -inf.0 +inf.0))
-     ;; Complex and floating-point numbers are contagious.
+     ;; Complex numbers are contagious.
      ((or (eqv? a-type &complex) (eqv? b-type &complex))
       (define! result &complex -inf.0 +inf.0))
      ((or (eqv? a-type &flonum) (eqv? b-type &flonum))
-      (define! result &flonum min* max*))
+      ;; If one argument is a flonum, the result will be flonum or
+      ;; possibly complex.
+      (let ((result-type (logand (logior a-type b-type)
+                                 (logior &complex &flonum))))
+        (define! result result-type min* max*)))
      ;; Exact integers are closed under some operations.
      ((and closed? (eqv? a-type &exact-integer) (eqv? b-type &exact-integer))
       (define! result &exact-integer min* max*))
      (else
-      ;; Fractions may become integers.
-      (let ((type (logior a-type b-type)))
-        (define! result
-                 (if (zero? (logand type &fraction))
-                     type
-                     (logior type &exact-integer))
-                 min* max*))))))
+      (let* ((type (logior a-type b-type))
+             ;; Fractions may become integers.
+             (type (if (zero? (logand type &fraction))
+                       type
+                       (logior type &exact-integer)))
+             ;; Integers may become fractions under division.
+             (type (if (or closed?
+                           (zero? (logand type (logior &exact-integer))))
+                       type
+                       (logior type &fraction))))
+        (define! result type min* max*))))))
 
 (define-simple-type-checker (add &number &number))
+(define-type-aliases add add/immediate)
+(define-type-checker (fadd a b) #t)
+(define-type-checker (uadd a b) #t)
 (define-type-inferrer (add a b result)
   (define-binary-result! a b result #t
                          (+ (&min a) (&min b))
                          (+ (&max a) (&max b))))
+(define-type-inferrer (fadd a b result)
+  (define! result &f64
+    (+ (&min a) (&min b))
+    (+ (&max a) (&max b))))
+(define-type-inferrer (uadd a b result)
+  ;; Handle wraparound.
+  (let ((max (+ (&max/u64 a) (&max/u64 b))))
+    (if (<= max &u64-max)
+        (define! result &u64 (+ (&min/0 a) (&min/0 b)) max)
+        (define! result &u64 0 &u64-max))))
+(define-type-aliases uadd uadd/immediate)
 
 (define-simple-type-checker (sub &number &number))
+(define-type-aliases sub sub/immediate)
+(define-type-checker (fsub a b) #t)
+(define-type-checker (usub a b) #t)
 (define-type-inferrer (sub a b result)
   (define-binary-result! a b result #t
                          (- (&min a) (&max b))
                          (- (&max a) (&min b))))
+(define-type-inferrer (fsub a b result)
+  (define! result &f64
+    (- (&min a) (&max b))
+    (- (&max a) (&min b))))
+(define-type-inferrer (usub a b result)
+  ;; Handle wraparound.
+  (let ((min (- (&min/0 a) (&max/u64 b))))
+    (if (< min 0)
+        (define! result &u64 0 &u64-max)
+        (define! result &u64 min (- (&max/u64 a) (&min/0 b))))))
+(define-type-aliases usub usub/immediate)
 
 (define-simple-type-checker (mul &number &number))
+(define-type-checker (fmul a b) #t)
+(define-type-checker (umul a b) #t)
+(define (mul-result-range same? nan-impossible? min-a max-a min-b max-b)
+  (define (nan* a b)
+    (if (and (or (and (inf? a) (zero? b))
+                 (and (zero? a) (inf? b)))
+             nan-impossible?)
+        0 
+        (* a b)))
+  (let ((-- (nan* min-a min-b))
+        (-+ (nan* min-a max-b))
+        (++ (nan* max-a max-b))
+        (+- (nan* max-a min-b)))
+    (let ((has-nan? (or (nan? --) (nan? -+) (nan? ++) (nan? +-))))
+      (values (cond
+               (same? 0)
+               (has-nan? -inf.0)
+               (else (min -- -+ ++ +-)))
+              (if has-nan?
+                  +inf.0
+                  (max -- -+ ++ +-))))))
 (define-type-inferrer (mul a b result)
   (let ((min-a (&min a)) (max-a (&max a))
-        (min-b (&min b)) (max-b (&max b)))
-    (define (nan* a b)
-      ;; We only really get +inf.0 at runtime for flonums and compnums.
-      ;; If we have inferred that the arguments are not flonums and not
-      ;; compnums, then the result of (* +inf.0 0) at range inference
-      ;; time is 0 and not +nan.0.
-      (if (and (or (and (inf? a) (zero? b))
-                   (and (zero? a) (inf? b)))
-               (not (logtest (logior (&type a) (&type b))
-                             (logior &flonum &complex))))
-          0 
-          (* a b)))
-    (let ((-- (nan* min-a min-b))
-          (-+ (nan* min-a max-b))
-          (++ (nan* max-a max-b))
-          (+- (nan* max-a min-b)))
-      (let ((has-nan? (or (nan? --) (nan? -+) (nan? ++) (nan? +-))))
-        (define-binary-result! a b result #t
-                               (cond
-                                ((eqv? a b) 0)
-                                (has-nan? -inf.0)
-                                (else (min -- -+ ++ +-)))
-                               (if has-nan?
-                                   +inf.0
-                                   (max -- -+ ++ +-)))))))
+        (min-b (&min b)) (max-b (&max b))
+        ;; We only really get +inf.0 at runtime for flonums and
+        ;; compnums.  If we have inferred that the arguments are not
+        ;; flonums and not compnums, then the result of (* +inf.0 0) at
+        ;; range inference time is 0 and not +nan.0.
+        (nan-impossible? (not (logtest (logior (&type a) (&type b))
+                                       (logior &flonum &complex)))))
+    (call-with-values (lambda ()
+                        (mul-result-range (eqv? a b) nan-impossible?
+                                          min-a max-a min-b max-b))
+      (lambda (min max)
+        (define-binary-result! a b result #t min max)))))
+(define-type-inferrer (fmul a b result)
+  (let ((min-a (&min a)) (max-a (&max a))
+        (min-b (&min b)) (max-b (&max b))
+        (nan-impossible? #f))
+    (call-with-values (lambda ()
+                        (mul-result-range (eqv? a b) nan-impossible?
+                                          min-a max-a min-b max-b))
+      (lambda (min max)
+        (define! result &f64 min max)))))
+(define-type-inferrer (umul a b result)
+  ;; Handle wraparound.
+  (let ((max (* (&max/u64 a) (&max/u64 b))))
+    (if (<= max &u64-max)
+        (define! result &u64 (* (&min/0 a) (&min/0 b)) max)
+        (define! result &u64 0 &u64-max))))
+(define-type-aliases umul umul/immediate)
 
 (define-type-checker (div a b)
   (and (check-type a &number -inf.0 +inf.0)
@@ -851,39 +1096,40 @@ minimum, and maximum."
        ;; We only know that there will not be an exception if b is not
        ;; zero.
        (not (<= (&min b) 0 (&max b)))))
+(define-type-checker (fdiv a b) #t)
+(define (div-result-range min-a max-a min-b max-b)
+  (if (<= min-b 0 max-b)
+      ;; If the range of the divisor crosses 0, the result spans
+      ;; the whole range.
+      (values -inf.0 +inf.0)
+      ;; Otherwise min-b and max-b have the same sign, and cannot both
+      ;; be infinity.
+      (let ((--- (if (inf? min-b) 0 (floor/ min-a min-b)))
+            (-+- (if (inf? max-b) 0 (floor/ min-a max-b)))
+            (++- (if (inf? max-b) 0 (floor/ max-a max-b)))
+            (+-- (if (inf? min-b) 0 (floor/ max-a min-b)))
+            (--+ (if (inf? min-b) 0 (ceiling/ min-a min-b)))
+            (-++ (if (inf? max-b) 0 (ceiling/ min-a max-b)))
+            (+++ (if (inf? max-b) 0 (ceiling/ max-a max-b)))
+            (+-+ (if (inf? min-b) 0 (ceiling/ max-a min-b))))
+        (values (min (min --- -+- ++- +--)
+                     (min --+ -++ +++ +-+))
+                (max (max --- -+- ++- +--)
+                     (max --+ -++ +++ +-+))))))
 (define-type-inferrer (div a b result)
   (let ((min-a (&min a)) (max-a (&max a))
         (min-b (&min b)) (max-b (&max b)))
-    (call-with-values
-        (lambda ()
-          (if (<= min-b 0 max-b)
-              ;; If the range of the divisor crosses 0, the result spans
-              ;; the whole range.
-              (values -inf.0 +inf.0)
-              ;; Otherwise min-b and max-b have the same sign, and cannot both
-              ;; be infinity.
-              (let ((--- (if (inf? min-b) 0 (floor/ min-a min-b)))
-                    (-+- (if (inf? max-b) 0 (floor/ min-a max-b)))
-                    (++- (if (inf? max-b) 0 (floor/ max-a max-b)))
-                    (+-- (if (inf? min-b) 0 (floor/ max-a min-b)))
-                    (--+ (if (inf? min-b) 0 (ceiling/ min-a min-b)))
-                    (-++ (if (inf? max-b) 0 (ceiling/ min-a max-b)))
-                    (+++ (if (inf? max-b) 0 (ceiling/ max-a max-b)))
-                    (+-+ (if (inf? min-b) 0 (ceiling/ max-a min-b))))
-                (values (min (min --- -+- ++- +--)
-                             (min --+ -++ +++ +-+))
-                        (max (max --- -+- ++- +--)
-                             (max --+ -++ +++ +-+))))))
+    (call-with-values (lambda ()
+                        (div-result-range min-a max-a min-b max-b))
       (lambda (min max)
         (define-binary-result! a b result #f min max)))))
-
-(define-simple-type-checker (add1 &number))
-(define-type-inferrer (add1 a result)
-  (define-unary-result! a result (1+ (&min a)) (1+ (&max a))))
-
-(define-simple-type-checker (sub1 &number))
-(define-type-inferrer (sub1 a result)
-  (define-unary-result! a result (1- (&min a)) (1- (&max a))))
+(define-type-inferrer (fdiv a b result)
+  (let ((min-a (&min a)) (max-a (&max a))
+        (min-b (&min b)) (max-b (&max b)))
+    (call-with-values (lambda ()
+                        (div-result-range min-a max-a min-b max-b))
+      (lambda (min max)
+        (define! result &f64 min max)))))
 
 (define-type-checker (quo a b)
   (and (check-type a &exact-integer -inf.0 +inf.0)
@@ -986,11 +1232,11 @@ minimum, and maximum."
 (define-simple-type-checker (ash &exact-integer &exact-integer))
 (define-type-inferrer (ash val count result)
   (define (ash* val count)
-    ;; As we can only represent a 32-bit range, don't bother inferring
+    ;; As we only precisely represent a 64-bit range, don't bother inferring
     ;; shifts that might exceed that range.
     (cond
      ((inf? val) val) ; Preserves sign.
-     ((< -32 count 32) (ash val count))
+     ((< -64 count 64) (ash val count))
      ((zero? val) 0)
      ((positive? val) +inf.0)
      (else -inf.0)))
@@ -1003,6 +1249,29 @@ minimum, and maximum."
     (define! result &exact-integer
              (min -- -+ ++ +-)
              (max -- -+ ++ +-))))
+
+(define-simple-type-checker (ursh &u64 &u64))
+(define-type-inferrer (ursh a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (define! result &u64
+    (ash (&min/0 a) (- (&max/u64 b)))
+    (ash (&max/u64 a) (- (&min/0 b)))))
+(define-type-aliases ursh ursh/immediate)
+
+(define-simple-type-checker (ulsh &u64 &u64))
+(define-type-inferrer (ulsh a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (if (and (< (&max/u64 b) 64)
+           (<= (ash (&max/u64 a) (&max/u64 b)) &u64-max))
+      ;; No overflow; we can be precise.
+      (define! result &u64
+        (ash (&min/0 a) (&min/0 b))
+        (ash (&max/u64 a) (&max/u64 b)))
+      ;; Otherwise assume the whole range.
+      (define! result &u64 0 &u64-max)))
+(define-type-aliases ulsh ulsh/immediate)
 
 (define (next-power-of-two n)
   (let lp ((out 1))
@@ -1026,6 +1295,43 @@ minimum, and maximum."
            (logand-min (&min a) (&min b))
            (logand-max (&max a) (&max b))))
 
+(define-simple-type-checker (ulogand &u64 &u64))
+(define-type-inferrer (ulogand a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (define! result &u64 0 (max (&max/u64 a) (&max/u64 b))))
+
+(define-simple-type-checker (logsub &exact-integer &exact-integer))
+(define-type-inferrer (logsub a b result)
+  (define (logsub-bounds min-a max-a min-b max-b)
+    (cond
+     ((negative? max-b)
+      ;; Sign bit always set on B, so result will never be negative.
+      ;; If A might be negative (all leftmost bits 1), we don't know
+      ;; how positive the result might be.
+      (values 0 (if (negative? min-a) +inf.0 max-a)))
+     ((negative? min-b)
+      ;; Sign bit might be set on B.
+      (values min-a (if (negative? min-a) +inf.0 max-a)))
+     ((negative? min-a)
+      ;; Sign bit never set on B -- result will have the sign of A.
+      (values min-a (if (negative? max-a) -1 max-a)))
+     (else
+      ;; Sign bit never set on A and never set on B -- the nice case.
+      (values 0 max-a))))
+  (restrict! a &exact-integer -inf.0 +inf.0)
+  (restrict! b &exact-integer -inf.0 +inf.0)
+  (call-with-values (lambda ()
+                      (logsub-bounds (&min a) (&max a) (&min b) (&max b)))
+    (lambda (min max)
+      (define! result &exact-integer min max))))
+
+(define-simple-type-checker (ulogsub &u64 &u64))
+(define-type-inferrer (ulogsub a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (define! result &u64 0 (&max/u64 a)))
+
 (define-simple-type-checker (logior &exact-integer &exact-integer))
 (define-type-inferrer (logior a b result)
   ;; Saturate all bits of val.
@@ -1047,8 +1353,22 @@ minimum, and maximum."
            (logior-min (&min a) (&min b))
            (logior-max (&max a) (&max b))))
 
+(define-simple-type-checker (ulogior &u64 &u64))
+(define-type-inferrer (ulogior a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (define! result &u64
+    (max (&min/0 a) (&min/0 b))
+    (1- (next-power-of-two (logior (&max/u64 a) (&max/u64 b))))))
+
 ;; For our purposes, treat logxor the same as logior.
 (define-type-aliases logior logxor)
+
+(define-simple-type-checker (ulogxor &u64 &u64))
+(define-type-inferrer (ulogxor a b result)
+  (restrict! a &u64 0 &u64-max)
+  (restrict! b &u64 0 &u64-max)
+  (define! result &u64 0 &u64-max))
 
 (define-simple-type-checker (lognot &exact-integer))
 (define-type-inferrer (lognot a result)
@@ -1101,7 +1421,7 @@ minimum, and maximum."
      (else
       (define! result (logior (logand (&type x) (lognot &number))
                               (logand (&type x) &real))
-        (max (&min x) 0)
+        (&min/0 x)
         (max (abs (&min x)) (abs (&max x))))))))
 
 
@@ -1111,19 +1431,15 @@ minimum, and maximum."
 ;;; Characters.
 ;;;
 
-(define-simple-type (char<? &char &char)
-  ((logior &true &false) 0 0))
-(define-type-aliases char<? char<=? char>=? char>?)
-
-(define-simple-type-checker (integer->char (&exact-integer 0 #x10ffff)))
+(define-simple-type-checker (integer->char (&u64 0 *max-codepoint*)))
 (define-type-inferrer (integer->char i result)
-  (restrict! i &exact-integer 0 #x10ffff)
-  (define! result &char (max (&min i) 0) (min (&max i) #x10ffff)))
+  (restrict! i &u64 0 *max-codepoint*)
+  (define! result &char (&min/0 i) (min (&max i) *max-codepoint*)))
 
 (define-simple-type-checker (char->integer &char))
 (define-type-inferrer (char->integer c result)
-  (restrict! c &char 0 #x10ffff)
-  (define! result &exact-integer (max (&min c) 0) (min (&max c) #x10ffff)))
+  (restrict! c &char 0 *max-codepoint*)
+  (define! result &u64 (&min/0 c) (min (&max c) *max-codepoint*)))
 
 
 
@@ -1132,293 +1448,262 @@ minimum, and maximum."
 ;;; Type flow analysis: the meet (ahem) of the algorithm.
 ;;;
 
-(define (infer-types* dfg min-label label-count)
-  "Compute types for all variables in @var{fun}.  Returns a hash table
-mapping symbols to types."
-  (let ((typev (make-vector label-count))
-        (idoms (compute-idoms dfg min-label label-count))
-        (revisit-label #f)
-        (types-changed? #f)
-        (saturate-ranges? #f))
-    (define (label->idx label) (- label min-label))
+(define (successor-count cont)
+  (match cont
+    (($ $kargs _ _ ($ $continue k src exp))
+     (match exp
+       ((or ($ $branch) ($ $prompt)) 2)
+       (_ 1)))
+    (($ $kfun src meta self tail clause) (if clause 1 0))
+    (($ $kclause arity body alt) (if alt 2 1))
+    (($ $kreceive) 1)
+    (($ $ktail) 0)))
 
-    (define (get-entry label) (vector-ref typev (label->idx label)))
+(define (intset-pop set)
+  (match (intset-next set)
+    (#f (values set #f))
+    (i (values (intset-remove set i) i))))
 
-    (define (in-types entry) (vector-ref entry 0))
-    (define (out-types entry succ) (vector-ref entry (1+ succ)))
+(define-syntax-rule (make-worklist-folder* seed ...)
+  (lambda (f worklist seed ...)
+    (let lp ((worklist worklist) (seed seed) ...)
+      (call-with-values (lambda () (intset-pop worklist))
+        (lambda (worklist i)
+          (if i
+              (call-with-values (lambda () (f i seed ...))
+                (lambda (i* seed ...)
+                  (let add ((i* i*) (worklist worklist))
+                    (match i*
+                      (() (lp worklist seed ...))
+                      ((i . i*) (add i* (intset-add worklist i)))))))
+              (values seed ...)))))))
 
-    (define (update-in-types! entry types) 
-      (vector-set! entry 0 types))
-    (define (update-out-types! entry succ types)
-      (vector-set! entry (1+ succ) types))
+(define worklist-fold*
+  (case-lambda
+    ((f worklist seed)
+     ((make-worklist-folder* seed) f worklist seed))))
 
-    (define (prepare-initial-state!)
-      ;; The result is a vector with an entry for each label.  Each entry
-      ;; is a vector.  The first slot in the entry vector corresponds to
-      ;; the types that flow into the labelled expression.  The following
-      ;; slot is for the types that flow out to the first successor, and
-      ;; so on for additional successors.
-      (let lp ((label min-label))
-        (when (< label (+ min-label label-count))
-          (let* ((nsuccs (match (lookup-cont label dfg)
-                           (($ $kargs _ _ term)
-                            (match (find-call term)
-                              (($ $continue k src (or ($ $branch) ($ $prompt))) 2)
-                              (_ 1)))
-                           (($ $kfun src meta self tail clause) (if clause 1 0))
-                           (($ $kclause arity body alt) (if alt 2 1))
-                           (($ $kreceive) 1)
-                           (($ $ktail) 0)))
-                 (entry (make-vector (1+ nsuccs) #f)))
-            (vector-set! typev (label->idx label) entry)
-            (lp (1+ label)))))
+(define intmap-ensure
+  (let* ((*absent* (list 'absent))
+         (not-found (lambda (i) *absent*)))
+    (lambda (map i ensure)
+      (let ((val (intmap-ref map i not-found)))
+        (if (eq? val *absent*)
+            (let ((val (ensure i)))
+              (values (intmap-add map i val) val))
+            (values map val))))))
 
-      ;; Initial state: nothing flows into the $kfun.
-      (let ((entry (get-entry min-label)))
-        (update-in-types! entry empty-intmap)))
+;; For best results, the labels in the function starting should be
+;; topologically sorted (renumbered).  Otherwise the backward branch
+;; detection mentioned in the module commentary will trigger for
+;; ordinary forward branches.
+(define (infer-types conts kfun)
+  "Compute types for all variables bound in the function labelled
+@var{kfun}, from @var{conts}.  Returns an intmap mapping labels to type
+entries.
 
-    (define (adjoin-vars types vars entry)
-      (match vars
-        (() types)
-        ((var . vars)
-         (adjoin-vars (adjoin-var types var entry) vars entry))))
+A type entry is a vector that describes the types of the values that
+flow into and out of a labelled expression.  The first slot in the type
+entry vector corresponds to the types that flow in, and the rest of the
+slots correspond to the types that flow out.  Each element of the type
+entry vector is an intmap mapping variable name to the variable's
+inferred type.  An inferred type is a 3-vector of type, minimum, and
+maximum, where type is a bitset as a fixnum."
+  (define (get-entry typev label) (intmap-ref typev label))
+  (define (entry-not-found label)
+    (make-vector (1+ (successor-count (intmap-ref conts label))) #f))
+  (define (ensure-entry typev label)
+    (intmap-ensure typev label entry-not-found))
 
-    (define (infer-primcall types succ name args result)
-      (cond
-       ((hashq-ref *type-inferrers* name)
-        => (lambda (inferrer)
-             ;; FIXME: remove the apply?
-             ;(pk 'primcall name args result)
-             (apply inferrer types succ
-                    (if result
-                        (append args (list result))
-                        args))))
-       (result
-        (adjoin-var types result all-types-entry))
-       (else
-        types)))
+  (define (compute-initial-state)
+    (let ((entry (entry-not-found kfun)))
+      ;; Nothing flows in to the first label.
+      (vector-set! entry 0 empty-intmap)
+      (intmap-add empty-intmap kfun entry)))
 
-    (define (type-entry-saturating-union a b)
-      (cond
-       ((type-entry<=? b a) a)
-       #;
-       ((and (not saturate-ranges?)
-         (eqv? (a-type ))
-         (type-entry<=? a b)) b)
-       (else (make-type-entry
-              (let* ((a-type (type-entry-type a))
-                     (b-type (type-entry-type b))
-                     (type (logior a-type b-type)))
-                (unless (eqv? a-type type)
-                  (set! types-changed? #t))
-                type)
-              (let ((a-min (type-entry-clamped-min a))
-                    (b-min (type-entry-clamped-min b)))
-                (if (< b-min a-min)
-                    (if saturate-ranges? min-fixnum b-min)
-                    a-min))
-              (let ((a-max (type-entry-clamped-max a))
-                    (b-max (type-entry-clamped-max b)))
-                (if (> b-max a-max)
-                    (if saturate-ranges? max-fixnum b-max)
-                    a-max))))))
+  (define (adjoin-vars types vars entry)
+    (match vars
+      (() types)
+      ((var . vars)
+       (adjoin-vars (adjoin-var types var entry) vars entry))))
 
-    (define (propagate-types! pred-label pred-entry succ-idx succ-label out)
-      ;; Update "in" set of continuation.
-      (let ((succ-entry (get-entry succ-label)))
-        (match (lookup-predecessors succ-label dfg)
-          ((_)
-           ;; A normal edge.
-           (update-in-types! succ-entry out))
-          (_
-           ;; A control-flow join.
-           (let* ((succ-dom-label (vector-ref idoms (label->idx succ-label)))
-                  (succ-dom-entry (get-entry succ-dom-label))
-                  (old-in (in-types succ-entry))
-                  (in (if old-in
-                          (intmap-intersect old-in out
-                                            type-entry-saturating-union)
-                          out)))
-             ;; If the "in" set changed, update the entry and possibly
-             ;; arrange to iterate again.
-             (unless (eq? old-in in)
-               (update-in-types! succ-entry in)
-               ;; If the changed successor is a back-edge, ensure that
-               ;; we revisit the function.
-               (when (<= succ-label pred-label)
-                 (unless (and revisit-label (<= revisit-label succ-label))
-                   ;; (pk 'marking-revisit pred-label succ-label)
-                   (set! revisit-label succ-label))))))))
-      ;; Finally update "out" set for current expression.
-      (update-out-types! pred-entry succ-idx out))
+  (define (infer-primcall types succ name args result)
+    (cond
+     ((hashq-ref *type-inferrers* name)
+      => (lambda (inferrer)
+           ;; FIXME: remove the apply?
+           ;; (pk 'primcall name args result)
+           (apply inferrer types succ
+                  (if result
+                      (append args (list result))
+                      args))))
+     (result
+      (adjoin-var types result all-types-entry))
+     (else
+      types)))
 
-    (define (visit-exp label entry k types exp)
-      (define (propagate! succ-idx succ-label types)
-        (propagate-types! label entry succ-idx succ-label types))
-      ;; Each of these branches must propagate! to its successors.
-      (match exp
-        (($ $branch kt ($ $values (arg)))
-         ;; The "normal" continuation is the #f branch.
-         (let ((types (restrict-var types arg
-                                    (make-type-entry (logior &false &nil)
-                                                     0
-                                                     0))))
-           (propagate! 0 k types))
-         (let ((types (restrict-var types arg
-                                    (make-type-entry
-                                     (logand &all-types 
-                                             (lognot (logior &false &nil)))
-                                     -inf.0 +inf.0))))
-           (propagate! 1 kt types)))
-        (($ $branch kt ($ $primcall name args))
-         ;; The "normal" continuation is the #f branch.
-         (let ((types (infer-primcall types 0 name args #f)))
-           (propagate! 0 k types))
-         (let ((types (infer-primcall types 1 name args #f)))
-           (propagate! 1 kt types)))
-        (($ $prompt escape? tag handler)
-         ;; The "normal" continuation enters the prompt.
-         (propagate! 0 k types)
-         (propagate! 1 handler types))
-        (($ $primcall name args)
-         (propagate! 0 k
-                     (match (lookup-cont k dfg)
-                       (($ $kargs _ defs)
-                        (infer-primcall types 0 name args
-                                        (match defs ((var) var) (() #f))))
-                       (_
-                        ;(pk 'warning-no-restrictions name)
-                        types))))
-        (($ $values args)
-         (match (lookup-cont k dfg)
+  (define (vector-replace vec idx val)
+    (let ((vec (vector-copy vec)))
+      (vector-set! vec idx val)
+      vec))
+
+  (define (update-out-types label typev types succ-idx)
+    (let* ((entry (get-entry typev label))
+           (old-types (vector-ref entry (1+ succ-idx))))
+      (if (eq? types old-types)
+          (values typev #f)
+          (let ((entry (vector-replace entry (1+ succ-idx) types))
+                (first? (not old-types)))
+            (values (intmap-replace typev label entry) first?)))))
+
+  (define (update-in-types label typev types saturate?)
+    (let*-values (((typev entry) (ensure-entry typev label))
+                  ((old-types) (vector-ref entry 0))
+                  ;; TODO: If the label has only one predecessor, we can
+                  ;; avoid the meet.
+                  ((types) (if (not old-types)
+                               types
+                               (let ((meet (if saturate?
+                                               type-entry-saturating-union
+                                               type-entry-union)))
+                                 (intmap-intersect old-types types meet)))))
+      (if (eq? old-types types)
+          (values typev #f)
+          (let ((entry (vector-replace entry 0 types)))
+            (values (intmap-replace typev label entry) #t)))))
+
+  (define (propagate-types label typev succ-idx succ-label types)
+    (let*-values
+        (((typev first?) (update-out-types label typev types succ-idx))
+         ((saturate?) (and (not first?) (<= succ-label label)))
+         ((typev changed?) (update-in-types succ-label typev types saturate?)))
+      (values (if changed? (list succ-label) '()) typev)))
+
+  (define (visit-exp label typev k types exp)
+    (define (propagate1 succ-label types)
+      (propagate-types label typev 0 succ-label types))
+    (define (propagate2 succ0-label types0 succ1-label types1)
+      (let*-values (((changed0 typev)
+                     (propagate-types label typev 0 succ0-label types0))
+                    ((changed1 typev)
+                     (propagate-types label typev 1 succ1-label types1)))
+        (values (append changed0 changed1) typev)))
+    ;; Each of these branches must propagate to its successors.
+    (match exp
+      (($ $branch kt ($ $values (arg)))
+       ;; The "normal" continuation is the #f branch.
+       (let ((kf-types (restrict-var types arg
+                                     (make-type-entry (logior &false &nil)
+                                                      0
+                                                      0)))
+             (kt-types (restrict-var types arg
+                                     (make-type-entry
+                                      (logand &all-types 
+                                              (lognot (logior &false &nil)))
+                                      -inf.0 +inf.0))))
+         (propagate2 k kf-types kt kt-types)))
+      (($ $branch kt ($ $primcall name args))
+       ;; The "normal" continuation is the #f branch.
+       (let ((kf-types (infer-primcall types 0 name args #f))
+             (kt-types (infer-primcall types 1 name args #f)))
+         (propagate2 k kf-types kt kt-types)))
+      (($ $prompt escape? tag handler)
+       ;; The "normal" continuation enters the prompt.
+       (propagate2 k types handler types))
+      (($ $primcall name args)
+       (propagate1 k
+                   (match (intmap-ref conts k)
+                     (($ $kargs _ defs)
+                      (infer-primcall types 0 name args
+                                      (match defs ((var) var) (() #f))))
+                     (_
+                      ;; (pk 'warning-no-restrictions name)
+                      types))))
+      (($ $values args)
+       (match (intmap-ref conts k)
+         (($ $kargs _ defs)
+          (let ((in types))
+            (let lp ((defs defs) (args args) (out types))
+              (match (cons defs args)
+                ((() . ())
+                 (propagate1 k out))
+                (((def . defs) . (arg . args))
+                 (lp defs args
+                     (adjoin-var out def (var-type-entry in arg))))))))
+         (_
+          (propagate1 k types))))
+      ((or ($ $call) ($ $callk))
+       (propagate1 k types))
+      (($ $rec names vars funs)
+       (let ((proc-type (make-type-entry &procedure -inf.0 +inf.0)))
+         (propagate1 k (adjoin-vars types vars proc-type))))
+      (_
+       (match (intmap-ref conts k)
+         (($ $kargs (_) (var))
+          (let ((entry (match exp
+                         (($ $const val)
+                          (constant-type val))
+                         ((or ($ $prim) ($ $fun) ($ $closure))
+                          ;; Could be more precise here.
+                          (make-type-entry &procedure -inf.0 +inf.0)))))
+            (propagate1 k (adjoin-var types var entry))))))))
+
+  (define (visit-cont label typev)
+    (let ((types (vector-ref (intmap-ref typev label) 0)))
+      (define (propagate0)
+        (values '() typev))
+      (define (propagate1 succ-label types)
+        (propagate-types label typev 0 succ-label types))
+      (define (propagate2 succ0-label types0 succ1-label types1)
+        (let*-values (((changed0 typev)
+                       (propagate-types label typev 0 succ0-label types0))
+                      ((changed1 typev)
+                       (propagate-types label typev 1 succ1-label types1)))
+          (values (append changed0 changed1) typev)))
+      
+      ;; Add types for new definitions, and restrict types of
+      ;; existing variables due to side effects.
+      (match (intmap-ref conts label)
+        (($ $kargs names vars ($ $continue k src exp))
+         (visit-exp label typev k types exp))
+        (($ $kreceive arity k)
+         (match (intmap-ref conts k)
+           (($ $kargs names vars)
+            (propagate1 k (adjoin-vars types vars all-types-entry)))))
+        (($ $kfun src meta self tail clause)
+         (if clause
+             (propagate1 clause (adjoin-var types self all-types-entry))
+             (propagate0)))
+        (($ $kclause arity kbody kalt)
+         (match (intmap-ref conts kbody)
            (($ $kargs _ defs)
-            (let ((in types))
-              (let lp ((defs defs) (args args) (out types))
-                (match (cons defs args)
-                  ((() . ())
-                   (propagate! 0 k out))
-                  (((def . defs) . (arg . args))
-                   (lp defs args
-                       (adjoin-var out def (var-type-entry in arg))))))))
-           (_
-            (propagate! 0 k types))))
-        ((or ($ $call) ($ $callk))
-         (propagate! 0 k types))
-        (($ $rec names vars funs)
-         (let ((proc-type (make-type-entry &procedure -inf.0 +inf.0)))
-           (propagate! 0 k (adjoin-vars types vars proc-type))))
-        (_
-         (match (lookup-cont k dfg)
-           (($ $kargs (_) (var))
-            (let ((entry (match exp
-                           (($ $const val)
-                            (constant-type val))
-                           ((or ($ $prim) ($ $fun) ($ $closure))
-                            ;; Could be more precise here.
-                            (make-type-entry &procedure -inf.0 +inf.0)))))
-              (propagate! 0 k (adjoin-var types var entry))))))))
+            (let ((body-types (adjoin-vars types defs all-types-entry)))
+              (if kalt
+                  (propagate2 kbody body-types kalt types)
+                  (propagate1 kbody body-types))))))
+        (($ $ktail) (propagate0)))))
 
-    (prepare-initial-state!)
+  (worklist-fold* visit-cont
+                  (intset-add empty-intset kfun)
+                  (compute-initial-state)))
 
-    ;; Iterate over all labelled expressions in the function,
-    ;; propagating types and ranges to all successors.
-    (let lp ((label min-label))
-      ;(pk 'visit label)
-      (cond
-       ((< label (+ min-label label-count))
-        (let* ((entry (vector-ref typev (label->idx label)))
-               (types (in-types entry)))
-          (define (propagate! succ-idx succ-label types)
-            (propagate-types! label entry succ-idx succ-label types))
-          ;; Add types for new definitions, and restrict types of
-          ;; existing variables due to side effects.
-          (match (lookup-cont label dfg)
-            (($ $kargs names vars term)
-             (let visit-term ((term term) (types types))
-               (match term
-                 (($ $letk conts term)
-                  (visit-term term types))
-                 (($ $continue k src exp)
-                  (visit-exp label entry k types exp)))))
-            (($ $kreceive arity k)
-             (match (lookup-cont k dfg)
-               (($ $kargs names vars)
-                (propagate! 0 k
-                             (adjoin-vars types vars all-types-entry)))))
-            (($ $kfun src meta self tail clause)
-             (let ((types (adjoin-var types self all-types-entry)))
-               (match clause
-                 (#f #f)
-                 (($ $cont kclause)
-                  (propagate! 0 kclause types)))))
-            (($ $kclause arity ($ $cont kbody ($ $kargs names vars)) alt)
-             (propagate! 0 kbody
-                         (adjoin-vars types vars all-types-entry))
-             (match alt
-               (#f #f)
-               (($ $cont kclause)
-                (propagate! 1 kclause types))))
-            (($ $ktail) #t)))
+(define (lookup-pre-type types label def)
+  (let* ((entry (intmap-ref types label))
+         (tentry (var-type-entry (vector-ref entry 0) def)))
+    (values (type-entry-type tentry)
+            (type-entry-min tentry)
+            (type-entry-max tentry))))
 
-        ;; And loop.
-        (lp (1+ label)))
+(define (lookup-post-type types label def succ-idx)
+  (let* ((entry (intmap-ref types label))
+         (tentry (var-type-entry (vector-ref entry (1+ succ-idx)) def)))
+    (values (type-entry-type tentry)
+            (type-entry-min tentry)
+            (type-entry-max tentry))))
 
-       ;; Iterate until we reach a fixed point.
-       (revisit-label
-        ;; Once the types have a fixed point, iterate until ranges also
-        ;; reach a fixed point, saturating ranges to accelerate
-        ;; convergence.
-        (unless types-changed?
-          (set! saturate-ranges? #t))
-        (set! types-changed? #f)
-        (let ((label revisit-label))
-          (set! revisit-label #f)
-          ;(pk 'looping)
-          (lp label)))
-
-       ;; All done!  Return the computed types.
-       (else typev)))))
-
-(define-record-type <type-analysis>
-  (make-type-analysis min-label label-count types)
-  type-analysis?
-  (min-label type-analysis-min-label)
-  (label-count type-analysis-label-count)
-  (types type-analysis-types))
-
-(define (infer-types fun dfg)
-  ;; Fun must be renumbered.
-  (match fun
-    (($ $cont min-label ($ $kfun))
-     (let ((label-count ((make-local-cont-folder label-count)
-                         (lambda (k cont label-count) (1+ label-count))
-                         fun 0)))
-       (make-type-analysis min-label label-count
-                           (infer-types* dfg min-label label-count))))))
-
-(define (lookup-pre-type analysis label def)
-  (match analysis
-    (($ <type-analysis> min-label label-count typev)
-     (let* ((entry (vector-ref typev (- label min-label)))
-            (tentry (var-type-entry (vector-ref entry 0) def)))
-       (values (type-entry-type tentry)
-               (type-entry-min tentry)
-               (type-entry-max tentry))))))
-
-(define (lookup-post-type analysis label def succ-idx)
-  (match analysis
-    (($ <type-analysis> min-label label-count typev)
-     (let* ((entry (vector-ref typev (- label min-label)))
-            (tentry (var-type-entry (vector-ref entry (1+ succ-idx)) def)))
-       (values (type-entry-type tentry)
-               (type-entry-min tentry)
-               (type-entry-max tentry))))))
-
-(define (primcall-types-check? analysis label name args)
+(define (primcall-types-check? types label name args)
   (match (hashq-ref *type-checkers* name)
     (#f #f)
     (checker
-     (match analysis
-       (($ <type-analysis> min-label label-count typev)
-        (let ((entry (vector-ref typev (- label min-label))))
-          (apply checker (vector-ref entry 0) args)))))))
+     (let ((entry (intmap-ref types label)))
+       (apply checker (vector-ref entry 0) args)))))

@@ -33,6 +33,7 @@
 #include "libguile/ports.h"
 
 #include "libguile/validate.h"
+#include "libguile/weak-list.h"
 #include "libguile/weak-table.h"
 
 
@@ -686,6 +687,16 @@ weak_table_put_x (scm_t_weak_table *table, unsigned long hash,
         }
     }
           
+  /* Fast path for updated values for existing entries of weak-key
+     tables.  */
+  if (table->kind == SCM_WEAK_TABLE_KIND_KEY &&
+      entries[k].hash == hash &&
+      entries[k].key == SCM_UNPACK (key))
+    {
+      entries[k].value = SCM_UNPACK (value);
+      return;
+    }
+
   if (entries[k].hash)
     unregister_disappearing_links (&entries[k], table->kind);
   else
@@ -790,12 +801,12 @@ make_weak_table (unsigned long k, scm_t_weak_table_kind kind)
 void
 scm_i_weak_table_print (SCM exp, SCM port, scm_print_state *pstate)
 {
-  scm_puts_unlocked ("#<", port);
-  scm_puts_unlocked ("weak-table ", port);
+  scm_puts ("#<", port);
+  scm_puts ("weak-table ", port);
   scm_uintprint (SCM_WEAK_TABLE (exp)->n_items, 10, port);
-  scm_putc_unlocked ('/', port);
+  scm_putc ('/', port);
   scm_uintprint (SCM_WEAK_TABLE (exp)->size, 10, port);
-  scm_puts_unlocked (">", port);
+  scm_puts (">", port);
 }
 
 static void
@@ -822,6 +833,17 @@ do_vacuum_weak_table (SCM table)
   return;
 }
 
+static scm_i_pthread_mutex_t all_weak_tables_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
+static SCM all_weak_tables = SCM_EOL;
+
+static void
+vacuum_all_weak_tables (void)
+{
+  scm_i_pthread_mutex_lock (&all_weak_tables_lock);
+  scm_i_visit_weak_list (&all_weak_tables, do_vacuum_weak_table);
+  scm_i_pthread_mutex_unlock (&all_weak_tables_lock);
+}
+
 SCM
 scm_c_make_weak_table (unsigned long k, scm_t_weak_table_kind kind)
 {
@@ -829,7 +851,9 @@ scm_c_make_weak_table (unsigned long k, scm_t_weak_table_kind kind)
 
   ret = make_weak_table (k, kind);
 
-  scm_i_register_weak_gc_callback (ret, do_vacuum_weak_table);
+  scm_i_pthread_mutex_lock (&all_weak_tables_lock);
+  all_weak_tables = scm_i_weak_cons (ret, all_weak_tables);
+  scm_i_pthread_mutex_unlock (&all_weak_tables_lock);
 
   return ret;
 }
@@ -912,9 +936,6 @@ assq_predicate (SCM x, SCM y, void *closure)
 SCM
 scm_weak_table_refq (SCM table, SCM key, SCM dflt)
 {
-  if (SCM_UNBNDP (dflt))
-    dflt = SCM_BOOL_F;
-  
   return scm_c_weak_table_ref (table, scm_ihashq (key, -1),
                                assq_predicate, SCM_UNPACK_POINTER (key),
                                dflt);
@@ -1148,6 +1169,8 @@ void
 scm_init_weak_table ()
 {
 #include "libguile/weak-table.x"
+
+  scm_i_register_async_gc_callback (vacuum_all_weak_tables);
 }
 
 /*

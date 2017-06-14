@@ -76,8 +76,9 @@ catch (SCM tag, SCM thunk, SCM handler, SCM pre_unwind_handler)
   SCM eh, prompt_tag;
   SCM res;
   scm_t_dynstack *dynstack = &SCM_I_CURRENT_THREAD->dynstack;
-  SCM dynamic_state = SCM_I_CURRENT_THREAD->dynamic_state;
+  scm_t_dynamic_state *dynamic_state = SCM_I_CURRENT_THREAD->dynamic_state;
   scm_i_jmp_buf registers;
+  const void *prev_cookie;
   scm_t_ptrdiff saved_stack_depth;
 
   if (!scm_is_eq (tag, SCM_BOOL_T) && !scm_is_symbol (tag))
@@ -95,21 +96,20 @@ catch (SCM tag, SCM thunk, SCM handler, SCM pre_unwind_handler)
 
   prompt_tag = scm_cons (SCM_INUM0, SCM_EOL);
 
-  eh = scm_c_make_vector (4, SCM_BOOL_F);
-  scm_c_vector_set_x (eh, 0, scm_fluid_ref (exception_handler_fluid));
-  scm_c_vector_set_x (eh, 1, tag);
-  scm_c_vector_set_x (eh, 2, prompt_tag);
-  scm_c_vector_set_x (eh, 3, pre_unwind_handler);
+  eh = scm_c_make_vector (3, SCM_BOOL_F);
+  scm_c_vector_set_x (eh, 0, tag);
+  scm_c_vector_set_x (eh, 1, prompt_tag);
+  scm_c_vector_set_x (eh, 2, pre_unwind_handler);
 
   vp = scm_the_vm ();
-  saved_stack_depth = vp->sp - vp->stack_base;
+  prev_cookie = vp->resumable_prompt_cookie;
+  saved_stack_depth = vp->stack_top - vp->sp;
 
   /* Push the prompt and exception handler onto the dynamic stack. */
   scm_dynstack_push_prompt (dynstack,
-                            SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY
-                            | SCM_F_DYNSTACK_PROMPT_PUSH_NARGS,
+                            SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY,
                             prompt_tag,
-                            vp->fp - vp->stack_base,
+                            vp->stack_top - vp->fp,
                             saved_stack_depth,
                             vp->ip,
                             &registers);
@@ -121,11 +121,12 @@ catch (SCM tag, SCM thunk, SCM handler, SCM pre_unwind_handler)
       /* A non-local return.  */
       SCM args;
 
+      vp->resumable_prompt_cookie = prev_cookie;
       scm_gc_after_nonlocal_exit ();
 
       /* FIXME: We know where the args will be on the stack; we could
          avoid consing them.  */
-      args = scm_i_prompt_pop_abort_args_x (vp);
+      args = scm_i_prompt_pop_abort_args_x (vp, saved_stack_depth);
 
       /* Cdr past the continuation. */
       args = scm_cdr (args);
@@ -199,23 +200,26 @@ abort_to_prompt (SCM prompt_tag, SCM tag, SCM args)
 static SCM
 throw_without_pre_unwind (SCM tag, SCM args)
 {
-  SCM eh;
+  size_t depth = 0;
 
   /* This function is not only the boot implementation of "throw", it is
      also called in response to resource allocation failures such as
      stack-overflow or out-of-memory.  For that reason we need to be
      careful to avoid allocating memory.  */
-  for (eh = scm_fluid_ref (exception_handler_fluid);
-       scm_is_true (eh);
-       eh = scm_c_vector_ref (eh, 0))
+  while (1)
     {
-      SCM catch_key, prompt_tag;
+      SCM eh, catch_key, prompt_tag;
 
-      catch_key = scm_c_vector_ref (eh, 1);
+      eh = scm_fluid_ref_star (exception_handler_fluid,
+                               scm_from_size_t (depth++));
+      if (scm_is_false (eh))
+        break;
+
+      catch_key = scm_c_vector_ref (eh, 0);
       if (!scm_is_eq (catch_key, SCM_BOOL_T) && !scm_is_eq (catch_key, tag))
         continue;
 
-      if (scm_is_true (scm_c_vector_ref (eh, 3)))
+      if (scm_is_true (scm_c_vector_ref (eh, 2)))
         {
           const char *key_chars;
 
@@ -228,7 +232,7 @@ throw_without_pre_unwind (SCM tag, SCM args)
                    "skipping pre-unwind handler.\n", key_chars);
         }
 
-      prompt_tag = scm_c_vector_ref (eh, 2);
+      prompt_tag = scm_c_vector_ref (eh, 1);
       if (scm_is_true (prompt_tag))
         abort_to_prompt (prompt_tag, tag, args);
     }
@@ -273,8 +277,8 @@ enum {
   CATCH_CLOSURE_HANDLER
 };
 
-static SCM
-make_catch_body_closure (scm_t_catch_body body, void *body_data)
+SCM
+scm_i_make_catch_body_closure (scm_t_catch_body body, void *body_data)
 {
   SCM ret;
   SCM_NEWSMOB2 (ret, tc16_catch_closure, body, body_data);
@@ -282,8 +286,9 @@ make_catch_body_closure (scm_t_catch_body body, void *body_data)
   return ret;
 }
 
-static SCM
-make_catch_handler_closure (scm_t_catch_handler handler, void *handler_data)
+SCM
+scm_i_make_catch_handler_closure (scm_t_catch_handler handler,
+                                  void *handler_data)
 {
   SCM ret;
   SCM_NEWSMOB2 (ret, tc16_catch_closure, handler, handler_data);
@@ -360,11 +365,12 @@ scm_c_catch (SCM tag,
 {
   SCM sbody, shandler, spre_unwind_handler;
   
-  sbody = make_catch_body_closure (body, body_data);
-  shandler = make_catch_handler_closure (handler, handler_data);
+  sbody = scm_i_make_catch_body_closure (body, body_data);
+  shandler = scm_i_make_catch_handler_closure (handler, handler_data);
   if (pre_unwind_handler)
-    spre_unwind_handler = make_catch_handler_closure (pre_unwind_handler,
-                                                      pre_unwind_handler_data);
+    spre_unwind_handler =
+      scm_i_make_catch_handler_closure (pre_unwind_handler,
+                                        pre_unwind_handler_data);
   else
     spre_unwind_handler = SCM_UNDEFINED;
   
@@ -404,8 +410,8 @@ scm_c_with_throw_handler (SCM tag,
        "and adapt it (if necessary) to expect to be within the dynamic context\n"
        "of the throw.");
 
-  sbody = make_catch_body_closure (body, body_data);
-  shandler = make_catch_handler_closure (handler, handler_data);
+  sbody = scm_i_make_catch_body_closure (body, body_data);
+  shandler = scm_i_make_catch_handler_closure (handler, handler_data);
   
   return scm_with_throw_handler (tag, sbody, shandler);
 }
@@ -528,7 +534,7 @@ handler_message (void *handler_data, SCM tag, SCM args)
 
   if (should_print_backtrace (tag, stack))
     {
-      scm_puts_unlocked ("Backtrace:\n", p);
+      scm_puts ("Backtrace:\n", p);
       scm_display_backtrace_with_highlights (stack, p,
                                              SCM_BOOL_F, SCM_BOOL_F,
                                              SCM_EOL);
@@ -642,7 +648,7 @@ scm_init_throw ()
   tc16_catch_closure = scm_make_smob_type ("catch-closure", 0);
   scm_set_smob_apply (tc16_catch_closure, apply_catch_closure, 0, 0, 1);
 
-  exception_handler_fluid = scm_make_fluid_with_default (SCM_BOOL_F);
+  exception_handler_fluid = scm_make_thread_local_fluid (SCM_BOOL_F);
   /* This binding is later removed when the Scheme definitions of catch,
      throw, and with-throw-handler are created in boot-9.scm.  */
   scm_c_define ("%exception-handler", exception_handler_fluid);

@@ -1,5 +1,5 @@
 /* Copyright (C) 1995,1996,1997,1998,1999,2000,2001, 2002, 2004, 2006,
- *   2007, 2008, 2009, 2011, 2013, 2014 Free Software Foundation, Inc.
+ *   2007, 2008, 2009, 2011, 2013, 2014, 2017 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -45,7 +45,6 @@
 
 #include "libguile/async.h"
 #include "libguile/eval.h"
-#include "libguile/root.h"
 #include "libguile/vectors.h"
 #include "libguile/threads.h"
 
@@ -86,6 +85,8 @@
    signal_handler_threads points to the thread that a signal should be
    delivered to.
 */
+static scm_i_pthread_mutex_t signal_handler_lock =
+  SCM_I_PTHREAD_MUTEX_INITIALIZER;
 static SCM *signal_handlers;
 static SCM signal_handler_asyncs;
 static SCM signal_handler_threads;
@@ -109,8 +110,10 @@ static SIGRETTYPE (*orig_handlers[NSIG])(int);
 static SCM
 close_1 (SCM proc, SCM arg)
 {
-  return scm_primitive_eval_x (scm_list_3 (scm_sym_lambda, SCM_EOL,
-					   scm_list_2 (proc, arg)));
+  /* Eval in the root module so that `lambda' has its usual meaning.  */
+  return scm_eval (scm_list_3 (scm_sym_lambda, SCM_EOL,
+                               scm_list_2 (proc, arg)),
+                   scm_the_root_module ());
 }
 
 #if SCM_USE_PTHREAD_THREADS
@@ -226,9 +229,8 @@ take_signal (int signum)
 
   if (scm_is_false (SCM_CDR (cell)))
     {
-      SCM_SETCDR (cell, t->active_asyncs);
-      t->active_asyncs = cell;
-      t->pending_asyncs = 1;
+      SCM_SETCDR (cell, t->pending_asyncs);
+      t->pending_asyncs = cell;
     }
 
 #ifndef HAVE_SIGACTION
@@ -325,15 +327,14 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
   if (SCM_UNBNDP (thread))
     thread = scm_current_thread ();
   else
-    {
-      SCM_VALIDATE_THREAD (4, thread);
-      if (scm_c_thread_exited_p (thread))
-	SCM_MISC_ERROR ("thread has already exited", SCM_EOL);
-    }
+    SCM_VALIDATE_THREAD (4, thread);
 
   scm_i_ensure_signal_delivery_thread ();
 
-  SCM_CRITICAL_SECTION_START;
+  scm_dynwind_begin (0);
+  scm_i_dynwind_pthread_mutex_lock (&signal_handler_lock);
+  scm_dynwind_block_asyncs ();
+
   old_handler = SCM_SIMPLE_VECTOR_REF (*signal_handlers, csig);
   if (SCM_UNBNDP (handler))
     query_only = 1;
@@ -352,7 +353,6 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
 	}
       else
 	{
-	  SCM_CRITICAL_SECTION_END;
 	  SCM_OUT_OF_RANGE (2, handler);
 	}
     }
@@ -439,7 +439,9 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
     }
   if (old_action.sa_handler == SIG_DFL || old_action.sa_handler == SIG_IGN)
     old_handler = scm_from_long ((long) old_action.sa_handler);
-  SCM_CRITICAL_SECTION_END;
+
+  scm_dynwind_end ();
+
   return scm_cons (old_handler, scm_from_int (old_action.sa_flags));
 #else
   if (query_only)
@@ -458,7 +460,9 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
     }
   if (old_chandler == SIG_DFL || old_chandler == SIG_IGN)
     old_handler = scm_from_long ((long) old_chandler);
-  SCM_CRITICAL_SECTION_END;
+
+  scm_dynwind_end ();
+
   return scm_cons (old_handler, scm_from_int (0));
 #endif
 }
@@ -550,7 +554,13 @@ SCM_DEFINE (scm_setitimer, "setitimer", 5, 0, 0,
             "The return value will be a list of two cons pairs representing the\n"
             "current state of the given timer.  The first pair is the seconds and\n"
             "microseconds of the timer @code{it_interval}, and the second pair is\n"
-            "the seconds and microseconds of the timer @code{it_value}.")
+            "the seconds and microseconds of the timer @code{it_value}."
+	    "\n"
+	    "@code{ITIMER_PROF} or @code{ITIMER_VIRTUAL} are not supported on\n"
+	    "some platforms and will always error. @code{(provided? 'ITIMER_PROF)}\n"
+	    "and @code{(provided? 'ITIMER_VIRTUAL)} report whether those timers\n"
+	    "are supported.\n")
+
 #define FUNC_NAME s_scm_setitimer
 {
   int rv;
@@ -587,7 +597,12 @@ SCM_DEFINE (scm_getitimer, "getitimer", 1, 0, 0,
             "The return value will be a list of two cons pairs representing the\n"
             "current state of the given timer.  The first pair is the seconds and\n"
             "microseconds of the timer @code{it_interval}, and the second pair is\n"
-            "the seconds and microseconds of the timer @code{it_value}.")
+            "the seconds and microseconds of the timer @code{it_value}."
+	    "\n"
+	    "@code{ITIMER_PROF} or @code{ITIMER_VIRTUAL} are not supported on\n"
+	    "some platforms and will always error. @code{(provided? 'ITIMER_PROF)}\n"
+	    "and @code{(provided? 'ITIMER_VIRTUAL)} report whether those timers\n"
+	    "are supported.\n")
 #define FUNC_NAME s_scm_getitimer
 {
   int rv;
@@ -597,10 +612,10 @@ SCM_DEFINE (scm_getitimer, "getitimer", 1, 0, 0,
   c_which_timer = SCM_NUM2INT(1, which_timer);
 
   SCM_SYSCALL(rv = getitimer(c_which_timer, &old_timer));
-  
+
   if(rv != 0)
     SCM_SYSERROR;
-  
+
   return scm_list_2 (scm_cons (scm_from_long (old_timer.it_interval.tv_sec),
 			       scm_from_long (old_timer.it_interval.tv_usec)),
 		     scm_cons (scm_from_long (old_timer.it_value.tv_sec),
@@ -722,6 +737,12 @@ scm_init_scmsigs ()
   scm_c_define ("ITIMER_REAL", scm_from_int (ITIMER_REAL));
   scm_c_define ("ITIMER_VIRTUAL", scm_from_int (ITIMER_VIRTUAL));
   scm_c_define ("ITIMER_PROF", scm_from_int (ITIMER_PROF));
+#ifdef HAVE_USABLE_GETITIMER_PROF
+  scm_add_feature ("ITIMER_PROF");
+#endif
+#ifdef HAVE_USABLE_GETITIMER_VIRTUAL
+  scm_add_feature ("ITIMER_VIRTUAL");
+#endif
 #endif /* defined(HAVE_SETITIMER) || defined(HAVE_GETITIMER) */
 
 #include "libguile/scmsigs.x"

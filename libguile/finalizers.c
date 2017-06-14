@@ -40,6 +40,8 @@ static int automatic_finalization_p = 1;
 
 static size_t finalization_count;
 
+static SCM run_finalizers_subr;
+
 
 
 
@@ -132,8 +134,6 @@ scm_i_add_finalizer (void *obj, scm_t_finalizer_proc proc, void *data)
 
 
 
-static SCM finalizer_async_cell;
-
 static SCM
 run_finalizers_async_thunk (void)
 {
@@ -150,19 +150,13 @@ static void
 queue_finalizer_async (void)
 {
   scm_i_thread *t = SCM_I_CURRENT_THREAD;
-  static scm_i_pthread_mutex_t lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
 
-  scm_i_pthread_mutex_lock (&lock);
-  /* If t is NULL, that could be because we're allocating in
-     threads.c:guilify_self_1.  In that case, rely on the
+  /* Could be that the current thread is is NULL when we're allocating
+     in threads.c:guilify_self_1.  In that case, rely on the
      GC_invoke_finalizers call there after the thread spins up.  */
-  if (t && scm_is_false (SCM_CDR (finalizer_async_cell)))
-    {
-      SCM_SETCDR (finalizer_async_cell, t->active_asyncs);
-      t->active_asyncs = finalizer_async_cell;
-      t->pending_asyncs = 1;
-    }
-  scm_i_pthread_mutex_unlock (&lock);
+  if (!t) return;
+
+  scm_system_async_mark_for_thread (run_finalizers_subr, t->handle);
 }
 
 
@@ -302,59 +296,46 @@ scm_i_finalizer_pre_fork (void)
 
 
 
-static void*
-weak_pointer_ref (void *weak_pointer) 
-{
-  return *(void **) weak_pointer;
-}
-
 static void
-weak_gc_finalizer (void *ptr, void *data)
+async_gc_finalizer (void *ptr, void *data)
 {
-  void **weak = ptr;
-  void *val;
-  void (*callback) (SCM) = weak[1];
+  void **obj = ptr;
+  void (*callback) (void) = obj[0];
 
-  val = GC_call_with_alloc_lock (weak_pointer_ref, &weak[0]);
+  callback ();
 
-  if (!val)
-    return;
-
-  callback (SCM_PACK_POINTER (val));
-
-  scm_i_set_finalizer (ptr, weak_gc_finalizer, data);
+  scm_i_set_finalizer (ptr, async_gc_finalizer, data);
 }
 
-/* CALLBACK will be called on OBJ, as long as OBJ is accessible.  It
-   will be called from a finalizer, which may be from an async or from
+/* Arrange to call CALLBACK asynchronously after each GC.  The callback
+   will be invoked from a finalizer, which may be from an async or from
    another thread.
 
-   As an implementation detail, the way this works is that we allocate
-   a fresh pointer-less object holding two words.  We know that this
+   As an implementation detail, the way this works is that we allocate a
+   fresh object and put the callback in the object.  We know that this
    object should get collected the next time GC is run, so we attach a
-   finalizer to it so that we get a callback after GC happens.
+   finalizer to it to trigger the callback.
 
-   The first word of the object holds a weak reference to OBJ, and the
-   second holds the callback pointer.  When the callback is called, we
-   check if the weak reference on OBJ still holds.  If it doesn't hold,
-   then OBJ is no longer accessible, and we're done.  Otherwise we call
-   the callback and re-register a finalizer for our two-word GC object,
-   effectively resuscitating the object so that we will get a callback
-   on the next GC.
+   Once the callback runs, we re-attach a finalizer to that fresh object
+   to prepare for the next GC, and the process repeats indefinitely.
 
    We could use the scm_after_gc_hook, but using a finalizer has the
    advantage of potentially running in another thread, decreasing pause
-   time.  */
+   time.
+
+   Note that libgc currently has a heuristic that adding 500 finalizable
+   objects will cause GC to collect rather than expand the heap,
+   drastically reducing performance on workloads that actually need to
+   expand the heap.  Therefore scm_i_register_async_gc_callback is
+   inappropriate for using on unbounded numbers of callbacks.  */
 void
-scm_i_register_weak_gc_callback (SCM obj, void (*callback) (SCM))
+scm_i_register_async_gc_callback (void (*callback) (void))
 {
-  void **weak = GC_MALLOC_ATOMIC (sizeof (void*) * 2);
+  void **obj = GC_MALLOC_ATOMIC (sizeof (void*));
 
-  weak[0] = SCM_UNPACK_POINTER (obj);
-  weak[1] = (void*)callback;
-  GC_GENERAL_REGISTER_DISAPPEARING_LINK (weak, SCM2PTR (obj));
+  obj[0] = (void*)callback;
 
-  scm_i_set_finalizer (weak, weak_gc_finalizer, NULL);
+  scm_i_set_finalizer (obj, async_gc_finalizer, NULL);
 }
 
 
@@ -418,10 +399,8 @@ scm_init_finalizers (void)
 {
   /* When the async is to run, the cdr of the pair gets set to the
      asyncs queue of the current thread.  */
-  finalizer_async_cell =
-    scm_cons (scm_c_make_gsubr ("%run-finalizers", 0, 0, 0,
-                                run_finalizers_async_thunk),
-              SCM_BOOL_F);
+  run_finalizers_subr = scm_c_make_gsubr ("%run-finalizers", 0, 0, 0,
+                                          run_finalizers_async_thunk);
 
   if (automatic_finalization_p)
     GC_set_finalizer_notifier (queue_finalizer_async);

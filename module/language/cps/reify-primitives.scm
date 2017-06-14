@@ -27,22 +27,25 @@
 (define-module (language cps reify-primitives)
   #:use-module (ice-9 match)
   #:use-module (language cps)
-  #:use-module (language cps dfg)
+  #:use-module (language cps utils)
+  #:use-module (language cps with-cps)
   #:use-module (language cps primitives)
+  #:use-module (language cps intmap)
   #:use-module (language bytecode)
   #:export (reify-primitives))
 
-(define (module-box src module name public? bound? val-proc)
-  (let-fresh (kbox) (module-var name-var public?-var bound?-var box)
-    (build-cps-term
-      ($letconst (('module module-var module)
-                  ('name name-var name)
-                  ('public? public?-var public?)
-                  ('bound? bound?-var bound?))
-        ($letk ((kbox ($kargs ('box) (box) ,(val-proc box))))
-          ($continue kbox src
-            ($primcall 'cached-module-box
-                       (module-var name-var public?-var bound?-var))))))))
+(define (module-box cps src module name public? bound? val-proc)
+  (with-cps cps
+    (letv box)
+    (let$ body (val-proc box))
+    (letk kbox ($kargs ('box) (box) ,body))
+    ($ (with-cps-constants ((module module)
+                            (name name)
+                            (public? public?)
+                            (bound? bound?))
+         (build-term ($continue kbox src
+                       ($primcall 'cached-module-box
+                                  (module name public? bound?))))))))
 
 (define (primitive-module name)
   (case name
@@ -72,107 +75,105 @@
       bytevector-ieee-double-ref bytevector-ieee-double-set!
       bytevector-ieee-double-native-ref bytevector-ieee-double-native-set!)
      '(rnrs bytevectors))
+    ((atomic-box?
+      make-atomic-box atomic-box-ref atomic-box-set!
+      atomic-box-swap! atomic-box-compare-and-swap!)
+     '(ice-9 atomic))
+    ((current-thread) '(ice-9 threads))
     ((class-of) '(oop goops))
+    ((u8vector-ref
+      u8vector-set! s8vector-ref s8vector-set!
+      u16vector-ref u16vector-set! s16vector-ref s16vector-set!
+      u32vector-ref u32vector-set! s32vector-ref s32vector-set!
+      u64vector-ref u64vector-set! s64vector-ref s64vector-set!
+      f32vector-ref f32vector-set! f64vector-ref f64vector-set!)
+     '(srfi srfi-4))
     (else '(guile))))
 
-(define (primitive-ref name k src)
-  (module-box #f (primitive-module name) name #f #t
-              (lambda (box)
-                (build-cps-term
-                  ($continue k src ($primcall 'box-ref (box)))))))
+(define (primitive-ref cps name k src)
+  (module-box cps src (primitive-module name) name #f #t
+              (lambda (cps box)
+                (with-cps cps
+                  (build-term
+                    ($continue k src ($primcall 'box-ref (box))))))))
 
-(define (builtin-ref idx k src)
-  (let-fresh () (idx-var)
-    (build-cps-term
-      ($letconst (('idx idx-var idx))
-        ($continue k src
-          ($primcall 'builtin-ref (idx-var)))))))
+(define (builtin-ref cps idx k src)
+  (with-cps cps
+    ($ (with-cps-constants ((idx idx))
+         (build-term
+           ($continue k src ($primcall 'builtin-ref (idx))))))))
 
-(define (reify-clause ktail)
-  (let-fresh (kclause kbody kthrow) (wna false str eol throw)
-    (build-cps-cont
-      (kclause ($kclause ('() '() #f '() #f)
-                 (kbody
-                  ($kargs () ()
-                    ($letconst (('wna wna 'wrong-number-of-args)
-                                ('false false #f)
-                                ('str str "Wrong number of arguments")
-                                ('eol eol '()))
-                      ($letk ((kthrow
-                               ($kargs ('throw) (throw)
-                                 ($continue ktail #f
-                                   ($call throw
-                                          (wna false str eol false))))))
-                        ,(primitive-ref 'throw kthrow #f)))))
-                 ,#f)))))
+(define (reify-clause cps ktail)
+  (with-cps cps
+    (letv throw)
+    (let$ throw-body
+          (with-cps-constants ((wna 'wrong-number-of-args)
+                               (false #f)
+                               (str "Wrong number of arguments")
+                               (eol '()))
+            (build-term
+              ($continue ktail #f
+                ($call throw (wna false str eol false))))))
+    (letk kthrow ($kargs ('throw) (throw) ,throw-body))
+    (let$ body (primitive-ref 'throw kthrow #f))
+    (letk kbody ($kargs () () ,body))
+    (letk kclause ($kclause ('() '() #f '() #f) kbody #f))
+    kclause))
 
-(define (reify-primitives/1 fun single-value-conts)
-  (define (visit-clause cont)
-    (rewrite-cps-cont cont
-      (($ $cont label ($ $kclause arity body alternate))
-       (label ($kclause ,arity ,(visit-cont body)
-                      ,(and alternate (visit-clause alternate)))))))
-  (define (visit-cont cont)
-    (rewrite-cps-cont cont
-      (($ $cont label ($ $kargs (name) (var) body))
-       ,(begin
-          (bitvector-set! single-value-conts label #t)
-          (build-cps-cont
-            (label ($kargs (name) (var) ,(visit-term body))))))
-      (($ $cont label ($ $kargs names vars body))
-       (label ($kargs names vars ,(visit-term body))))
-      (($ $cont)
-       ,cont)))
-  (define (visit-term term)
-    (match term
-      (($ $letk conts body)
-       ;; Visit continuations before their uses.
-       (let ((conts (map visit-cont conts)))
-         (build-cps-term
-           ($letk ,conts ,(visit-term body)))))
-      (($ $continue k src exp)
-       (match exp
-         (($ $prim name)
-          (if (bitvector-ref single-value-conts k)
-              (cond
-               ((builtin-name->index name)
-                => (lambda (idx)
-                     (builtin-ref idx k src)))
-               (else (primitive-ref name k src)))
-              (build-cps-term ($continue k src
-                                ($const *unspecified*)))))
-         (($ $primcall 'call-thunk/no-inline (proc))
-          (build-cps-term
-            ($continue k src ($call proc ()))))
-         (($ $primcall name args)
-          (cond
-           ((or (prim-instruction name) (branching-primitive? name))
-            ;; Assume arities are correct.
-            term)
-           (else
-            (let-fresh (k*) (v)
-              (build-cps-term
-                ($letk ((k* ($kargs (v) (v)
-                              ($continue k src ($call v args)))))
-                  ,(cond
-                    ((builtin-name->index name)
-                     => (lambda (idx)
-                          (builtin-ref idx k* src)))
-                    (else (primitive-ref name k* src)))))))))
-         (_ term)))))
+;; A $kreceive continuation should have only one predecessor.
+(define (uniquify-receive cps k)
+  (match (intmap-ref cps k)
+    (($ $kreceive ($ $arity req () rest () #f) kargs)
+     (with-cps cps
+       (letk k ($kreceive req rest kargs))
+       k))
+    (_
+     (with-cps cps k))))
 
-  (rewrite-cps-cont fun
-    (($ $cont label ($ $kfun src meta self (and tail ($ $cont ktail)) #f))
-     ;; A case-lambda with no clauses.  Reify a clause.
-     (label ($kfun src meta self ,tail ,(reify-clause ktail))))
-    (($ $cont label ($ $kfun src meta self tail clause))
-     (label ($kfun src meta self ,tail ,(visit-clause clause))))))
+(define (reify-primitives cps)
+  (define (visit-cont label cont cps)
+    (define (resolve-prim cps name k src)
+      (cond
+       ((builtin-name->index name)
+        => (lambda (idx) (builtin-ref cps idx k src)))
+       (else
+        (primitive-ref cps name k src))))
+    (match cont
+      (($ $kfun src meta self tail #f)
+       (with-cps cps
+         (let$ clause (reify-clause tail))
+         (setk label ($kfun src meta self tail clause))))
+      (($ $kargs names vars ($ $continue k src ($ $prim name)))
+       (with-cps cps
+         (let$ k (uniquify-receive k))
+         (let$ body (resolve-prim name k src))
+         (setk label ($kargs names vars ,body))))
+      (($ $kargs names vars
+          ($ $continue k src ($ $primcall 'call-thunk/no-inline (proc))))
+       (with-cps cps
+         (setk label ($kargs names vars ($continue k src ($call proc ()))))))
+      (($ $kargs names vars ($ $continue k src ($ $primcall name args)))
+       (if (or (prim-instruction name) (branching-primitive? name))
+           ;; Assume arities are correct.
+           cps
+           (with-cps cps
+             (letv proc)
+             (let$ k (uniquify-receive k))
+             (letk kproc ($kargs ('proc) (proc)
+                           ($continue k src ($call proc args))))
+             (let$ body (resolve-prim name kproc src))
+             (setk label ($kargs names vars ,body)))))
+      (($ $kargs names vars ($ $continue k src ($ $call proc args)))
+       (with-cps cps
+         (let$ k (uniquify-receive k))
+         (setk label ($kargs names vars
+                       ($continue k src ($call proc args))))))
+      (($ $kargs names vars ($ $continue k src ($ $callk k* proc args)))
+       (with-cps cps
+         (let$ k (uniquify-receive k))
+         (setk label ($kargs names vars
+                       ($continue k src ($callk k* proc args))))))
+      (_ cps)))
 
-(define (reify-primitives term)
-  (with-fresh-name-state term
-    (let ((single-value-conts (make-bitvector (label-counter) #f)))
-      (rewrite-cps-term term
-        (($ $program procs)
-         ($program ,(map (lambda (cont)
-                           (reify-primitives/1 cont single-value-conts))
-                         procs)))))))
+  (with-fresh-name-state cps
+    (persistent-intmap (intmap-fold visit-cont cps cps))))

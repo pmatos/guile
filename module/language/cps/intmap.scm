@@ -33,8 +33,8 @@
 (define-module (language cps intmap)
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-9 gnu)
-  #:use-module (srfi srfi-18)
   #:use-module (ice-9 match)
+  #:use-module ((ice-9 threads) #:select (current-thread))
   #:export (empty-intmap
             intmap?
             transient-intmap?

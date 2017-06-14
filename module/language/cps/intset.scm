@@ -29,6 +29,7 @@
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-9 gnu)
   #:use-module (ice-9 match)
+  #:use-module ((ice-9 threads) #:select (current-thread))
   #:export (empty-intset
             intset?
             transient-intset?
@@ -40,7 +41,9 @@
             intset-remove
             intset-ref
             intset-next
+            intset-prev
             intset-fold
+            intset-fold-right
             intset-union
             intset-intersect
             intset-subtract
@@ -100,7 +103,6 @@
   (root transient-intset-root set-transient-intset-root!)
   (edit transient-intset-edit set-transient-intset-edit!))
 
-(define (new-leaf) 0)
 (define-inlinable (clone-leaf-and-set leaf i val)
   (if val
       (if leaf
@@ -116,9 +118,13 @@
   (let ((vec (make-vector *branch-size-with-edit* #f)))
     (when edit (vector-set! vec *edit-index* edit))
     vec))
-(define (clone-branch-and-set branch i elt)
+(define-inlinable (clone-branch-and-set branch i elt)
   (let ((new (new-branch #f)))
-    (when branch (vector-move-left! branch 0 *branch-size* new 0))
+    (when branch
+      (let lp ((n 0))
+        (when (< n *branch-size*)
+          (vector-set! new n (vector-ref branch n))
+          (lp (1+ n)))))
     (vector-set! new i elt)
     new))
 (define-inlinable (assert-readable! root-edit)
@@ -135,7 +141,7 @@
         (and (not (vector-ref branch i))
              (lp (1+ i))))))
 
-(define (round-down min shift)
+(define-inlinable (round-down min shift)
   (logand min (lognot (1- (ash 1 shift)))))
 
 (define empty-intset (make-intset 0 *leaf-bits* #f))
@@ -391,31 +397,62 @@
      (assert-readable! edit)
      (next min shift root))))
 
-(define-syntax-rule (make-intset-folder seed ...)
+(define* (intset-prev bs #:optional i)
+  (define (visit-leaf node i)
+    (let lp ((idx (logand i *leaf-mask*)))
+      (if (logbit? idx node)
+          (logior (logand i (lognot *leaf-mask*)) idx)
+          (let ((idx (1- idx)))
+            (and (<= 0 idx) (lp idx))))))
+  (define (visit-branch node shift i)
+    (let lp ((i i) (idx (logand (ash i (- shift)) *branch-mask*)))
+      (and (<= 0 idx)
+           (or (let ((node (vector-ref node idx)))
+                 (and node (visit-node node shift i)))
+               (lp (1- (round-down i shift)) (1- idx))))))
+  (define (visit-node node shift i)
+    (if (= shift *leaf-bits*)
+        (visit-leaf node i)
+        (visit-branch node (- shift *branch-bits*) i)))
+  (define (prev min shift root)
+    (let ((i (if (and i (<= i (+ min (ash 1 shift))))
+                 (- i min)
+                 (1- (ash 1 shift)))))
+      (and root (<= 0 i)
+           (let ((i (visit-node root shift i)))
+             (and i (+ min i))))))
+  (match bs
+    (($ <intset> min shift root)
+     (prev min shift root))
+    (($ <transient-intset> min shift root edit)
+     (assert-readable! edit)
+     (prev min shift root))))
+
+(define-syntax-rule (make-intset-folder forward? seed ...)
   (lambda (f set seed ...)
     (define (visit-branch node shift min seed ...)
       (cond
        ((= shift *leaf-bits*)
-        (let lp ((i 0) (seed seed) ...)
-          (if (< i *leaf-size*)
+        (let lp ((i (if forward? 0 (1- *leaf-size*))) (seed seed) ...)
+          (if (if forward? (< i *leaf-size*) (<= 0 i))
               (if (logbit? i node)
                   (call-with-values (lambda () (f (+ i min) seed ...))
                     (lambda (seed ...)
-                      (lp (1+ i) seed ...)))
-                  (lp (1+ i) seed ...))
+                      (lp (if forward? (1+ i) (1- i)) seed ...)))
+                  (lp (if forward? (1+ i) (1- i)) seed ...))
               (values seed ...))))
        (else
         (let ((shift (- shift *branch-bits*)))
-          (let lp ((i 0) (seed seed) ...)
-            (if (< i *branch-size*)
+          (let lp ((i (if forward? 0 (1- *branch-size*))) (seed seed) ...)
+            (if (if forward? (< i *branch-size*) (<= 0 i))
                 (let ((elt (vector-ref node i)))
                   (if elt
                       (call-with-values
                           (lambda ()
                             (visit-branch elt shift (+ min (ash i shift)) seed ...))
                         (lambda (seed ...)
-                          (lp (1+ i) seed ...)))
-                      (lp (1+ i) seed ...)))
+                          (lp (if forward? (1+ i) (1- i)) seed ...)))
+                      (lp (if forward? (1+ i) (1- i)) seed ...)))
                 (values seed ...)))))))
     (match set
       (($ <intset> min shift root)
@@ -428,11 +465,20 @@
 (define intset-fold
   (case-lambda
     ((f set seed)
-     ((make-intset-folder seed) f set seed))
+     ((make-intset-folder #t seed) f set seed))
     ((f set s0 s1)
-     ((make-intset-folder s0 s1) f set s0 s1))
+     ((make-intset-folder #t s0 s1) f set s0 s1))
     ((f set s0 s1 s2)
-     ((make-intset-folder s0 s1 s2) f set s0 s1 s2))))
+     ((make-intset-folder #t s0 s1 s2) f set s0 s1 s2))))
+
+(define intset-fold-right
+  (case-lambda
+    ((f set seed)
+     ((make-intset-folder #f seed) f set seed))
+    ((f set s0 s1)
+     ((make-intset-folder #f s0 s1) f set s0 s1))
+    ((f set s0 s1 s2)
+     ((make-intset-folder #f s0 s1 s2) f set s0 s1 s2))))
 
 (define (intset-size shift root)
   (cond
@@ -508,6 +554,8 @@
   (match (cons a b)
     ((($ <intset> a-min a-shift a-root) . ($ <intset> b-min b-shift b-root))
      (cond
+      ((not b-root) a)
+      ((not a-root) b)
       ((not (= b-shift a-shift))
        ;; Hoist the set with the lowest shift to meet the one with the
        ;; higher shift.
@@ -529,10 +577,10 @@
           (else (make-intset a-min a-shift root)))))))))
 
 (define (intset-intersect a b)
-  (define tmp (new-leaf))
   ;; Intersect leaves.
   (define (intersect-leaves a b)
-    (logand a b))
+    (let ((leaf (logand a b)))
+      (if (eqv? leaf 0) #f leaf)))
   ;; Intersect A and B from index I; the result will be fresh.
   (define (intersect-branches/fresh shift a b i fresh)
     (let lp ((i 0))
@@ -644,10 +692,10 @@
           (else (make-intset/prune a-min a-shift root)))))))))
 
 (define (intset-subtract a b)
-  (define tmp (new-leaf))
   ;; Intersect leaves.
   (define (subtract-leaves a b)
-    (logand a (lognot b)))
+    (let ((out (logand a (lognot b))))
+      (if (zero? out) #f out)))
   ;; Subtract B from A starting at index I; the result will be fresh.
   (define (subtract-branches/fresh shift a b i fresh)
     (let lp ((i 0))
@@ -719,7 +767,9 @@
                      (new (lp a-min a-shift old)))
                 (if (eq? old new)
                     a-root
-                    (clone-branch-and-set a-root a-idx new)))))))))))
+                    (let ((root (clone-branch-and-set a-root a-idx new)))
+                      (and (or new (not (branch-empty? root)))
+                           root))))))))))))
 
 (define (bitvector->intset bv)
   (define (finish-tail out min tail)
@@ -764,13 +814,8 @@
     (match ranges
       (()
        (format port "#<~a>" tag))
-      (((0 . _) . _)
-       (format port "#<~a ~a>" tag (range-string ranges)))
-      (((min . end) . ranges)
-       (let ((ranges (map (match-lambda
-                            ((start . end) (cons (- start min) (- end min))))
-                          (acons min end ranges))))
-         (format port "#<~a ~a+~a>" tag min (range-string ranges)))))))
+      (_
+       (format port "#<~a ~a>" tag (range-string ranges))))))
 
 (define (print-intset intset port)
   (print-helper port "intset" intset))

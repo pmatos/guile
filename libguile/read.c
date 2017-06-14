@@ -1,4 +1,4 @@
-/* Copyright (C) 1995-1997, 1999-2001, 2003, 2004, 2006-2012, 2014
+/* Copyright (C) 1995-1997, 1999-2001, 2003, 2004, 2006-2012, 2014, 2015
  *   Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
@@ -31,6 +31,7 @@
 #include <unictype.h>
 #include <c-strcase.h>
 #include <c-ctype.h>
+#include <alloca.h>
 
 #include "libguile/_scm.h"
 #include "libguile/bytevectors.h"
@@ -46,7 +47,6 @@
 #include "libguile/ports.h"
 #include "libguile/ports-internal.h"
 #include "libguile/fports.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/strports.h"
 #include "libguile/vectors.h"
@@ -64,6 +64,7 @@ SCM_GLOBAL_SYMBOL (scm_sym_dot, ".");
 SCM_SYMBOL (scm_keyword_prefix, "prefix");
 SCM_SYMBOL (scm_keyword_postfix, "postfix");
 SCM_SYMBOL (sym_nil, "nil");
+SCM_SYMBOL (sym_ISO_8859_1, "ISO-8859-1");
 
 /* SRFI-105 curly infix expression support */
 SCM_SYMBOL (sym_nfx, "$nfx$");
@@ -148,8 +149,8 @@ scm_i_input_error (char const *function,
   scm_simple_format (string_port,
 		     scm_from_locale_string ("~A:~S:~S: ~A"),
 		     scm_list_4 (fn,
-				 scm_from_long (SCM_LINUM (port) + 1),
-				 scm_from_int (SCM_COL (port) + 1),
+				 scm_sum (scm_port_line (port), SCM_INUM1),
+				 scm_sum (scm_port_column (port), SCM_INUM1),
 				 scm_from_locale_string (message)));
     
   string = scm_get_output_string (string_port);
@@ -263,13 +264,13 @@ read_token (SCM port, scm_t_read_opts *opts,
      {
        int chr;
 
-       chr = scm_get_byte_or_eof_unlocked (port);
+       chr = scm_get_byte_or_eof (port);
 
        if (chr == EOF)
         return 0;
       else if (CHAR_IS_DELIMITER (chr))
         {
-          scm_unget_byte_unlocked (chr, port);
+          scm_unget_byte (chr, port);
           return 0;
         }
       else
@@ -335,7 +336,7 @@ flush_ws (SCM port, scm_t_read_opts *opts, const char *eoferr)
 {
   scm_t_wchar c;
   while (1)
-    switch (c = scm_getc_unlocked (port))
+    switch (c = scm_getc (port))
       {
       case EOF:
       goteof:
@@ -350,7 +351,7 @@ flush_ws (SCM port, scm_t_read_opts *opts, const char *eoferr)
 
       case ';':
       lp:
-	switch (c = scm_getc_unlocked (port))
+	switch (c = scm_getc (port))
 	  {
 	  case EOF:
 	    goto goteof;
@@ -362,7 +363,7 @@ flush_ws (SCM port, scm_t_read_opts *opts, const char *eoferr)
 	break;
 
       case '#':
-	switch (c = scm_getc_unlocked (port))
+	switch (c = scm_getc (port))
 	  {
 	  case EOF:
 	    eoferr = "read_sharp";
@@ -381,7 +382,7 @@ flush_ws (SCM port, scm_t_read_opts *opts, const char *eoferr)
 	      }
 	    /* fall through */
 	  default:
-	    scm_ungetc_unlocked (c, port);
+	    scm_ungetc (c, port);
 	    return '#';
 	  }
 	break;
@@ -433,14 +434,14 @@ scm_read_sexp (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
                                    : ')'));
 
   /* Need to capture line and column numbers here. */
-  long line = SCM_LINUM (port);
-  int column = SCM_COL (port) - 1;
+  long line = scm_to_long (scm_port_line (port));
+  int column = scm_to_int (scm_port_column (port)) - 1;
 
   c = flush_ws (port, opts, FUNC_NAME);
   if (terminating_char == c)
     return SCM_EOL;
 
-  scm_ungetc_unlocked (c, port);
+  scm_ungetc (c, port);
   tmp = scm_read_expression (port, opts);
 
   /* Note that it is possible for scm_read_expression to return
@@ -468,7 +469,7 @@ scm_read_sexp (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
                            "in pair: mismatched close paren: ~A",
                            scm_list_1 (SCM_MAKE_CHAR (c)));
 
-      scm_ungetc_unlocked (c, port);
+      scm_ungetc (c, port);
       tmp = scm_read_expression (port, opts);
 
       /* See above note about scm_sym_dot.  */
@@ -557,7 +558,7 @@ scm_read_sexp (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
       c = 0;                                                       \
       while (i < ndigits)                                          \
         {                                                          \
-          a = scm_getc_unlocked (port);                                     \
+          a = scm_getc (port);                                     \
           if (a == EOF)                                            \
             goto str_eof;                                          \
           if (terminator                                           \
@@ -587,13 +588,13 @@ skip_intraline_whitespace (SCM port)
   
   do
     {
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
       if (c == EOF)
         return;
     }
   while (c == '\t' || uc_is_general_category (c, UC_SPACE_SEPARATOR));
 
-  scm_ungetc_unlocked (c, port);
+  scm_ungetc (c, port);
 }                                         
 
 /* Read either a double-quoted string or an R7RS-style symbol delimited
@@ -611,10 +612,10 @@ scm_read_string_like_syntax (int chr, SCM port, scm_t_read_opts *opts)
   scm_t_wchar c, c_str[READER_STRING_BUFFER_SIZE];
 
   /* Need to capture line and column numbers here. */
-  long line = SCM_LINUM (port);
-  int column = SCM_COL (port) - 1;
+  long line = scm_to_long (scm_port_line (port));
+  int column = scm_to_int (scm_port_column (port)) - 1;
 
-  while (chr != (c = scm_getc_unlocked (port)))
+  while (chr != (c = scm_getc (port)))
     {
       if (c == EOF)
         {
@@ -634,7 +635,7 @@ scm_read_string_like_syntax (int chr, SCM port, scm_t_read_opts *opts)
 
       if (c == '\\')
         {
-          switch (c = scm_getc_unlocked (port))
+          switch (c = scm_getc (port))
             {
             case EOF:
               goto str_eof;
@@ -738,10 +739,10 @@ scm_read_number (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
   size_t bytes_read;
 
   /* Need to capture line and column numbers here. */
-  long line = SCM_LINUM (port);
-  int column = SCM_COL (port) - 1;
+  long line = scm_to_long (scm_port_line (port));
+  int column = scm_to_int (scm_port_column (port)) - 1;
 
-  scm_ungetc_unlocked (chr, port);
+  scm_ungetc (chr, port);
   buffer = read_complete_token (port, opts, local_buffer, sizeof local_buffer,
 				&bytes_read);
 
@@ -758,7 +759,9 @@ scm_read_number (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
   else if (SCM_NIMP (result))
     result = maybe_annotate_source (result, port, opts, line, column);
 
-  SCM_COL (port) += scm_i_string_length (str);
+  scm_set_port_column_x (port,
+                         scm_sum (scm_port_column (port),
+                                  scm_string_length (str)));
   return result;
 }
 
@@ -772,7 +775,7 @@ scm_read_mixed_case_symbol (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
   char local_buffer[READER_BUFFER_SIZE], *buffer;
   SCM str;
 
-  scm_ungetc_unlocked (chr, port);
+  scm_ungetc (chr, port);
   buffer = read_complete_token (port, opts, local_buffer, sizeof local_buffer,
 				&bytes_read);
   if (bytes_read > 0)
@@ -795,7 +798,9 @@ scm_read_mixed_case_symbol (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
       result = scm_string_to_symbol (str);
     }
 
-  SCM_COL (port) += scm_i_string_length (str);
+  scm_set_port_column_x (port,
+                         scm_sum (scm_port_column (port),
+                                  scm_string_length (str)));
   return result;
 }
 
@@ -832,8 +837,8 @@ scm_read_number_and_radix (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
       break;
 
     default:
-      scm_ungetc_unlocked (chr, port);
-      scm_ungetc_unlocked ('#', port);
+      scm_ungetc (chr, port);
+      scm_ungetc ('#', port);
       radix = 10;
     }
 
@@ -844,7 +849,9 @@ scm_read_number_and_radix (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
 
   result = scm_string_to_number (str, scm_from_uint (radix));
 
-  SCM_COL (port) += scm_i_string_length (str);
+  scm_set_port_column_x (port,
+                         scm_sum (scm_port_column (port),
+                                  scm_string_length (str)));
 
   if (scm_is_true (result))
     return result;
@@ -859,8 +866,8 @@ static SCM
 scm_read_quote (int chr, SCM port, scm_t_read_opts *opts)
 {
   SCM p;
-  long line = SCM_LINUM (port);
-  int column = SCM_COL (port) - 1;
+  long line = scm_to_long (scm_port_line (port));
+  int column = scm_to_int (scm_port_column (port)) - 1;
 
   switch (chr)
     {
@@ -876,12 +883,12 @@ scm_read_quote (int chr, SCM port, scm_t_read_opts *opts)
       {
 	scm_t_wchar c;
 
-	c = scm_getc_unlocked (port);
+	c = scm_getc (port);
 	if ('@' == c)
 	  p = scm_sym_uq_splicing;
 	else
 	  {
-	    scm_ungetc_unlocked (c, port);
+	    scm_ungetc (c, port);
 	    p = scm_sym_unquote;
 	  }
 	break;
@@ -906,8 +913,8 @@ static SCM
 scm_read_syntax (int chr, SCM port, scm_t_read_opts *opts)
 {
   SCM p;
-  long line = SCM_LINUM (port);
-  int column = SCM_COL (port) - 1;
+  long line = scm_to_long (scm_port_line (port));
+  int column = scm_to_int (scm_port_column (port)) - 1;
 
   switch (chr)
     {
@@ -923,12 +930,12 @@ scm_read_syntax (int chr, SCM port, scm_t_read_opts *opts)
       {
 	int c;
 
-	c = scm_getc_unlocked (port);
+	c = scm_getc (port);
 	if ('@' == c)
 	  p = sym_unsyntax_splicing;
 	else
 	  {
-	    scm_ungetc_unlocked (c, port);
+	    scm_ungetc (c, port);
 	    p = sym_unsyntax;
 	  }
 	break;
@@ -965,9 +972,9 @@ scm_read_semicolon_comment (int chr, SCM port)
   /* We use the get_byte here because there is no need to get the
      locale correct with comment input. This presumes that newline
      always represents itself no matter what the encoding is.  */
-  for (c = scm_get_byte_or_eof_unlocked (port);
+  for (c = scm_get_byte_or_eof (port);
        (c != EOF) && (c != '\n');
-       c = scm_get_byte_or_eof_unlocked (port));
+       c = scm_get_byte_or_eof (port));
 
   return SCM_UNSPECIFIED;
 }
@@ -987,12 +994,12 @@ try_read_ci_chars (SCM port, const char *expected_chars)
 
   while (num_chars_read < num_chars_wanted)
     {
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
       if (c == EOF)
         break;
       else if (c_tolower (c) != expected_chars[num_chars_read])
         {
-          scm_ungetc_unlocked (c, port);
+          scm_ungetc (c, port);
           break;
         }
       else
@@ -1004,7 +1011,7 @@ try_read_ci_chars (SCM port, const char *expected_chars)
   else
     {
       while (num_chars_read > 0)
-        scm_ungetc_unlocked (chars_read[--num_chars_read], port);
+        scm_ungetc (chars_read[--num_chars_read], port);
       return 0;
     }
 }
@@ -1040,7 +1047,7 @@ scm_read_character (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
   size_t charname_len, bytes_read;
   scm_t_wchar cp;
   int overflow;
-  scm_t_port_internal *pti;
+  scm_t_port *pt;
 
   overflow = read_token (port, opts, buffer, READER_CHAR_NAME_MAX_SIZE,
                          &bytes_read);
@@ -1049,7 +1056,7 @@ scm_read_character (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
 
   if (bytes_read == 0)
     {
-      chr = scm_getc_unlocked (port);
+      chr = scm_getc (port);
       if (chr == EOF)
 	scm_i_input_error (FUNC_NAME, port, "unexpected end of file "
 			   "while reading character", SCM_EOL);
@@ -1058,16 +1065,16 @@ scm_read_character (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
       return (SCM_MAKE_CHAR (chr));
     }
 
-  pti = SCM_PORT_GET_INTERNAL (port);
+  pt = SCM_PORT (port);
 
   /* Simple ASCII characters can be processed immediately.  Also, simple
      ISO-8859-1 characters can be processed immediately if the encoding for this
      port is ISO-8859-1.  */
   if (bytes_read == 1 &&
       ((unsigned char) buffer[0] <= 127
-       || pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1))
+       || scm_is_eq (pt->encoding, sym_ISO_8859_1)))
     {
-      SCM_COL (port) += 1;
+      scm_set_port_column_x (port, scm_sum (scm_port_column (port), SCM_INUM1));
       return SCM_MAKE_CHAR (buffer[0]);
     }
 
@@ -1075,7 +1082,9 @@ scm_read_character (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
      processing.  */
   charname = scm_from_port_stringn (buffer, bytes_read, port);
   charname_len = scm_i_string_length (charname);
-  SCM_COL (port) += charname_len;
+  scm_set_port_column_x (port,
+                         scm_sum (scm_port_column (port),
+                                  scm_from_size_t (charname_len)));
   cp = scm_i_string_ref (charname, 0);
   if (charname_len == 1)
     return SCM_MAKE_CHAR (cp);
@@ -1181,7 +1190,7 @@ read_decimal_integer (SCM port, int c, ssize_t *resp)
   if (c == '-')
     {
       sign = -1;
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
     }
 
   while ('0' <= c && c <= '9')
@@ -1191,7 +1200,7 @@ read_decimal_integer (SCM port, int c, ssize_t *resp)
                            "number too large", SCM_EOL);
       res = 10*res + c-'0';
       got_it = 1;
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
     }
 
   if (got_it)
@@ -1222,13 +1231,13 @@ scm_read_array (int c, SCM port, scm_t_read_opts *opts, long line, int column)
   /* Disambiguate between '#f' and uniform floating point vectors. */
   if (c == 'f')
     {
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
       if (c != '3' && c != '6')
 	{
           if (c == 'a' && try_read_ci_chars (port, "lse"))
             return SCM_BOOL_F;
           else if (c != EOF)
-            scm_ungetc_unlocked (c, port);
+            scm_ungetc (c, port);
 	  return SCM_BOOL_F;
 	}
       rank = 1;
@@ -1251,7 +1260,7 @@ scm_read_array (int c, SCM port, scm_t_read_opts *opts, long line, int column)
          && tag_len < sizeof tag_buf / sizeof tag_buf[0])
     {
       tag_buf[tag_len++] = c;
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
     }
   if (tag_len == 0)
     tag = SCM_BOOL_T;
@@ -1275,7 +1284,7 @@ scm_read_array (int c, SCM port, scm_t_read_opts *opts, long line, int column)
 
 	  if (c == '@')
 	    {
-	      c = scm_getc_unlocked (port);
+	      c = scm_getc (port);
 	      c = read_decimal_integer (port, c, &lbnd);
 	    }
 
@@ -1283,7 +1292,7 @@ scm_read_array (int c, SCM port, scm_t_read_opts *opts, long line, int column)
 
 	  if (c == ':')
 	    {
-	      c = scm_getc_unlocked (port);
+	      c = scm_getc (port);
 	      c = read_decimal_integer (port, c, &len);
 	      if (len < 0)
 		scm_i_input_error (NULL, port,
@@ -1345,15 +1354,15 @@ static SCM
 scm_read_bytevector (scm_t_wchar chr, SCM port, scm_t_read_opts *opts,
                      long line, int column)
 {
-  chr = scm_getc_unlocked (port);
+  chr = scm_getc (port);
   if (chr != 'u')
     goto syntax;
 
-  chr = scm_getc_unlocked (port);
+  chr = scm_getc (port);
   if (chr != '8')
     goto syntax;
 
-  chr = scm_getc_unlocked (port);
+  chr = scm_getc (port);
   if (chr != '(')
     goto syntax;
 
@@ -1376,15 +1385,15 @@ scm_read_guile_bit_vector (scm_t_wchar chr, SCM port, scm_t_read_opts *opts,
      terribly inefficient but who cares?  */
   SCM s_bits = SCM_EOL;
 
-  for (chr = scm_getc_unlocked (port);
+  for (chr = scm_getc (port);
        (chr != EOF) && ((chr == '0') || (chr == '1'));
-       chr = scm_getc_unlocked (port))
+       chr = scm_getc (port))
     {
       s_bits = scm_cons ((chr == '0') ? SCM_BOOL_F : SCM_BOOL_T, s_bits);
     }
 
   if (chr != EOF)
-    scm_ungetc_unlocked (chr, port);
+    scm_ungetc (chr, port);
 
   return maybe_annotate_source
     (scm_bitvector (scm_reverse_x (s_bits, SCM_EOL)),
@@ -1398,7 +1407,7 @@ scm_read_scsh_block_comment (scm_t_wchar chr, SCM port)
 
   for (;;)
     {
-      int c = scm_getc_unlocked (port);
+      int c = scm_getc (port);
 
       if (c == EOF)
 	scm_i_input_error ("skip_block_comment", port,
@@ -1421,6 +1430,12 @@ static void set_port_square_brackets_p (SCM port, scm_t_read_opts *opts,
                                         int value);
 static void set_port_curly_infix_p (SCM port, scm_t_read_opts *opts,
                                     int value);
+static void set_port_r6rs_hex_escapes_p (SCM port, scm_t_read_opts *opts,
+                                         int value);
+static void set_port_hungry_eol_escapes_p (SCM port, scm_t_read_opts *opts,
+                                           int value);
+static void set_port_keyword_style (SCM port, scm_t_read_opts *opts,
+                                    enum t_keyword_style value);
 
 static SCM
 scm_read_shebang (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
@@ -1431,7 +1446,7 @@ scm_read_shebang (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
 
   while (i <= READER_DIRECTIVE_NAME_MAX_SIZE)
     {
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
       if (c == EOF)
 	scm_i_input_error ("skip_block_comment", port,
 			   "unterminated `#! ... !#' comment", SCM_EOL);
@@ -1439,10 +1454,16 @@ scm_read_shebang (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
         name[i++] = c;
       else if (CHAR_IS_DELIMITER (c))
         {
-          scm_ungetc_unlocked (c, port);
+          scm_ungetc (c, port);
           name[i] = '\0';
           if (0 == strcmp ("r6rs", name))
-            ;  /* Silently ignore */
+            {
+              set_port_case_insensitive_p (port, opts, 0);
+              set_port_r6rs_hex_escapes_p (port, opts, 1);
+              set_port_square_brackets_p (port, opts, 1);
+              set_port_keyword_style (port, opts, KEYWORD_STYLE_HASH_PREFIX);
+              set_port_hungry_eol_escapes_p (port, opts, 1);
+            }
           else if (0 == strcmp ("fold-case", name))
             set_port_case_insensitive_p (port, opts, 1);
           else if (0 == strcmp ("no-fold-case", name))
@@ -1461,12 +1482,12 @@ scm_read_shebang (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
         }
       else
         {
-          scm_ungetc_unlocked (c, port);
+          scm_ungetc (c, port);
           break;
         }
     }
   while (i > 0)
-    scm_ungetc_unlocked (name[--i], port);
+    scm_ungetc (name[--i], port);
   return scm_read_scsh_block_comment (chr, port);
 }
 
@@ -1477,7 +1498,7 @@ scm_read_r6rs_block_comment (scm_t_wchar chr, SCM port)
      nested.  So care must be taken.  */
   int nesting_level = 1;
 
-  int a = scm_getc_unlocked (port);
+  int a = scm_getc (port);
 
   if (a == EOF)
     scm_i_input_error ("scm_read_r6rs_block_comment", port,
@@ -1485,7 +1506,7 @@ scm_read_r6rs_block_comment (scm_t_wchar chr, SCM port)
 
   while (nesting_level > 0)
     {
-      int b = scm_getc_unlocked (port);
+      int b = scm_getc (port);
 
       if (b == EOF)
 	scm_i_input_error ("scm_read_r6rs_block_comment", port,
@@ -1518,7 +1539,7 @@ scm_read_commented_expression (scm_t_wchar chr, SCM port,
   if (EOF == c)
     scm_i_input_error ("read_commented_expression", port,
                        "no expression after #; comment", SCM_EOL);
-  scm_ungetc_unlocked (c, port);
+  scm_ungetc (c, port);
   scm_read_expression (port, opts);
   return SCM_UNSPECIFIED;
 }
@@ -1535,9 +1556,10 @@ scm_read_extended_symbol (scm_t_wchar chr, SCM port)
   size_t len = 0;
   SCM buf = scm_i_make_string (1024, NULL, 0);
 
-  buf = scm_i_string_start_writing (buf);
+  /* No need to scm_i_string_start_writing (), as the string isn't
+     visible to any other thread.  */
 
-  while ((chr = scm_getc_unlocked (port)) != EOF)
+  while ((chr = scm_getc (port)) != EOF)
     {
       if (saw_brace)
 	{
@@ -1564,7 +1586,7 @@ scm_read_extended_symbol (scm_t_wchar chr, SCM port)
              that the extended read syntax would never put a `\' before
              an `x'.  For now, we just ignore other instances of
              backslash in the string.  */
-          switch ((chr = scm_getc_unlocked (port)))
+          switch ((chr = scm_getc (port)))
             {
             case EOF:
               goto done;
@@ -1599,16 +1621,13 @@ scm_read_extended_symbol (scm_t_wchar chr, SCM port)
 	{
 	  SCM addy;
 
-	  scm_i_string_stop_writing ();
 	  addy = scm_i_make_string (1024, NULL, 0);
 	  buf = scm_string_append (scm_list_2 (buf, addy));
 	  len = 0;
-	  buf = scm_i_string_start_writing (buf);
 	}
     }
 
  done:
-  scm_i_string_stop_writing ();
   if (chr == EOF)
     scm_i_input_error ("scm_read_extended_symbol", port,
                        "end of file while reading symbol", SCM_EOL);
@@ -1628,8 +1647,8 @@ scm_read_sharp_extension (int chr, SCM port, scm_t_read_opts *opts)
   proc = scm_get_hash_procedure (chr);
   if (scm_is_true (scm_procedure_p (proc)))
     {
-      long line = SCM_LINUM (port);
-      int column = SCM_COL (port) - 2;
+      long line = scm_to_long (scm_port_line (port));
+      int column = scm_to_int (scm_port_column (port)) - 2;
       SCM got;
 
       got = scm_call_2 (proc, SCM_MAKE_CHAR (chr), port);
@@ -1653,7 +1672,7 @@ scm_read_sharp (scm_t_wchar chr, SCM port, scm_t_read_opts *opts,
 {
   SCM result;
 
-  chr = scm_getc_unlocked (port);
+  chr = scm_getc (port);
 
   result = scm_read_sharp_extension (chr, port, opts);
   if (!scm_is_eq (result, SCM_UNSPECIFIED))
@@ -1743,7 +1762,7 @@ read_inner_expression (SCM port, scm_t_read_opts *opts)
     {
       scm_t_wchar chr;
 
-      chr = scm_getc_unlocked (port);
+      chr = scm_getc (port);
 
       switch (chr)
 	{
@@ -1781,8 +1800,8 @@ read_inner_expression (SCM port, scm_t_read_opts *opts)
                  be part of an unescaped symbol.  We might as well do
                  something useful with it, so we adopt Kawa's convention:
                  [...] => ($bracket-list$ ...) */
-              long line = SCM_LINUM (port);
-              int column = SCM_COL (port) - 1;
+              long line = scm_to_long (scm_port_line (port));
+              int column = scm_to_int (scm_port_column (port)) - 1;
               return maybe_annotate_source
                 (scm_cons (sym_bracket_list, scm_read_sexp (chr, port, opts)),
                  port, opts, line, column);
@@ -1804,8 +1823,8 @@ read_inner_expression (SCM port, scm_t_read_opts *opts)
 	  return (scm_read_quote (chr, port, opts));
 	case '#':
 	  {
-            long line  = SCM_LINUM (port);
-            int column = SCM_COL (port) - 1;
+            long line = scm_to_long (scm_port_line (port));
+            int column = scm_to_int (scm_port_column (port)) - 1;
 	    SCM result = scm_read_sharp (chr, port, opts, line, column);
 	    if (scm_is_eq (result, SCM_UNSPECIFIED))
 	      /* We read a comment or some such.  */
@@ -1868,9 +1887,9 @@ scm_read_expression (SCM port, scm_t_read_opts *opts)
           int c = flush_ws (port, opts, (char *) NULL);
           if (c == EOF)
             return SCM_EOF_VAL;
-          scm_ungetc_unlocked (c, port);
-          line = SCM_LINUM (port);
-          column = SCM_COL (port);
+          scm_ungetc (c, port);
+          line = scm_to_long (scm_port_line (port));
+          column = scm_to_int (scm_port_column (port));
         }
 
       expr = read_inner_expression (port, opts);
@@ -1881,7 +1900,7 @@ scm_read_expression (SCM port, scm_t_read_opts *opts)
          new expression.  For example, f{n - 1}(x) => ((f (- n 1)) x). */
       for (;;)
         {
-          int chr = scm_getc_unlocked (port);
+          int chr = scm_getc (port);
 
           if (chr == '(')
             /* e(...) => (e ...) */
@@ -1903,7 +1922,7 @@ scm_read_expression (SCM port, scm_t_read_opts *opts)
           else
             {
               if (chr != EOF)
-                scm_ungetc_unlocked (chr, port);
+                scm_ungetc (chr, port);
               break;
             }
           maybe_annotate_source (expr, port, opts, line, column);
@@ -1937,7 +1956,7 @@ SCM_DEFINE (scm_read, "read", 0, 1, 0,
   c = flush_ws (port, &opts, (char *) NULL);
   if (EOF == c)
     return SCM_EOF_VAL;
-  scm_ungetc_unlocked (c, port);
+  scm_ungetc (c, port);
 
   return (scm_read_expression (port, &opts));
 }
@@ -2057,27 +2076,23 @@ char *
 scm_i_scan_for_encoding (SCM port)
 {
   scm_t_port *pt;
+  SCM buf;
   char header[SCM_ENCODING_SEARCH_SIZE+1];
-  size_t bytes_read, encoding_length, i;
+  size_t cur, bytes_read, encoding_length, i;
   char *encoding = NULL;
   char *pos, *encoding_start;
   int in_comment;
 
-  pt = SCM_PTAB_ENTRY (port);
-
-  if (pt->rw_active == SCM_PORT_WRITE)
-    scm_flush_unlocked (port);
+  pt = SCM_PORT (port);
+  buf = pt->read_buf;
 
   if (pt->rw_random)
-    pt->rw_active = SCM_PORT_READ;
+    scm_flush (port);
 
-  if (pt->read_pos == pt->read_end)
+  if (scm_port_buffer_can_take (buf, &cur) == 0)
     {
       /* We can use the read buffer, and thus avoid a seek. */
-      if (scm_fill_input_unlocked (port) == EOF)
-        return NULL;
-
-      bytes_read = pt->read_end - pt->read_pos;
+      buf = scm_fill_input (port, 0, &cur, &bytes_read);
       if (bytes_read > SCM_ENCODING_SEARCH_SIZE)
         bytes_read = SCM_ENCODING_SEARCH_SIZE;
 
@@ -2085,24 +2100,20 @@ scm_i_scan_for_encoding (SCM port)
         /* An unbuffered port -- don't scan.  */
         return NULL;
 
-      memcpy (header, pt->read_pos, bytes_read);
+      memcpy (header, scm_port_buffer_take_pointer (buf, cur), bytes_read);
       header[bytes_read] = '\0';
     }
-  else
+  else if (pt->rw_random)
     {
-      /* Try to read some bytes and then seek back.  Not all ports
-         support seeking back; and indeed some file ports (like
-         /dev/urandom) will succeed on an lseek (fd, 0, SEEK_CUR)---the
-         check performed by SCM_FPORT_FDES---but fail to seek
-         backwards.  Hence this block comes second.  We prefer to use
-         the read buffer in-place.  */
-      if (SCM_FPORTP (port) && !SCM_FDES_RANDOM_P (SCM_FPORT_FDES (port)))
-        return NULL;
-
-      bytes_read = scm_c_read_unlocked (port, header, SCM_ENCODING_SEARCH_SIZE);
+      /* The port is seekable.  This is OK but grubbing in the read
+         buffer is better, so this case is just a fallback.  */
+      bytes_read = scm_c_read (port, header, SCM_ENCODING_SEARCH_SIZE);
       header[bytes_read] = '\0';
       scm_seek (port, scm_from_int (0), scm_from_int (SEEK_SET));
     }
+  else
+    /* No input available and not seekable; scan fails.  */
+    return NULL;
 
   /* search past "coding[:=]" */
   pos = header;
@@ -2255,9 +2266,6 @@ set_port_read_option (SCM port, int option, int new_value)
 
   new_value &= READ_OPTION_MASK;
 
-  scm_dynwind_begin (0);
-  scm_dynwind_lock_port (port);
-
   scm_read_options = scm_i_port_property (port, sym_port_read_options);
   if (scm_is_unsigned_integer (scm_read_options, 0, READ_OPTIONS_MAX_VALUE))
     read_options = scm_to_uint (scm_read_options);
@@ -2267,8 +2275,6 @@ set_port_read_option (SCM port, int option, int new_value)
   read_options |= new_value << option;
   scm_read_options = scm_from_uint (read_options);
   scm_i_set_port_property_x (port, sym_port_read_options, scm_read_options);
-
-  scm_dynwind_end ();
 }
 
 /* Set OPTS and PORT's case-insensitivity according to VALUE. */
@@ -2296,6 +2302,30 @@ set_port_curly_infix_p (SCM port, scm_t_read_opts *opts, int value)
   value = !!value;
   opts->curly_infix_p = value;
   set_port_read_option (port, READ_OPTION_CURLY_INFIX_P, value);
+}
+
+/* Set OPTS and PORT's r6rs_hex_escapes_p option according to VALUE. */
+static void
+set_port_r6rs_hex_escapes_p (SCM port, scm_t_read_opts *opts, int value)
+{
+  value = !!value;
+  opts->r6rs_escapes_p = value;
+  set_port_read_option (port, READ_OPTION_R6RS_ESCAPES_P, value);
+}
+
+static void
+set_port_hungry_eol_escapes_p (SCM port, scm_t_read_opts *opts, int value)
+{
+  value = !!value;
+  opts->hungry_eol_escapes_p = value;
+  set_port_read_option (port, READ_OPTION_HUNGRY_EOL_ESCAPES_P, value);
+}
+
+static void
+set_port_keyword_style (SCM port, scm_t_read_opts *opts, enum t_keyword_style value)
+{
+  opts->keyword_style = value;
+  set_port_read_option (port, READ_OPTION_KEYWORD_STYLE, value);
 }
 
 /* Initialize OPTS based on PORT's read options and the global read

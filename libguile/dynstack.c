@@ -37,7 +37,9 @@
 #define PROMPT_WORDS 5
 #define PROMPT_KEY(top) (SCM_PACK ((top)[0]))
 #define PROMPT_FP(top) ((scm_t_ptrdiff) ((top)[1]))
+#define SET_PROMPT_FP(top, fp) do { top[1] = (scm_t_bits)(fp); } while (0)
 #define PROMPT_SP(top) ((scm_t_ptrdiff) ((top)[2]))
+#define SET_PROMPT_SP(top, sp) do { top[2] = (scm_t_bits)(sp); } while (0)
 #define PROMPT_IP(top) ((scm_t_uint32 *) ((top)[3]))
 #define PROMPT_JMPBUF(top) ((scm_i_jmp_buf *) ((top)[4]))
 
@@ -52,6 +54,9 @@
 #define WITH_FLUID_WORDS 2
 #define WITH_FLUID_FLUID(top) (SCM_PACK ((top)[0]))
 #define WITH_FLUID_VALUE_BOX(top) (SCM_PACK ((top)[1]))
+
+#define DYNAMIC_STATE_WORDS 1
+#define DYNAMIC_STATE_STATE_BOX(top) (SCM_PACK ((top)[0]))
 
 
 
@@ -110,6 +115,7 @@ push_dynstack_entry_unchecked (scm_t_dynstack *dynstack,
 
   SCM_DYNSTACK_SET_TAG (dynstack->top, SCM_MAKE_DYNSTACK_TAG (type, flags, len));
   dynstack->top += SCM_DYNSTACK_HEADER_LEN + len;
+  SCM_DYNSTACK_SET_TAG (dynstack->top, 0);
   SCM_DYNSTACK_SET_PREV_OFFSET (dynstack->top, SCM_DYNSTACK_HEADER_LEN + len);
 
   return ret;
@@ -163,7 +169,7 @@ scm_dynstack_push_unwinder (scm_t_dynstack *dynstack,
    binding.  */
 void
 scm_dynstack_push_fluid (scm_t_dynstack *dynstack, SCM fluid, SCM value,
-                         SCM dynamic_state)
+                         scm_t_dynamic_state *dynamic_state)
 {
   scm_t_bits *words;
   SCM value_box;
@@ -231,6 +237,22 @@ dynstack_pop (scm_t_dynstack *dynstack, scm_t_bits **words)
 }
   
 void
+scm_dynstack_push_dynamic_state (scm_t_dynstack *dynstack, SCM state,
+                                 scm_t_dynamic_state *dynamic_state)
+{
+  scm_t_bits *words;
+  SCM state_box;
+
+  if (SCM_UNLIKELY (scm_is_false (scm_dynamic_state_p (state))))
+    scm_wrong_type_arg ("with-dynamic-state", 0, state);
+
+  state_box = scm_make_variable (scm_set_current_dynamic_state (state));
+  words = push_dynstack_entry (dynstack, SCM_DYNSTACK_TYPE_DYNAMIC_STATE, 0,
+                               DYNAMIC_STATE_WORDS);
+  words[0] = SCM_UNPACK (state_box);
+}
+
+void
 scm_dynstack_pop (scm_t_dynstack *dynstack)
 {
   scm_t_bits tag, *words;
@@ -265,6 +287,24 @@ scm_dynstack_capture (scm_t_dynstack *dynstack, scm_t_bits *item)
   SCM_DYNSTACK_SET_PREV_OFFSET (SCM_DYNSTACK_FIRST (ret), 0);
 
   return ret;
+}
+
+void
+scm_dynstack_relocate_prompts (scm_t_dynstack *dynstack, scm_t_ptrdiff base)
+{
+  scm_t_bits *walk;
+
+  /* Relocate prompts.  */
+  for (walk = dynstack->top; walk; walk = SCM_DYNSTACK_PREV (walk))
+    {
+      scm_t_bits tag = SCM_DYNSTACK_TAG (walk);
+
+      if (SCM_DYNSTACK_TAG_TYPE (tag) == SCM_DYNSTACK_TYPE_PROMPT)
+        {
+          SET_PROMPT_FP (walk, PROMPT_FP (walk) - base);
+          SET_PROMPT_SP (walk, PROMPT_SP (walk) - base);
+        }
+    }
 }
 
 void
@@ -303,6 +343,12 @@ scm_dynstack_wind_1 (scm_t_dynstack *dynstack, scm_t_bits *item)
 
     case SCM_DYNSTACK_TYPE_DYNWIND:
       scm_call_0 (DYNWIND_ENTER (item));
+      break;
+
+    case SCM_DYNSTACK_TYPE_DYNAMIC_STATE:
+      scm_variable_set_x (DYNAMIC_STATE_STATE_BOX (item),
+                          scm_set_current_dynamic_state
+                          (scm_variable_ref (DYNAMIC_STATE_STATE_BOX (item))));
       break;
 
     case SCM_DYNSTACK_TYPE_NONE:
@@ -360,6 +406,13 @@ scm_dynstack_unwind_1 (scm_t_dynstack *dynstack)
         clear_scm_t_bits (words, DYNWIND_WORDS);
         scm_call_0 (proc);
       }
+      break;
+
+    case SCM_DYNSTACK_TYPE_DYNAMIC_STATE:
+      scm_variable_set_x (DYNAMIC_STATE_STATE_BOX (words),
+                          scm_set_current_dynamic_state
+                          (scm_variable_ref (DYNAMIC_STATE_STATE_BOX (words))));
+      clear_scm_t_bits (words, DYNAMIC_STATE_WORDS);
       break;
 
     case SCM_DYNSTACK_TYPE_NONE:
@@ -472,9 +525,59 @@ scm_dynstack_find_prompt (scm_t_dynstack *dynstack, SCM key,
   return NULL;
 }
 
+SCM
+scm_dynstack_find_old_fluid_value (scm_t_dynstack *dynstack, SCM fluid,
+                                   size_t depth, SCM dflt)
+{
+  scm_t_bits *walk;
+
+  for (walk = SCM_DYNSTACK_PREV (dynstack->top); walk;
+       walk = SCM_DYNSTACK_PREV (walk))
+    {
+      scm_t_bits tag = SCM_DYNSTACK_TAG (walk);
+
+      switch (SCM_DYNSTACK_TAG_TYPE (tag))
+        {
+        case SCM_DYNSTACK_TYPE_WITH_FLUID:
+          {
+            if (scm_is_eq (WITH_FLUID_FLUID (walk), fluid))
+              {
+                if (depth == 0)
+                  return SCM_VARIABLE_REF (WITH_FLUID_VALUE_BOX (walk));
+                else
+                  depth--;
+              }
+            break;
+          }
+        case SCM_DYNSTACK_TYPE_DYNAMIC_STATE:
+          {
+            SCM state, val;
+
+            /* The previous dynamic state may or may not have
+               established a binding for this fluid.  */
+            state = scm_variable_ref (DYNAMIC_STATE_STATE_BOX (walk));
+            val = scm_dynamic_state_ref (state, fluid, SCM_UNDEFINED);
+            if (!SCM_UNBNDP (val))
+              {
+                if (depth == 0)
+                  return val;
+                else
+                  depth--;
+              }
+            break;
+          }
+        default:
+          break;
+        }
+    }
+
+  return dflt;
+}
+
 void
 scm_dynstack_wind_prompt (scm_t_dynstack *dynstack, scm_t_bits *item,
-                          scm_t_ptrdiff reloc, scm_i_jmp_buf *registers)
+                          scm_t_ptrdiff base_fp_offset,
+                          scm_i_jmp_buf *registers)
 {
   scm_t_bits tag = SCM_DYNSTACK_TAG (item);
 
@@ -484,8 +587,8 @@ scm_dynstack_wind_prompt (scm_t_dynstack *dynstack, scm_t_bits *item,
   scm_dynstack_push_prompt (dynstack,
                             SCM_DYNSTACK_TAG_FLAGS (tag),
                             PROMPT_KEY (item),
-                            PROMPT_FP (item) + reloc,
-                            PROMPT_SP (item) + reloc,
+                            PROMPT_FP (item) + base_fp_offset,
+                            PROMPT_SP (item) + base_fp_offset,
                             PROMPT_IP (item),
                             registers);
 }
@@ -525,7 +628,8 @@ scm_dynstack_unwind_frame (scm_t_dynstack *dynstack)
 
 /* This function must not allocate.  */
 void
-scm_dynstack_unwind_fluid (scm_t_dynstack *dynstack, SCM dynamic_state)
+scm_dynstack_unwind_fluid (scm_t_dynstack *dynstack,
+                           scm_t_dynamic_state *dynamic_state)
 {
   scm_t_bits tag, *words;
   size_t len;
@@ -538,6 +642,25 @@ scm_dynstack_unwind_fluid (scm_t_dynstack *dynstack, SCM dynamic_state)
 
   scm_swap_fluid (WITH_FLUID_FLUID (words), WITH_FLUID_VALUE_BOX (words),
                   dynamic_state);
+  clear_scm_t_bits (words, len);
+}
+
+void
+scm_dynstack_unwind_dynamic_state (scm_t_dynstack *dynstack,
+                                   scm_t_dynamic_state *dynamic_state)
+{
+  scm_t_bits tag, *words;
+  size_t len;
+
+  tag = dynstack_pop (dynstack, &words);
+  len = SCM_DYNSTACK_TAG_LEN (tag);
+
+  assert (SCM_DYNSTACK_TAG_TYPE (tag) == SCM_DYNSTACK_TYPE_DYNAMIC_STATE);
+  assert (len == DYNAMIC_STATE_WORDS);
+
+  scm_variable_set_x (DYNAMIC_STATE_STATE_BOX (words),
+                      scm_set_current_dynamic_state
+                      (scm_variable_ref (DYNAMIC_STATE_STATE_BOX (words))));
   clear_scm_t_bits (words, len);
 }
 

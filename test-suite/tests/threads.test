@@ -250,7 +250,7 @@
           (let ((m (make-mutex))
 		(c (make-condition-variable)))
 	    (lock-mutex m)
-	    (not (unlock-mutex m c (current-time)))))
+	    (not (wait-condition-variable c m (current-time)))))
 
 	(pass-if "asyncs are still working 4"
 	  (asyncs-still-working?))
@@ -261,14 +261,12 @@
 		(c1 (make-condition-variable))
 		(c2 (make-condition-variable)))
 	    (lock-mutex m1)
-	    (let ((t (begin-thread (begin (lock-mutex m1)
-					  (signal-condition-variable c1)
-					  (lock-mutex m2)
-					  (unlock-mutex m1)
-					  (unlock-mutex m2
-							c2
-							(+ (current-time)
-							   5))))))
+	    (let ((t (begin-thread
+                      (lock-mutex m1)
+                      (signal-condition-variable c1)
+                      (lock-mutex m2)
+                      (unlock-mutex m1)
+                      (wait-condition-variable c2 m2 (+ (current-time) 5)))))
 	      (wait-condition-variable c1 m1)
 	      (unlock-mutex m1)
 	      (lock-mutex m2)
@@ -351,13 +349,12 @@
 	      (join-thread t)
 	      #t)))
 
-	(pass-if "handler result passed to join"
+	(pass-if "cancel result passed to join"
           (require-cancel-thread)
 	  (let ((m (make-mutex)))
 	    (lock-mutex m)
 	    (let ((t (begin-thread (lock-mutex m))))
-	      (set-thread-cleanup! t (lambda () 'foo))
-	      (cancel-thread t)
+	      (cancel-thread t 'foo)
 	      (eq? (join-thread t) 'foo))))
 
 	(pass-if "can cancel self"
@@ -365,29 +362,9 @@
 	  (let ((m (make-mutex)))
 	    (lock-mutex m)
 	    (let ((t (begin-thread (begin
-				     (set-thread-cleanup! (current-thread)
-							  (lambda () 'foo))
-				     (cancel-thread (current-thread))
+				     (cancel-thread (current-thread) 'foo)
 				     (lock-mutex m)))))
-	      (eq? (join-thread t) 'foo))))
-
-	(pass-if "handler supplants final expr"
-	  (let ((t (begin-thread (begin (set-thread-cleanup! (current-thread)
-							     (lambda () 'bar))
-					'foo))))
-	    (eq? (join-thread t) 'bar)))
-
-	(pass-if "remove handler by setting false"
-	  (let ((m (make-mutex)))
-	    (lock-mutex m)
-	    (let ((t (begin-thread (lock-mutex m) 'bar)))
-	      (set-thread-cleanup! t (lambda () 'foo))
-	      (set-thread-cleanup! t #f)
-	      (unlock-mutex m)
-	      (eq? (join-thread t) 'bar))))
-
-	(pass-if "initial handler is false"
-	  (not (thread-cleanup (current-thread)))))
+	      (eq? (join-thread t) 'foo)))))
 
       ;;
       ;; mutex ownership
@@ -403,18 +380,7 @@
 	  (let ((m (make-mutex)))
 	    (not (mutex-owner m))))
 
-	(pass-if "locking mutex on behalf of other thread"
-	  (let* ((m (make-mutex))
-		 (t (begin-thread 'foo)))
-	    (lock-mutex m #f t)
-	    (eq? (mutex-owner m) t)))
-
-        (pass-if "locking mutex with no owner"
-	  (let ((m (make-mutex)))
-	    (lock-mutex m #f #f)
-	    (not (mutex-owner m))))
-
-        (pass-if "mutex with owner not retained (bug #27450)"
+	(pass-if "mutex with owner not retained (bug #27450)"
           (let ((g (make-guardian)))
             (g (let ((m (make-mutex))) (lock-mutex m) m))
 
@@ -453,11 +419,7 @@
 
       (with-test-prefix "mutex-behavior"
 
-        (pass-if "unchecked unlock"
-          (let* ((m (make-mutex 'unchecked-unlock)))
-	    (unlock-mutex m)))
-
-	(pass-if "allow external unlock"
+        (pass-if "allow external unlock"
 	  (let* ((m (make-mutex 'allow-external-unlock))
 		 (t (begin-thread (lock-mutex m))))
 	    (join-thread t)
@@ -468,15 +430,10 @@
 	    (lock-mutex m)
 	    (lock-mutex m)))
 
-	(pass-if "locking abandoned mutex throws exception"
-          (let* ((m (make-mutex))
-		 (t (begin-thread (lock-mutex m)))
-		 (success #f))
-	    (join-thread t)
-	    (catch 'abandoned-mutex-error
-		   (lambda () (lock-mutex m))
-		   (lambda key (set! success #t)))
-	    success)))))
+	(pass-if "abandoned mutexes are dead"
+          (let* ((m (make-mutex)))
+	    (join-thread (begin-thread (lock-mutex m)))
+            (not (lock-mutex m (+ (current-time) 0.1))))))))
 
 
 ;;

@@ -1,6 +1,6 @@
 ;;; Guile VM frame functions
 
-;;; Copyright (C) 2001, 2005, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+;;; Copyright (C) 2001, 2005, 2009-2016 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or
 ;;; modify it under the terms of the GNU Lesser General Public
@@ -25,25 +25,35 @@
   #:use-module (system vm debug)
   #:use-module (system vm disassembler)
   #:use-module (srfi srfi-9)
+  #:use-module (srfi srfi-11)
   #:use-module (rnrs bytevectors)
   #:use-module (ice-9 match)
   #:export (binding-index
             binding-name
             binding-slot
+            binding-representation
 
             frame-bindings
             frame-lookup-binding
-            frame-binding-ref frame-binding-set!
+            binding-ref binding-set!
+
+            frame-instruction-pointer-or-primitive-procedure-name
             frame-call-representation
             frame-environment
             frame-object-binding frame-object-name))
 
+(eval-when (expand compile load eval)
+  (load-extension (string-append "libguile-" (effective-version))
+                  "scm_init_frames_builtins"))
+
 (define-record-type <binding>
-  (make-binding idx name slot)
+  (make-binding frame idx name slot representation)
   binding?
+  (frame binding-frame)
   (idx binding-index)
   (name binding-name)
-  (slot binding-slot))
+  (slot binding-slot)
+  (representation binding-representation))
 
 (define (parse-code code)
   (let ((len (bytevector-length code)))
@@ -83,6 +93,52 @@
         (lp (1+ n) (+ pos (vector-ref parsed n)))))
     preds))
 
+(define (compute-frame-sizes code parsed initial-size)
+  (let ((in-sizes (make-vector (vector-length parsed) #f))
+        (out-sizes (make-vector (vector-length parsed) #f)))
+    ;; This only computes all possible valid stack sizes if the bytecode
+    ;; is sorted topologically.  Guiles' compiler does this currently,
+    ;; but if that changes we should do a proper pre-order visit.  Of
+    ;; course the bytecode has to be valid too.
+    (define (find-idx n diff)
+      (let lp ((n n) (diff diff))
+        (cond
+         ((= n (vector-length parsed))
+          ;; Possible for jumps to alternate arities.
+          #f)
+         ((negative? diff)
+          (lp (1- n) (+ diff (vector-ref parsed (1- n)))))
+         ((positive? diff)
+          (lp (1+ n) (- diff (vector-ref parsed n))))
+         (else n))))
+    (vector-set! in-sizes 0 initial-size)
+    (let lp ((n 0) (pos 0))
+      (define (offset->idx target)
+        (call-with-values (lambda ()
+                            (if (>= target pos)
+                                (values n pos)
+                                (values 0 0)))
+          (lambda (n pos)
+            (let lp ((n n) (pos pos))
+              (cond
+               ((= pos target) n)
+               ((< pos target) (lp (1+ n) (+ pos (vector-ref parsed n))))
+               (else (error "bad target" target)))))))
+      (when (< n (vector-length parsed))
+        (let* ((in (vector-ref in-sizes n))
+               (out (instruction-stack-size-after code pos in)))
+          (vector-set! out-sizes n out)
+          (when out
+            (when (instruction-has-fallthrough? code pos)
+              (vector-set! in-sizes (1+ n) out))
+            (for-each (lambda (target)
+                        (let ((idx (find-idx n target)))
+                          (when idx
+                            (vector-set! in-sizes idx out))))
+                      (instruction-relative-jump-targets code pos))))
+        (lp (1+ n) (+ pos (vector-ref parsed n)))))
+    (values in-sizes out-sizes)))
+
 (define (compute-genv parsed defs)
   (let ((genv (make-vector (vector-length parsed) '())))
     (define (add-def! pos var)
@@ -90,7 +146,7 @@
     (let lp ((var 0) (pos 0) (pc-offset 0))
       (when (< var (vector-length defs))
         (match (vector-ref defs var)
-          (#(name offset slot)
+          (#(name offset slot representation)
            (when (< offset pc-offset)
              (error "mismatch between def offsets and parsed code"))
            (cond
@@ -103,7 +159,7 @@
 
 (define (compute-defs-by-slot defs)
   (let* ((nslots (match defs
-                   (#(#(_ _ slot) ...) (1+ (apply max slot)))))
+                   (#(#(_ _ slot _) ...) (1+ (apply max slot)))))
          (by-slot (make-vector nslots #f)))
     (let lp ((n 0))
       (when (< n nslots)
@@ -112,14 +168,17 @@
     (let lp ((n 0))
       (when (< n (vector-length defs))
         (match (vector-ref defs n)
-          (#(_ _ slot)
+          (#(_ _ slot _)
            (bitvector-set! (vector-ref by-slot slot) n #t)
            (lp (1+ n))))))
     by-slot))
 
 (define (compute-killv code parsed defs)
-  (let ((defs-by-slot (compute-defs-by-slot defs))
-        (killv (make-vector (vector-length parsed) #f)))
+  (let*-values (((defs-by-slot) (compute-defs-by-slot defs))
+                ((initial-frame-size) (vector-length defs-by-slot))
+                ((in-sizes out-sizes)
+                 (compute-frame-sizes code parsed initial-frame-size))
+                ((killv) (make-vector (vector-length parsed) #f)))
     (define (kill-slot! n slot)
       (bit-set*! (vector-ref killv n) (vector-ref defs-by-slot slot) #t))
     (let lp ((n 0))
@@ -132,7 +191,7 @@
     (let lp ((var 0) (pos 0) (pc-offset 0))
       (when (< var (vector-length defs))
         (match (vector-ref defs var)
-          (#(name offset slot)
+          (#(name offset slot representation)
            (when (< offset pc-offset)
              (error "mismatch between def offsets and parsed code"))
            (cond
@@ -147,11 +206,12 @@
                     (when (< slot (vector-length defs-by-slot))
                       (kill-slot! n slot)))
                   (instruction-slot-clobbers code pos
-                                             (vector-length defs-by-slot)))
+                                             (vector-ref in-sizes n)
+                                             (vector-ref out-sizes n)))
         (lp (1+ n) (+ pos (vector-ref parsed n)))))
     killv))
 
-(define (available-bindings arity ip top-frame?)
+(define (available-bindings frame arity ip top-frame?)
   (let* ((defs (list->vector (arity-definitions arity)))
          (code (arity-code arity))
          (parsed (parse-code code))
@@ -206,7 +266,10 @@
       (when (< offset 0)
         (error "ip did not correspond to an instruction boundary?"))
       (if (zero? offset)
-          (let ((live (if top-frame?
+          ;; It shouldn't be the case that both OFFSET and N are zero
+          ;; but TOP-FRAME? is false.  Still, it could happen, as is
+          ;; currently the case in frame-arguments.
+          (let ((live (if (or top-frame? (zero? n))
                           (vector-ref inv n)
                           ;; If we're not at a top frame, the IP points
                           ;; to the continuation -- but we haven't
@@ -223,10 +286,8 @@
               (let ((n (bit-position #t live n)))
                 (if n
                     (match (vector-ref defs n)
-                      (#(name def-offset slot)
-                       ;; Binding 0 is the closure, and is not present
-                       ;; in arity-definitions.
-                       (cons (make-binding (1+ n) name slot)
+                      (#(name def-offset slot representation)
+                       (cons (make-binding frame n name slot representation)
                              (lp (1+ n)))))
                     '()))))
           (lp (1+ n) (- offset (vector-ref parsed n)))))))
@@ -236,7 +297,7 @@
     (cond
      ((find-program-arity ip)
       => (lambda (arity)
-           (available-bindings arity ip top-frame?)))
+           (available-bindings frame arity ip top-frame?)))
      (else '()))))
 
 (define (frame-lookup-binding frame var)
@@ -248,19 +309,40 @@
           (else
            (lp (cdr bindings))))))
 
-(define (frame-binding-set! frame var val)
-  (frame-local-set! frame
-                    (binding-slot
-                     (or (frame-lookup-binding frame var)
-                         (error "variable not bound in frame" var frame)))
-                    val))
+(define (binding-ref binding)
+  (frame-local-ref (or (binding-frame binding)
+                       (error "binding has no frame" binding))
+                   (binding-slot binding)
+                   (binding-representation binding)))
 
-(define (frame-binding-ref frame var)
-  (frame-local-ref frame
-                   (binding-slot
-                    (or (frame-lookup-binding frame var)
-                        (error "variable not bound in frame" var frame)))))
+(define (binding-set! binding val)
+  (frame-local-set! (or (binding-frame binding)
+                        (error "binding has no frame" binding))
+                    (binding-slot binding)
+                    val
+                    (binding-representation binding)))
 
+(define* (frame-procedure-name frame #:key
+                               (info (find-program-debug-info
+                                      (frame-instruction-pointer frame))))
+  (cond
+   (info => program-debug-info-name)
+   ;; We can only try to get the name from the closure if we know that
+   ;; slot 0 corresponds to the frame's procedure.  This isn't possible
+   ;; to know in general.  If the frame has already begun executing and
+   ;; the closure binding is dead, it could have been replaced with any
+   ;; other random value, or an unboxed value.  Even if we're catching
+   ;; the frame at its application, before it has started running, if
+   ;; the callee is well-known and has only one free variable, closure
+   ;; optimization could have chosen to represent its closure as that
+   ;; free variable, and that free variable might be some other program,
+   ;; or even an unboxed value.  It would be an error to try to get the
+   ;; procedure name of some procedure that doesn't correspond to the
+   ;; one being applied.  (Free variables are currently always boxed but
+   ;; that could change in the future.)
+   ((primitive-code? (frame-instruction-pointer frame))
+    (procedure-name (frame-local-ref frame 0 'scm)))
+   (else #f)))
 
 ;; This function is always called to get some sort of representation of the
 ;; frame to present to the user, so let's do the logical thing and dispatch to
@@ -268,6 +350,16 @@
 (define (frame-arguments frame)
   (cdr (frame-call-representation frame)))
 
+;; Usually the IP is sufficient to identify the procedure being called.
+;; However all primitive applications of the same arity share the same
+;; code.  Perhaps we should change that in the future, but for now we
+;; export this function to avoid having to export frame-local-ref.
+;;
+(define (frame-instruction-pointer-or-primitive-procedure-name frame)
+  (let ((ip (frame-instruction-pointer frame)))
+    (if (primitive-code? ip)
+        (procedure-name (frame-local-ref frame 0 'scm))
+        ip)))
 
 
 ;;;
@@ -292,20 +384,33 @@
 (define* (frame-call-representation frame #:key top-frame?)
   (let* ((ip (frame-instruction-pointer frame))
          (info (find-program-debug-info ip))
-         (nlocals (frame-num-locals frame))
-         (closure (frame-procedure frame)))
+         (nlocals (frame-num-locals frame)))
     (define (find-slot i bindings)
       (match bindings
-        (#f (and (< i nlocals) i))
         (() #f)
-        ((($ <binding> idx name slot) . bindings)
+        (((and binding ($ <binding> frame idx name slot)) . bindings)
          (if (< idx i)
              (find-slot i bindings)
-             (and (= idx i) slot)))))
+             (and (= idx i) binding)))))
     (define (local-ref i bindings)
       (cond
+       ((not bindings)
+        ;; This case is only hit for primitives and application
+        ;; arguments.
+        (frame-local-ref frame i 'scm))
        ((find-slot i bindings)
-        => (lambda (slot) (frame-local-ref frame slot)))
+        => (lambda (binding)
+             (let ((val (frame-local-ref frame (binding-slot binding)
+                                         (binding-representation binding))))
+               ;; It could be that there's a value that isn't clobbered
+               ;; by a call but that isn't live after a call either.  In
+               ;; that case, if GC runs during the call, the value will
+               ;; be collected, and on the stack it will be replaced
+               ;; with the unspecified value.  Assume that clobbering
+               ;; values is more likely than passing the unspecified
+               ;; value as an argument, and replace unspecified with _,
+               ;; as if the binding were not available.
+               (if (unspecified? val) '_ val))))
        (else
         '_)))
     (define (application-arguments)
@@ -333,22 +438,21 @@
        (else
         '())))
     (cons
-     (or (and=> info program-debug-info-name)
-         (and (procedure? closure) (procedure-name closure))
-         closure)
+     (or (frame-procedure-name frame #:info info) '_)
      (cond
       ((find-program-arity ip)
        => (lambda (arity)
             (if (and top-frame? (eqv? ip (arity-low-pc arity)))
                 (application-arguments)
-                (reconstruct-arguments (available-bindings arity ip top-frame?)
-                                       (arity-nreq arity)
-                                       (arity-nopt arity)
-                                       (arity-keyword-args arity)
-                                       (arity-has-rest? arity)
-                                       1))))
-      ((and (primitive? closure)
-            (program-arguments-alist closure ip))
+                (reconstruct-arguments
+                 (available-bindings frame arity ip top-frame?)
+                 (arity-nreq arity)
+                 (arity-nopt arity)
+                 (arity-keyword-args arity)
+                 (arity-has-rest? arity)
+                 1))))
+      ((and (primitive-code? ip)
+            (program-arguments-alist (frame-local-ref frame 0 'scm) ip))
        => (lambda (args)
             (match args
               ((('required . req)
@@ -368,12 +472,12 @@
 
 (define (frame-environment frame)
   (map (lambda (binding)
-	 (cons (binding-name binding) (frame-binding-ref frame binding)))
+	 (cons (binding-name binding) (binding-ref binding)))
        (frame-bindings frame)))
 
 (define (frame-object-binding frame obj)
   (do ((bs (frame-bindings frame) (cdr bs)))
-      ((or (null? bs) (eq? obj (frame-binding-ref frame (car bs))))
+      ((or (null? bs) (eq? obj (binding-ref (car bs))))
        (and (pair? bs) (car bs)))))
 
 (define (frame-object-name frame obj)

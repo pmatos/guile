@@ -81,6 +81,7 @@ typedef enum {
   SCM_DYNSTACK_TYPE_WITH_FLUID,
   SCM_DYNSTACK_TYPE_PROMPT,
   SCM_DYNSTACK_TYPE_DYNWIND,
+  SCM_DYNSTACK_TYPE_DYNAMIC_STATE,
 } scm_t_dynstack_item_type;
 
 #define SCM_DYNSTACK_TAG_TYPE_MASK 0xf
@@ -129,8 +130,7 @@ typedef enum {
 } scm_t_dynstack_winder_flags;
 
 typedef enum {
-  SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY = (1 << SCM_DYNSTACK_TAG_FLAGS_SHIFT),
-  SCM_F_DYNSTACK_PROMPT_PUSH_NARGS = (2 << SCM_DYNSTACK_TAG_FLAGS_SHIFT)
+  SCM_F_DYNSTACK_PROMPT_ESCAPE_ONLY = (1 << SCM_DYNSTACK_TAG_FLAGS_SHIFT)
 } scm_t_dynstack_prompt_flags;
 
 typedef void (*scm_t_guard) (void *);
@@ -148,9 +148,11 @@ SCM_INTERNAL void scm_dynstack_push_rewinder (scm_t_dynstack *,
 SCM_INTERNAL void scm_dynstack_push_unwinder (scm_t_dynstack *,
                                               scm_t_dynstack_winder_flags,
                                               scm_t_guard, void *);
-SCM_INTERNAL void scm_dynstack_push_fluid (scm_t_dynstack *,
-                                           SCM fluid, SCM value,
-                                           SCM dynamic_state);
+SCM_INTERNAL void scm_dynstack_push_fluid (
+  scm_t_dynstack *, SCM fluid, SCM value,
+  scm_t_dynamic_state *dynamic_state);
+SCM_INTERNAL void scm_dynstack_push_dynamic_state (scm_t_dynstack *, SCM,
+                                                   scm_t_dynamic_state *);
 SCM_INTERNAL void scm_dynstack_push_prompt (scm_t_dynstack *,
                                             scm_t_dynstack_prompt_flags,
                                             SCM key,
@@ -187,8 +189,10 @@ SCM_INTERNAL scm_t_bits* scm_dynstack_unwind_fork (scm_t_dynstack *,
                                                    scm_t_dynstack *);
 
 SCM_INTERNAL void scm_dynstack_unwind_frame (scm_t_dynstack *);
-SCM_INTERNAL void scm_dynstack_unwind_fluid (scm_t_dynstack *dynstack,
-                                             SCM dynamic_state);
+SCM_INTERNAL void scm_dynstack_unwind_fluid
+  (scm_t_dynstack *dynstack, scm_t_dynamic_state *dynamic_state);
+SCM_INTERNAL void scm_dynstack_unwind_dynamic_state
+  (scm_t_dynstack *dynstack, scm_t_dynamic_state *dynamic_state);
 
 SCM_INTERNAL scm_t_bits* scm_dynstack_find_prompt (scm_t_dynstack *, SCM,
                                                    scm_t_dynstack_prompt_flags *,
@@ -196,6 +200,12 @@ SCM_INTERNAL scm_t_bits* scm_dynstack_find_prompt (scm_t_dynstack *, SCM,
                                                    scm_t_ptrdiff *,
                                                    scm_t_uint32 **,
                                                    scm_i_jmp_buf **);
+
+SCM_INTERNAL SCM scm_dynstack_find_old_fluid_value (scm_t_dynstack *,
+                                                    SCM, size_t, SCM);
+
+SCM_INTERNAL void scm_dynstack_relocate_prompts (scm_t_dynstack *,
+                                                 scm_t_ptrdiff);
 
 SCM_INTERNAL void scm_dynstack_wind_prompt (scm_t_dynstack *, scm_t_bits *,
                                             scm_t_ptrdiff, scm_i_jmp_buf *);

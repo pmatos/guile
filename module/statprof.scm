@@ -1,7 +1,7 @@
 ;;;; (statprof) -- a statistical profiler for Guile
 ;;;; -*-scheme-*-
 ;;;;
-;;;; 	Copyright (C) 2009, 2010, 2011, 2013-2015  Free Software Foundation, Inc.
+;;;; 	Copyright (C) 2009, 2010, 2011, 2013-2017  Free Software Foundation, Inc.
 ;;;;    Copyright (C) 2004, 2009 Andy Wingo <wingo at pobox dot com>
 ;;;;    Copyright (C) 2001 Rob Browning <rlb at defaultvalue dot org>
 ;;;; 
@@ -23,85 +23,8 @@
 
 ;;; Commentary:
 ;;;
-;;; @code{(statprof)} is a statistical profiler for Guile.
-;;;
-;;; A simple use of statprof would look like this:
-;;;
-;;; @example
-;;;   (statprof (lambda () (do-something))
-;;;             #:hz 100
-;;;             #:count-calls? #t)
-;;; @end example
-;;;
-;;; This would run the thunk with statistical profiling, finally
-;;; displaying a gprof flat-style table of statistics which could
-;;; something like this:
-;;;
-;;; @example
-;;;   %   cumulative      self              self    total
-;;;  time    seconds   seconds    calls  ms/call  ms/call  name
-;;;  35.29      0.23      0.23     2002     0.11     0.11  -
-;;;  23.53      0.15      0.15     2001     0.08     0.08  positive?
-;;;  23.53      0.15      0.15     2000     0.08     0.08  +
-;;;  11.76      0.23      0.08     2000     0.04     0.11  do-nothing
-;;;   5.88      0.64      0.04     2001     0.02     0.32  loop
-;;;   0.00      0.15      0.00        1     0.00   150.59  do-something
-;;;  ...
-;;; @end example
-;;;
-;;; All of the numerical data with the exception of the calls column is
-;;; statistically approximate. In the following column descriptions, and
-;;; in all of statprof, "time" refers to execution time (both user and
-;;; system), not wall clock time.
-;;;
-;;; @table @asis
-;;; @item % time
-;;; The percent of the time spent inside the procedure itself
-;;; (not counting children).
-;;; @item cumulative seconds
-;;; The total number of seconds spent in the procedure, including
-;;; children.
-;;; @item self seconds
-;;; The total number of seconds spent in the procedure itself (not counting
-;;; children).
-;;; @item calls
-;;; The total number of times the procedure was called.
-;;; @item self ms/call
-;;; The average time taken by the procedure itself on each call, in ms.
-;;; @item total ms/call
-;;; The average time taken by each call to the procedure, including time
-;;; spent in child functions.
-;;; @item name
-;;; The name of the procedure.
-;;; @end table
-;;;
-;;; The profiler uses @code{eq?} and the procedure object itself to
-;;; identify the procedures, so it won't confuse different procedures with
-;;; the same name. They will show up as two different rows in the output.
-;;;
-;;; Right now the profiler is quite simplistic.  I cannot provide
-;;; call-graphs or other higher level information.  What you see in the
-;;; table is pretty much all there is. Patches are welcome :-)
-;;;
-;;; @section Implementation notes
-;;;
-;;; The profiler works by setting the unix profiling signal
-;;; @code{ITIMER_PROF} to go off after the interval you define in the call
-;;; to @code{statprof-reset}. When the signal fires, a sampling routine is
-;;; run which looks at the current procedure that's executing, and then
-;;; crawls up the stack, and for each procedure encountered, increments
-;;; that procedure's sample count. Note that if a procedure is encountered
-;;; multiple times on a given stack, it is only counted once. After the
-;;; sampling is complete, the profiler resets profiling timer to fire
-;;; again after the appropriate interval.
-;;;
-;;; Meanwhile, the profiler keeps track, via @code{get-internal-run-time},
-;;; how much CPU time (system and user -- which is also what
-;;; @code{ITIMER_PROF} tracks), has elapsed while code has been executing
-;;; within a statprof-start/stop block.
-;;;
-;;; The profiler also tries to avoid counting or timing its own code as
-;;; much as possible.
+;;; @code{(statprof)} is a statistical profiler for Guile.  See the
+;;; "Statprof" section in the manual, for more information.
 ;;;
 ;;; Code:
 
@@ -109,7 +32,9 @@
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-9 gnu)
-  #:autoload   (ice-9 format) (format)
+  #:use-module (ice-9 format)
+  #:use-module (ice-9 match)
+  #:use-module (ice-9 vlist)
   #:use-module (system vm vm)
   #:use-module (system vm frame)
   #:use-module (system vm debug)
@@ -146,8 +71,6 @@
             statprof-fetch-call-tree
 
             statprof
-            with-statprof
-
             gcprof))
 
 
@@ -327,10 +250,8 @@
       (set-buffer! state buffer)
       (set-buffer-pos! state (1+ pos)))
      (else
-      (let ((proc (frame-procedure frame)))
-        (write-sample-and-continue (if (primitive? proc)
-                                       (procedure-name proc)
-                                       (frame-instruction-pointer frame))))))))
+      (write-sample-and-continue
+       (frame-instruction-pointer-or-primitive-procedure-name frame))))))
 
 (define (reset-sigprof-timer usecs)
   ;; Guile's setitimer binding is terrible.
@@ -354,9 +275,11 @@
                ;; handler in an inner letrec, so that the compiler sees
                ;; the inner reference to profile-signal-handler as the
                ;; same as the procedure, and therefore keeps slot 0
-               ;; alive.  Nastiness, that.
+               ;; alive.  Nastiness, that.  Finally we cut one more
+               ;; inner frame, corresponding to the handle-interrupts
+               ;; trampoline.
                (stack
-                (or (make-stack #t profile-signal-handler (outer-cut state))
+                (or (make-stack #t profile-signal-handler (outer-cut state) 1)
                     (pk 'what! (make-stack #t)))))
 
           (sample-stack-procs state stack)
@@ -374,17 +297,9 @@
 (define (count-call frame)
   (let ((state (existing-profiler-state)))
     (unless (inside-profiler? state)
-      (accumulate-time state (get-internal-run-time))
-
-      (let* ((key (let ((proc (frame-procedure frame)))
-                    (cond
-                     ((primitive? proc) (procedure-name proc))
-                     ((program? proc) (program-code proc))
-                     (else proc))))
+      (let* ((key (frame-instruction-pointer-or-primitive-procedure-name frame))
              (handle (hashv-create-handle! (call-counts state) key 0)))
-        (set-cdr! handle (1+ (cdr handle))))
-
-      (set-last-start-time! state (get-internal-run-time)))))
+        (set-cdr! handle (1+ (cdr handle)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -493,6 +408,26 @@ always collects full stacks.)"
 (define (inc-call-data-self-sample-count! cd)
   (set-call-data-self-sample-count! cd (1+ (call-data-self-sample-count cd))))
 
+(define (skip-count-call buffer start len)
+  ;; If we are counting all procedure calls, count-call might be on the
+  ;; stack.  If it is, skip that part of the stack.
+  (match (program-address-range count-call)
+    ((lo . hi)
+     (let lp ((pos start))
+       (if (< pos len)
+           (let ((key (vector-ref buffer pos)))
+             (cond
+              ((not key)
+               ;; End of stack; count-call not on the stack.
+               start)
+              ((and (number? key) (<= lo key) (< key hi))
+               ;; Found count-call.
+               (1+ pos))
+              (else
+               ;; Otherwise keep going.
+               (lp (1+ pos)))))
+           start)))))
+
 (define (stack-samples->procedure-data state)
   (let ((table (make-hash-table))
         (addr-cache (make-hash-table))
@@ -539,19 +474,19 @@ always collects full stacks.)"
     (let visit-stacks ((pos 0))
       (cond
        ((< pos len)
-        ;; FIXME: if we are counting all procedure calls, and
-        ;; count-call is on the stack, we need to not count the part
-        ;; of the stack that is within count-call.
-        (inc-call-data-self-sample-count!
-         (callee->call-data (vector-ref buffer pos)))
-        (let visit-stack ((pos pos))
-          (cond
-           ((vector-ref buffer pos)
-            => (lambda (callee)
-                 (inc-call-data-cum-sample-count! (callee->call-data callee))
-                 (visit-stack (1+ pos))))
-           (else
-            (visit-stacks (1+ pos))))))
+        (let ((pos (if call-counts
+                       (skip-count-call buffer pos len)
+                       pos)))
+          (inc-call-data-self-sample-count!
+           (callee->call-data (vector-ref buffer pos)))
+          (let visit-stack ((pos pos))
+            (cond
+             ((vector-ref buffer pos)
+              => (lambda (callee)
+                   (inc-call-data-cum-sample-count! (callee->call-data callee))
+                   (visit-stack (1+ pos))))
+             (else
+              (visit-stacks (1+ pos)))))))
        (else table)))))
 
 (define (stack-samples->callee-lists state)
@@ -560,10 +495,10 @@ always collects full stacks.)"
     (let visit-stacks ((pos 0) (out '()))
       (cond
        ((< pos len)
-        ;; FIXME: if we are counting all procedure calls, and
-        ;; count-call is on the stack, we need to not count the part
-        ;; of the stack that is within count-call.
-        (let visit-stack ((pos pos) (stack '()))
+        (let visit-stack ((pos (if (call-counts state)
+                                   (skip-count-call buffer pos len)
+                                   pos))
+                          (stack '()))
           (cond
            ((vector-ref buffer pos)
             => (lambda (callee)
@@ -594,11 +529,13 @@ it represents different functions with the same name."
 none is available."
   (when (statprof-active?)
     (error "Can't call statprof-proc-call-data while profiler is running."))
-  (hashv-ref (stack-samples->procedure-data state)
-             (cond
-              ((primitive? proc) (procedure-name proc))
-              ((program? proc) (program-code proc))
-              (else (program-code proc)))))
+  (unless (program? proc)
+    (error "statprof-call-data only works for VM programs"))
+  (let* ((code (program-code proc))
+         (key (if (primitive-code? code)
+                  (procedure-name proc)
+                  code)))
+    (hashv-ref (stack-samples->procedure-data state) key)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Stats
@@ -606,16 +543,28 @@ none is available."
 (define-record-type stats
   (make-stats proc-name proc-source
               %-time-in-proc cum-secs-in-proc self-secs-in-proc
-              calls self-secs-per-call cum-secs-per-call)
+              calls)
   stats?
   (proc-name statprof-stats-proc-name)
   (proc-source statprof-stats-proc-source)
   (%-time-in-proc statprof-stats-%-time-in-proc)
   (cum-secs-in-proc statprof-stats-cum-secs-in-proc)
   (self-secs-in-proc statprof-stats-self-secs-in-proc)
-  (calls statprof-stats-calls)
-  (self-secs-per-call statprof-stats-self-secs-per-call)
-  (cum-secs-per-call statprof-stats-cum-secs-per-call))
+  (calls statprof-stats-calls))
+
+(define (statprof-stats-self-secs-per-call stats)
+  (let ((calls (statprof-stats-calls stats)))
+    (and calls
+         (/ (statprof-stats-self-secs-in-proc stats)
+            calls))))
+
+(define (statprof-stats-cum-secs-per-call stats)
+  (let ((calls (statprof-stats-calls stats)))
+    (and calls
+         (/ (statprof-stats-cum-secs-in-proc stats)
+            ;; `calls' might be 0 if we entered statprof during the
+            ;; dynamic extent of the call.
+            (max calls 1)))))
 
 (define (statprof-call-data->stats call-data)
   "Returns an object of type @code{statprof-stats}."
@@ -639,16 +588,7 @@ none is available."
                 (* (/ self-samples all-samples) 100.0)
                 (* cum-samples secs-per-sample 1.0)
                 (* self-samples secs-per-sample 1.0)
-                num-calls
-                (and num-calls ;; maybe we only sampled in children
-                     (if (zero? self-samples) 0.0
-                         (/ (* self-samples secs-per-sample) 1.0 num-calls)))
-                (and num-calls ;; cum-samples must be positive
-                     (/ (* cum-samples secs-per-sample)
-                        1.0
-                        ;; num-calls might be 0 if we entered statprof during the
-                        ;; dynamic extent of the call
-                        (max num-calls 1))))))
+                num-calls)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -661,8 +601,7 @@ none is available."
             (statprof-stats-cum-secs-in-proc y))
          diff))))
 
-(define* (statprof-display #:optional (port (current-output-port))
-                           (state (existing-profiler-state)))
+(define* (statprof-display/flat port state)
   "Displays a gprof-like summary of the statistics collected. Unless an
 optional @var{port} argument is passed, uses the current output port."
   (cond
@@ -684,10 +623,8 @@ optional @var{port} argument is passed, uses the current output port."
                 (statprof-stats-self-secs-in-proc stats))
         (if (call-counts state)
             (if (statprof-stats-calls stats)
-                (format port " ~7d ~8,2f ~8,2f  "
-                        (statprof-stats-calls stats)
-                        (* 1000 (statprof-stats-self-secs-per-call stats))
-                        (* 1000 (statprof-stats-cum-secs-per-call stats)))
+                (format port " ~7d  "
+                        (statprof-stats-calls stats))
                 (format port "                            "))
             (display "  " port))
         (let ((source (statprof-stats-proc-source stats))
@@ -702,10 +639,10 @@ optional @var{port} argument is passed, uses the current output port."
     
       (if (call-counts state)
           (begin
-            (format  port "~5a ~10a   ~7a ~8a ~8a ~8a  ~8@a\n"
-                     "%  " "cumulative" "self" "" "self" "total" "")
-            (format  port "~5a  ~9a  ~8a ~8a ~8a ~8a  ~a\n"
-                     "time" "seconds" "seconds" "calls" "ms/call" "ms/call" "procedure"))
+            (format  port "~5a ~10a   ~7a  ~8a\n"
+                     "%  " "cumulative" "self" "")
+            (format  port "~5a  ~9a  ~8a  ~7a ~a\n"
+                     "time" "seconds" "seconds" "calls" "procedure"))
           (begin
             (format  port "~5a ~10a   ~7a  ~8a\n"
                      "%" "cumulative" "self" "")
@@ -715,11 +652,11 @@ optional @var{port} argument is passed, uses the current output port."
       (for-each display-stats-line sorted-stats)
 
       (display "---\n" port)
-      (simple-format #t "Sample count: ~A\n" (statprof-sample-count state))
-      (simple-format #t "Total time: ~A seconds (~A seconds in GC)\n"
-                     (statprof-accumulated-time state)
-                     (/ (gc-time-taken state)
-                        1.0 internal-time-units-per-second))))))
+      (format port "Sample count: ~A\n" (statprof-sample-count state))
+      (format port "Total time: ~A seconds (~A seconds in GC)\n"
+              (statprof-accumulated-time state)
+              (/ (gc-time-taken state)
+                 1.0 internal-time-units-per-second))))))
 
 (define* (statprof-display-anomalies #:optional (state
                                                  (existing-profiler-state)))
@@ -730,15 +667,15 @@ statistics.@code{}"
      (when (and (call-counts state)
                 (zero? (call-data-call-count data))
                 (positive? (call-data-cum-sample-count data)))
-       (simple-format #t
-                      "==[~A ~A ~A]\n"
-                      (call-data-name data)
-                      (call-data-call-count data)
-                      (call-data-cum-sample-count data))))
+       (format #t
+               "==[~A ~A ~A]\n"
+               (call-data-name data)
+               (call-data-call-count data)
+               (call-data-cum-sample-count data))))
    #f
    state)
-  (simple-format #t "Total time: ~A\n" (statprof-accumulated-time state))
-  (simple-format #t "Sample count: ~A\n" (statprof-sample-count state)))
+  (format #t "Total time: ~A\n" (statprof-accumulated-time state))
+  (format #t "Sample count: ~A\n" (statprof-sample-count state)))
 
 (define (statprof-display-anomolies)
   (issue-deprecation-warning "statprof-display-anomolies is a misspelling. "
@@ -763,15 +700,6 @@ statistics.@code{}"
   "Returns a list of stacks, as they were captured since the last call
 to @code{statprof-reset}."
   (stack-samples->callee-lists state))
-
-(define procedure=?
-  (lambda (a b)
-    (cond
-     ((eq? a b))
-     ((and (program? a) (program? b))
-      (eq? (program-code a) (program-code b)))
-     (else
-      #f))))
 
 ;; tree ::= (car n . tree*)
 
@@ -801,32 +729,136 @@ to @code{statprof-reset}."
           n-terminal
           (acons (caar in) (list (cdar in)) tails))))))
 
-(define* (statprof-fetch-call-tree #:optional (state (existing-profiler-state)))
+(define (collect-cycles items)
+  (define (find-cycle item stack)
+    (match (vhash-assoc item stack)
+      (#f #f)
+      ((_ . pos)
+       (let ((size (- (vlist-length stack) pos)))
+         (and (<= (1- (* size 2)) (vlist-length stack))
+              (let lp ((i 0))
+                (if (= i (1- size))
+                    size
+                    (and (equal? (car (vlist-ref stack i))
+                                 (car (vlist-ref stack (+ i size))))
+                         (lp (1+ i))))))))))
+  (define (collect-cycle stack size)
+    (vlist-fold-right (lambda (pair cycle)
+                        (cons (car pair) cycle))
+                      '()
+                      (vlist-take stack size)))
+  (define (detect-cycle items stack)
+    (match items
+      (() stack)
+      ((item . items)
+       (let* ((cycle-size (find-cycle item stack)))
+         (if cycle-size
+             (chomp-cycles (collect-cycle stack cycle-size)
+                           items
+                           (vlist-drop stack (1- (* cycle-size 2))))
+             (chomp-cycles (list item) items stack))))))
+  (define (skip-cycles cycle items)
+    (let lp ((a cycle) (b items))
+      (match a
+        (() (skip-cycles cycle b))
+        ((a . a*)
+         (match b
+           (() items)
+           ((b . b*)
+            (if (equal? a b)
+                (lp a* b*)
+                items)))))))
+  (define (chomp-cycles cycle items stack)
+    (detect-cycle (skip-cycles cycle items)
+                  (vhash-cons (match cycle
+                                ((item) item)
+                                (cycle cycle))
+                              (vlist-length stack)
+                              stack)))
+  (vlist-fold
+   (lambda (pair out)
+     (cons (car pair) out))
+   '()
+   (detect-cycle items vlist-null)))
+
+(define* (statprof-fetch-call-tree #:optional (state (existing-profiler-state))
+                                   #:key precise?)
   "Return a call tree for the previous statprof run.
 
 The return value is a list of nodes, each of which is of the type:
 @code
  node ::= (@var{proc} @var{count} . @var{nodes})
 @end code"
-  (define (callee->printable callee)
+  (define-syntax-rule (define-memoized (fn arg) body)
+    (define fn
+      (let ((table (make-hash-table)))
+        (lambda (arg)
+          (cond
+           ((hash-get-handle table arg) => cdr)
+           (else
+            (let ((res body))
+              (hash-set! table arg res)
+              res)))))))
+  (define-memoized (callee->printable callee)
     (cond
      ((number? callee)
-      (addr->printable callee (find-program-debug-info callee)))
+      (let* ((pdi (find-program-debug-info callee))
+             (name (or (and=> (and pdi (program-debug-info-name pdi))
+                              symbol->string)
+                       (string-append "#x" (number->string callee 16))))
+             (loc (and=> (find-source-for-addr
+                          (or (and (not precise?)
+                                   (and=> pdi program-debug-info-addr))
+                              callee))
+                         source->string)))
+        (if loc
+            (string-append name " at " loc)
+            name)))
      (else
       (with-output-to-string (lambda () (write callee))))))
-  (define (memoizev/1 proc table)
-    (lambda (x)
-      (cond
-       ((hashv-get-handle table x) => cdr)
-       (else
-        (let ((res (proc x)))
-          (hashv-set! table x res)
-          res)))))
-  (let ((callee->printable (memoizev/1 callee->printable (make-hash-table))))
-    (cons #t (lists->trees (map (lambda (callee-list)
-                                  (map callee->printable callee-list))
-                                (stack-samples->callee-lists state))
-                           equal?))))
+  (define (munge-stack stack)
+    ;; We collect the sample in newest-to-oldest
+    ;; order.  Change to have the oldest first.
+    (let ((stack (reverse stack)))
+      (define (cycle->printable item)
+        (if (string? item)
+            item
+            (string-join (map cycle->printable item) ", ")))
+      (map cycle->printable (collect-cycles (map callee->printable stack)))))
+  (let ((stacks (map munge-stack (stack-samples->callee-lists state))))
+    (cons #t (lists->trees stacks equal?))))
+
+(define (statprof-display/tree port state)
+  (match (statprof-fetch-call-tree state)
+    ((#t total-count . trees)
+     (define (print-tree tree indent)
+       (define (print-subtree tree) (print-tree tree (+ indent 2)))
+       (match tree
+         ((callee count . trees)
+          (format port "~vt~,1f% ~a\n" indent (* 100. (/ count total-count))
+                  callee)
+          (for-each print-subtree trees))))
+     (for-each (lambda (tree) (print-tree tree 0)) trees)))
+  (display "---\n" port)
+  (format port "Sample count: ~A\n" (statprof-sample-count state))
+  (format port "Total time: ~A seconds (~A seconds in GC)\n"
+          (statprof-accumulated-time state)
+          (/ (gc-time-taken state)
+             1.0 internal-time-units-per-second)))
+
+(define* (statprof-display #:optional (port (current-output-port))
+                           (state (existing-profiler-state))
+                           #:key (style 'flat))
+  "Displays a summary of the statistics collected. Unless an optional
+@var{port} argument is passed, uses the current output port."
+  (case style
+    ((flat) (statprof-display/flat port state))
+    ((anomalies)
+     (with-output-to-port port
+       (lambda ()
+         (statprof-display-anomalies state))))
+    ((tree) (statprof-display/tree port state))
+    (else (error "Unknown statprof display style" style))))
 
 (define (call-thunk thunk)
   (call-with-values (lambda () (thunk))
@@ -834,7 +866,8 @@ The return value is a list of nodes, each of which is of the type:
       (apply values results))))
 
 (define* (statprof thunk #:key (loop 1) (hz 100) (count-calls? #f)
-                   (port (current-output-port)) full-stacks?)
+                   (port (current-output-port)) full-stacks?
+                   (display-style 'flat))
   "Profile the execution of @var{thunk}, and return its return values.
 
 The stack will be sampled @var{hz} times per second, and the thunk
@@ -860,14 +893,18 @@ operation is somewhat expensive."
           (call-thunk thunk))
         (lambda ()
           (statprof-stop state)
-          (statprof-display port state))))))
+          (statprof-display port state #:style display-style))))))
 
-(define-macro (with-statprof . args)
-  "Profile the expressions in the body, and return the body's return values.
+(begin-deprecated
+ (define-macro (with-statprof . args)
+   "Profile the expressions in the body, and return the body's return values.
 
 Keyword arguments:
 
 @table @code
+@item #:display-style
+Set the display style, either @code{'flat} or @code{'tree}.
+
 @item #:loop
 Execute the body @var{loop} number of times, or @code{#f} for no looping
 
@@ -881,22 +918,25 @@ Whether to instrument each function call (expensive)
 
 default: @code{#f}
 @end table"
-  (define (kw-arg-ref kw args def)
-    (cond
-     ((null? args) (error "Invalid macro body"))
-     ((keyword? (car args))
-      (if (eq? (car args) kw)
-          (cadr args)
-          (kw-arg-ref kw (cddr args) def)))
-     ((eq? kw #f def) ;; asking for the body
-      args)
-     (else def))) ;; kw not found
-  `((@ (statprof) statprof)
-    (lambda () ,@(kw-arg-ref #f args #f))
-    #:loop ,(kw-arg-ref #:loop args 1)
-    #:hz ,(kw-arg-ref #:hz args 100)
-    #:count-calls? ,(kw-arg-ref #:count-calls? args #f)
-    #:full-stacks? ,(kw-arg-ref #:full-stacks? args #f)))
+   (define (kw-arg-ref kw args def)
+     (cond
+      ((null? args) (error "Invalid macro body"))
+      ((keyword? (car args))
+       (if (eq? (car args) kw)
+           (cadr args)
+           (kw-arg-ref kw (cddr args) def)))
+      ((eq? kw #f def) ;; asking for the body
+       args)
+      (else def))) ;; kw not found
+   (issue-deprecation-warning
+    "`with-statprof' is deprecated.  Use `statprof' instead.")
+   `((@ (statprof) statprof)
+     (lambda () ,@(kw-arg-ref #f args #f))
+     #:display-style ,(kw-arg-ref #:display-style args ''flat)
+     #:loop ,(kw-arg-ref #:loop args 1)
+     #:hz ,(kw-arg-ref #:hz args 100)
+     #:count-calls? ,(kw-arg-ref #:count-calls? args #f)))
+ (export with-statprof))
 
 (define* (gcprof thunk #:key (loop 1) full-stacks? (port (current-output-port)))
   "Do an allocation profile of the execution of @var{thunk}.
@@ -916,10 +956,10 @@ times."
           (set-inside-profiler?! state #t)
 
           (let ((stop-time (get-internal-run-time))
-                ;; Cut down to gc-callback, and then one before (the
-                ;; after-gc async).  See the note in profile-signal-handler
-                ;; also.
-                (stack (or (make-stack #t gc-callback (outer-cut state) 1)
+                ;; Cut down to gc-callback, and then two more (the
+                ;; after-gc async and the handle-interrupts trampoline).
+                ;; See the note in profile-signal-handler also.
+                (stack (or (make-stack #t gc-callback (outer-cut state) 2)
                            (pk 'what! (make-stack #t)))))
             (sample-stack-procs state stack)
             (accumulate-time state stop-time)

@@ -1,5 +1,5 @@
 /* Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2004, 2006,
- *   2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+ *   2009, 2010, 2011, 2012, 2013, 2014, 2016 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -26,15 +26,13 @@
 
 /* See stime.c for comments on why _POSIX_C_SOURCE is not always defined. */
 #define _LARGEFILE64_SOURCE      /* ask for stat64 etc */
-#ifdef __hpux
-#define _POSIX_C_SOURCE 199506L  /* for readdir_r */
-#endif
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif
 
 #include <alloca.h>
+#include <dirname.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -42,11 +40,15 @@
 
 #include "libguile/_scm.h"
 #include "libguile/smob.h"
+#include "libguile/fdes-finalizers.h"
 #include "libguile/feature.h"
 #include "libguile/fports.h"
 #include "libguile/strings.h"
+#include "libguile/iselect.h"
 #include "libguile/vectors.h"
 #include "libguile/dynwind.h"
+#include "libguile/ports.h"
+#include "libguile/ports-internal.h"
 
 #include "libguile/validate.h"
 #include "libguile/filesys.h"
@@ -77,8 +79,6 @@
 #ifdef LIBC_H_WITH_UNISTD_H
 #include <libc.h>
 #endif
-
-#include <sys/select.h>
 
 #ifdef HAVE_STRING_H
 #include <string.h>
@@ -287,6 +287,7 @@ SCM_DEFINE (scm_close, "close", 1, 0, 0,
     return scm_close_port (fd_or_port);
   fd = scm_to_int (fd_or_port);
   scm_evict_ports (fd);		/* see scsh manual.  */
+  scm_run_fdes_finalizers (fd);
   SCM_SYSCALL (rv = close (fd));
   /* following scsh, closing an already closed file descriptor is
      not an error.  */
@@ -309,6 +310,7 @@ SCM_DEFINE (scm_close_fdes, "close-fdes", 1, 0, 0,
   int rv;
 
   c_fd = scm_to_int (fd);
+  scm_run_fdes_finalizers (c_fd);
   SCM_SYSCALL (rv = close (c_fd));
   if (rv < 0)
     SCM_SYSERROR;
@@ -644,24 +646,21 @@ set_element (fd_set *set, SCM *ports_ready, SCM element, int pos)
   else
     {
       int use_buf = 0;
+      size_t cur;
 
       element = SCM_COERCE_OUTPORT (element);
       SCM_ASSERT (SCM_OPFPORTP (element), element, pos, "select");
       if (pos == SCM_ARG1)
 	{
-	  /* check whether port has buffered input.  */
-	  scm_t_port *pt = SCM_PTAB_ENTRY (element);
-      
-	  if (pt->read_pos < pt->read_end)
+	  /* Check whether port has input buffered.  */
+	  if (scm_port_buffer_can_take (SCM_PORT (element)->read_buf, &cur) > 0)
 	    use_buf = 1;
 	}
       else if (pos == SCM_ARG2)
 	{
-	  /* check whether port's output buffer has room.  */
-	  scm_t_port *pt = SCM_PTAB_ENTRY (element);
-
-	  /* > 1 since writing the last byte in the buffer causes flush.  */
-	  if (pt->write_end - pt->write_pos > 1)
+	  /* Check whether port's output buffer has room.  > 1 since
+             writing the last byte in the buffer causes flush.  */
+	  if (scm_port_buffer_can_put (SCM_PORT (element)->write_buf, &cur) > 1)
 	    use_buf = 1;
 	}
       fd = use_buf ? -1 : SCM_FPORT_FDES (element);
@@ -776,10 +775,9 @@ SCM_DEFINE (scm_select, "select", 3, 2, 0,
 	    "exceptional conditions on a collection of ports or file\n"
 	    "descriptors, or waiting for a timeout to occur.\n\n"
 
-	    "When an error occurs, of if it is interrupted by a signal, this\n"
-	    "procedure throws a @code{system-error} exception\n"
-	    "(@pxref{Conventions, @code{system-error}}).  In case of an\n"
-	    "interruption, the associated error number is @var{EINTR}.\n\n"
+	    "When an error occurs, this procedure throws a\n"
+            "@code{system-error} exception "
+            "(@pxref{Conventions, @code{system-error}}).\n\n"
 
 	    "@var{reads}, @var{writes} and @var{excepts} can be lists or\n"
 	    "vectors, with each member a port or a file descriptor.\n"
@@ -899,12 +897,15 @@ SCM_DEFINE (scm_select, "select", 3, 2, 0,
     }
 
   {
-    int rv = select (max_fd + 1,
-                     &read_set, &write_set, &except_set,
-                     time_ptr);
-    if (rv < 0)
+    int rv = scm_std_select (max_fd + 1,
+                             &read_set, &write_set, &except_set,
+                             time_ptr);
+    /* Let EINTR / EAGAIN cause a return to the user and let them loop
+       to run any asyncs that might be pending.  */
+    if (rv < 0 && errno != EINTR && errno != EAGAIN)
       SCM_SYSERROR;
   }
+
   return scm_list_3 (retrieve_select_type (&read_set, read_ports_ready, reads),
 		     retrieve_select_type (&write_set, write_ports_ready, writes),
 		     retrieve_select_type (&except_set, SCM_EOL, excepts));
@@ -979,7 +980,7 @@ SCM_DEFINE (scm_fsync, "fsync", 1, 0, 0,
 
   if (SCM_OPFPORTP (object))
     {
-      scm_flush_unlocked (object);
+      scm_flush (object);
       fdes = SCM_FPORT_FDES (object);
     }
   else
@@ -994,8 +995,8 @@ SCM_DEFINE (scm_fsync, "fsync", 1, 0, 0,
 #ifdef HAVE_SYMLINK
 SCM_DEFINE (scm_symlink, "symlink", 2, 0, 0,
             (SCM oldpath, SCM newpath),
-	    "Create a symbolic link named @var{oldpath} with the value\n"
-	    "(i.e., pointing to) @var{newpath}.  The return value is\n"
+	    "Create a symbolic link named @var{newpath} with the value\n"
+	    "(i.e., pointing to) @var{oldpath}.  The return value is\n"
 	    "unspecified.")
 #define FUNC_NAME s_scm_symlink
 {
@@ -1257,26 +1258,21 @@ SCM_DEFINE (scm_getcwd, "getcwd", 0, 0, 0,
 SCM_DEFINE (scm_mkdir, "mkdir", 1, 1, 0,
             (SCM path, SCM mode),
 	    "Create a new directory named by @var{path}.  If @var{mode} is omitted\n"
-	    "then the permissions of the directory file are set using the current\n"
-	    "umask.  Otherwise they are set to the decimal value specified with\n"
-	    "@var{mode}.  The return value is unspecified.")
+	    "then the permissions of the directory are set to @code{#o777}\n"
+	    "masked with the current umask (@pxref{Processes, @code{umask}}).\n"
+	    "Otherwise they are set to the value specified with @var{mode}.\n"
+	    "The return value is unspecified.")
 #define FUNC_NAME s_scm_mkdir
 {
   int rv;
-  mode_t mask;
+  mode_t c_mode;
 
-  if (SCM_UNBNDP (mode))
-    {
-      mask = umask (0);
-      umask (mask);
-      STRING_SYSCALL (path, c_path, rv = mkdir (c_path, 0777 ^ mask));
-    }
-  else
-    {
-      STRING_SYSCALL (path, c_path, rv = mkdir (c_path, scm_to_uint (mode)));
-    }
+  c_mode = SCM_UNBNDP (mode) ? 0777 : scm_to_uint (mode);
+
+  STRING_SYSCALL (path, c_path, rv = mkdir (c_path, c_mode));
   if (rv != 0)
     SCM_SYSERROR;
+
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -1441,8 +1437,9 @@ SCM_DEFINE (scm_umask, "umask", 0, 1, 0,
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_mkstemp, "mkstemp!", 1, 0, 0,
-	    (SCM tmpl),
+SCM_INTERNAL SCM scm_i_mkstemp (SCM, SCM);
+SCM_DEFINE (scm_i_mkstemp, "mkstemp!", 1, 1, 0,
+	    (SCM tmpl, SCM mode),
 	    "Create a new unique file in the file system and return a new\n"
 	    "buffered port open for reading and writing to the file.\n"
 	    "\n"
@@ -1461,18 +1458,52 @@ SCM_DEFINE (scm_mkstemp, "mkstemp!", 1, 0, 0,
 	    "(let ((port (mkstemp! (string-copy \"/tmp/myfile-XXXXXX\"))))\n"
 	    "  (chmod port (logand #o666 (lognot (umask))))\n"
 	    "  ...)\n"
-	    "@end example")
-#define FUNC_NAME s_scm_mkstemp
+	    "@end example\n"
+            "\n"
+            "The optional @var{mode} argument specifies a mode, as a string\n"
+            "in the same format that @code{open-file} takes.  It defaults\n"
+            "to @code{\"w+\"}.")
+#define FUNC_NAME s_scm_i_mkstemp
 {
   char *c_tmpl;
+  long mode_bits;
   int rv;
+  int open_flags, is_binary;
+  SCM port;
+
+  SCM_VALIDATE_STRING (SCM_ARG1, tmpl);
+  if (!SCM_UNBNDP (mode))
+    SCM_VALIDATE_STRING (SCM_ARG2, mode);
+
+  /* Ensure tmpl is mutable.  */
+  scm_i_string_start_writing (tmpl);
+  scm_i_string_stop_writing ();
 
   scm_dynwind_begin (0);
 
   c_tmpl = scm_to_locale_string (tmpl);
   scm_dynwind_free (c_tmpl);
+  if (SCM_UNBNDP (mode))
+    {
+      /* mkostemp will create a read/write file and add on additional
+         flags; open_flags just adjoins flags to that set.  */
+      open_flags = 0;
+      is_binary = 0;
+      mode_bits = SCM_OPN | SCM_RDNG | SCM_WRTNG;
+    }
+  else
+    {
+      open_flags = scm_i_mode_to_open_flags (mode, &is_binary, FUNC_NAME);
+      /* mkostemp(2) only defines O_APPEND, O_SYNC, and O_CLOEXEC to be
+         useful, as O_RDWR|O_CREAT|O_EXCL are implicitly added.  It also
+         notes that other flags may error on some systems, which turns
+         out to be the case.  Of those flags, O_APPEND is the only one
+         of interest anyway, so limit to that flag.  */
+      open_flags &= O_APPEND;
+      mode_bits = scm_i_mode_bits (mode);
+    }
 
-  SCM_SYSCALL (rv = mkstemp (c_tmpl));
+  SCM_SYSCALL (rv = mkostemp (c_tmpl, open_flags));
   if (rv == -1)
     SCM_SYSERROR;
 
@@ -1481,9 +1512,21 @@ SCM_DEFINE (scm_mkstemp, "mkstemp!", 1, 0, 0,
 			tmpl, SCM_INUM0);
 
   scm_dynwind_end ();
-  return scm_fdes_to_port (rv, "w+", tmpl);
+
+  port = scm_i_fdes_to_port (rv, mode_bits, tmpl, 0);
+  if (is_binary)
+    /* Use the binary-friendly ISO-8859-1 encoding. */
+    scm_i_set_port_encoding_x (port, NULL);
+
+  return port;
 }
 #undef FUNC_NAME
+
+SCM
+scm_mkstemp (SCM tmpl)
+{
+  return scm_i_mkstemp (tmpl, SCM_UNDEFINED);
+}
 
 
 /* Filename manipulation */
@@ -1515,31 +1558,22 @@ SCM_DEFINE (scm_dirname, "dirname", 1, 0, 0,
 	    "component, @code{.} is returned.")
 #define FUNC_NAME s_scm_dirname
 {
-  long int i;
-  unsigned long int len;
+  char *c_filename, *c_dirname;
+  SCM res;
 
-  SCM_VALIDATE_STRING (1, filename);
+  scm_dynwind_begin (0);
+  c_filename = scm_to_utf8_string (filename);
+  scm_dynwind_free (c_filename);
 
-  len = scm_i_string_length (filename);
+  c_dirname = mdir_name (c_filename);
+  if (!c_dirname)
+    SCM_SYSERROR;
+  scm_dynwind_free (c_dirname);
 
-  i = len - 1;
+  res = scm_from_utf8_string (c_dirname);
+  scm_dynwind_end ();
 
-  while (i >= 0 && is_file_name_separator (scm_c_string_ref (filename, i)))
-    --i;
-  while (i >= 0 && !is_file_name_separator (scm_c_string_ref (filename, i)))
-    --i;
-  while (i >= 0 && is_file_name_separator (scm_c_string_ref (filename, i)))
-    --i;
-
-  if (i < 0)
-    {
-      if (len > 0 && is_file_name_separator (scm_c_string_ref (filename, 0)))
-	return scm_c_substring (filename, 0, 1);
-      else
-	return scm_dot_string;
-    }
-  else
-    return scm_c_substring (filename, 0, i + 1);
+  return res;
 }
 #undef FUNC_NAME
 
@@ -1551,42 +1585,28 @@ SCM_DEFINE (scm_basename, "basename", 1, 1, 0,
 	    "@var{filename}, it is removed also.")
 #define FUNC_NAME s_scm_basename
 {
-  int i, j, len, end;
+  char *c_filename, *c_last_component;
+  SCM res;
 
-  SCM_VALIDATE_STRING (1, filename);
-  len = scm_i_string_length (filename);
+  scm_dynwind_begin (0);
+  c_filename = scm_to_utf8_string (filename);
+  scm_dynwind_free (c_filename);
 
-  if (SCM_UNBNDP (suffix))
-    j = -1;
+  c_last_component = last_component (c_filename);
+  if (!c_last_component)
+    res = filename;
   else
-    {
-      SCM_VALIDATE_STRING (2, suffix);
-      j = scm_i_string_length (suffix) - 1;
-    }
-  i = len - 1;
-  while (i >= 0 && is_file_name_separator (scm_c_string_ref (filename, i)))
-    --i;
-  end = i;
-  while (i >= 0 && j >= 0 
-	 && (scm_i_string_ref (filename, i)
-	     == scm_i_string_ref (suffix, j)))
-    {
-      --i;
-      --j;
-    }
-  if (j == -1)
-    end = i;
-  while (i >= 0 && !is_file_name_separator (scm_c_string_ref (filename, i)))
-    --i;
-  if (i == end)
-    {
-      if (len > 0 && is_file_name_separator (scm_c_string_ref (filename, 0)))
-        return scm_c_substring (filename, 0, 1);
-      else
-	return scm_dot_string;
-    }
-  else
-    return scm_c_substring (filename, i+1, end+1);
+    res = scm_from_utf8_string (c_last_component);
+  scm_dynwind_end ();
+
+  if (!SCM_UNBNDP (suffix) &&
+      scm_is_true (scm_string_suffix_p (suffix, filename,
+                                        SCM_UNDEFINED, SCM_UNDEFINED,
+                                        SCM_UNDEFINED, SCM_UNDEFINED)))
+    res = scm_c_substring
+      (res, 0, scm_c_string_length (res) - scm_c_string_length (suffix));
+
+  return res;
 }
 #undef FUNC_NAME
 
@@ -1616,22 +1636,40 @@ SCM_DEFINE (scm_canonicalize_path, "canonicalize-path", 1, 0, 0,
 SCM
 scm_i_relativize_path (SCM path, SCM in_path)
 {
-  char *str, *canon;
   SCM scanon;
   
-  str = scm_to_locale_string (path);
-  canon = canonicalize_file_name (str);
-  free (str);
+  {
+    char *str, *canon;
+
+    str = scm_to_locale_string (path);
+    canon = canonicalize_file_name (str);
+    free (str);
+
+    if (!canon)
+      return SCM_BOOL_F;
+
+    scanon = scm_take_locale_string (canon);
+  }
   
-  if (!canon)
-    return SCM_BOOL_F;
-
-  scanon = scm_take_locale_string (canon);
-
   for (; scm_is_pair (in_path); in_path = scm_cdr (in_path))
     {
       SCM dir = scm_car (in_path);
-      size_t len = scm_c_string_length (dir);
+      size_t len;
+
+      /* Try to canonicalize DIR, since we have canonicalized PATH.  */
+      {
+        char *str, *canon;
+
+        str = scm_to_locale_string (dir);
+        canon = canonicalize_file_name (str);
+        free (str);
+  
+        if (canon)
+          dir = scm_from_locale_string (canon);
+        free (canon);
+      }
+
+      len = scm_c_string_length (dir);
 
       /* When DIR is empty, it means "current working directory".  We
 	 could set DIR to (getcwd) in that case, but then the
@@ -1693,12 +1731,6 @@ SCM_DEFINE (scm_opendir, "opendir", 1, 0, 0,
 #undef FUNC_NAME
 
 
-/* FIXME: The glibc manual has a portability note that readdir_r may not
-   null-terminate its return string.  The circumstances outlined for this
-   are not clear, nor is it clear what should be done about it.  Lets use
-   NAMLEN and worry about what else should be done if/when someone can
-   figure it out.  */
-
 SCM_DEFINE (scm_readdir, "readdir", 1, 0, 0,
 	    (SCM port),
 	    "Return (as a string) the next directory entry from the directory stream\n"
@@ -1706,70 +1738,26 @@ SCM_DEFINE (scm_readdir, "readdir", 1, 0, 0,
 	    "end of file object is returned.")
 #define FUNC_NAME s_scm_readdir
 {
+  SCM ret;
   struct dirent_or_dirent64 *rdent;
 
   SCM_VALIDATE_DIR (1, port);
   if (!SCM_DIR_OPEN_P (port))
     SCM_MISC_ERROR ("Directory ~S is not open.", scm_list_1 (port));
 
-#if HAVE_READDIR_R
-  /* As noted in the glibc manual, on various systems (such as Solaris)
-     the d_name[] field is only 1 char and you're expected to size the
-     dirent buffer for readdir_r based on NAME_MAX.  The MAX expressions
-     below effectively give either sizeof(d_name) or NAME_MAX+1,
-     whichever is bigger.
+  scm_dynwind_begin (0);
+  scm_i_dynwind_pthread_mutex_lock (&scm_i_misc_mutex);
 
-     On solaris 10 there's no NAME_MAX constant, it's necessary to use
-     pathconf().  We prefer NAME_MAX though, since it should be a constant
-     and will therefore save a system call.  We also prefer it since dirfd()
-     is not available everywhere.
+  errno = 0;
+  SCM_SYSCALL (rdent = readdir_or_readdir64 ((DIR *) SCM_SMOB_DATA_1 (port)));
+  if (errno != 0)
+    SCM_SYSERROR;
 
-     An alternative to dirfd() would be to open() the directory and then use
-     fdopendir(), if the latter is available.  That'd let us hold the fd
-     somewhere in the smob, or just the dirent size calculated once.  */
-  {
-    struct dirent_or_dirent64 de; /* just for sizeof */
-    DIR    *ds = (DIR *) SCM_SMOB_DATA_1 (port);
-#ifdef NAME_MAX
-    char   buf [MAX (sizeof (de),
-                     sizeof (de) - sizeof (de.d_name) + NAME_MAX + 1)];
-#else
-    char   *buf;
-    long   name_max = fpathconf (dirfd (ds), _PC_NAME_MAX);
-    if (name_max == -1)
-      SCM_SYSERROR;
-    buf = alloca (MAX (sizeof (de),
-                       sizeof (de) - sizeof (de.d_name) + name_max + 1));
-#endif
+  ret = (rdent ? scm_from_locale_stringn (rdent->d_name, NAMLEN (rdent))
+         : SCM_EOF_VAL);
 
-    errno = 0;
-    SCM_SYSCALL (readdir_r_or_readdir64_r (ds, (struct dirent_or_dirent64 *) buf, &rdent));
-    if (errno != 0)
-      SCM_SYSERROR;
-    if (! rdent)
-      return SCM_EOF_VAL;
-
-    return (rdent ? scm_from_locale_stringn (rdent->d_name, NAMLEN (rdent))
-	    : SCM_EOF_VAL);
-  }
-#else
-  {
-    SCM ret;
-    scm_dynwind_begin (0);
-    scm_i_dynwind_pthread_mutex_lock (&scm_i_misc_mutex);
-
-    errno = 0;
-    SCM_SYSCALL (rdent = readdir_or_readdir64 ((DIR *) SCM_SMOB_DATA_1 (port)));
-    if (errno != 0)
-      SCM_SYSERROR;
-
-    ret = (rdent ? scm_from_locale_stringn (rdent->d_name, NAMLEN (rdent))
-	   : SCM_EOF_VAL);
-
-    scm_dynwind_end ();
-    return ret;
-  }
-#endif
+  scm_dynwind_end ();
+  return ret;
 }
 #undef FUNC_NAME
 
@@ -1819,12 +1807,12 @@ SCM_DEFINE (scm_closedir, "closedir", 1, 0, 0,
 static int
 scm_dir_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED)
 {
-  scm_puts_unlocked ("#<", port);
+  scm_puts ("#<", port);
   if (!SCM_DIR_OPEN_P (exp))
-    scm_puts_unlocked ("closed: ", port);
-  scm_puts_unlocked ("directory stream ", port);
+    scm_puts ("closed: ", port);
+  scm_puts ("directory stream ", port);
   scm_uintprint (SCM_SMOB_DATA_1 (exp), 16, port);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return 1;
 }
 

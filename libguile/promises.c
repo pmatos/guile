@@ -49,7 +49,6 @@
 #include "libguile/print.h"
 #include "libguile/procprop.h"
 #include "libguile/programs.h"
-#include "libguile/root.h"
 #include "libguile/smob.h"
 #include "libguile/srcprop.h"
 #include "libguile/stackchk.h"
@@ -88,11 +87,11 @@ static int
 promise_print (SCM exp, SCM port, scm_print_state *pstate)
 {
   int writingp = SCM_WRITINGP (pstate);
-  scm_puts_unlocked ("#<promise ", port);
+  scm_puts ("#<promise ", port);
   SCM_SET_WRITINGP (pstate, 1);
   scm_iprin1 (SCM_PROMISE_DATA (exp), port, pstate);
   SCM_SET_WRITINGP (pstate, writingp);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return !0;
 }
 

@@ -62,7 +62,7 @@
             <boolean> <char> <list> <pair> <null> <string> <symbol>
             <vector> <bytevector> <uvec> <foreign> <hashtable>
             <fluid> <dynamic-state> <frame> <vm> <vm-continuation>
-            <keyword>
+            <keyword> <syntax> <atomic-box>
 
             ;; Numbers.
             <number> <complex> <real> <integer> <fraction>
@@ -74,8 +74,8 @@
             ;; corresponding classes, which may be obtained via class-of,
             ;; once you have an instance.  Perhaps FIXME to provide a
             ;; smob-type-name->class procedure.
-            <arbiter> <promise> <thread> <mutex> <condition-variable>
-            <regexp> <hook> <bitvector> <random-state> <async>
+            <promise> <thread> <mutex> <condition-variable>
+            <regexp> <hook> <bitvector> <random-state>
             <directory> <array> <character-set>
             <dynamic-object> <guardian> <macro>
 
@@ -765,7 +765,7 @@ slots as we go."
   (define (slot-protection-and-kind slot)
     (define (subclass? class parent)
       (memq parent (class-precedence-list class)))
-    (let ((type (kw-arg-ref (%slot-definition-options slot) #:class)))
+    (let ((type (get-keyword #:class (%slot-definition-options slot))))
       (if (and type (subclass? type <foreign-slot>))
           (values (cond
                    ((subclass? type <self-slot>) #\s)
@@ -1009,6 +1009,8 @@ slots as we go."
 (define-standard-class <integer> (<real>))
 (define-standard-class <fraction> (<real>))
 (define-standard-class <keyword> (<top>))
+(define-standard-class <syntax> (<top>))
+(define-standard-class <atomic-box> (<top>))
 (define-standard-class <unknown> (<top>))
 (define-standard-class <procedure> (<applicable>)
   #:metaclass <procedure-class>)
@@ -1332,7 +1334,7 @@ function."
          #`(case-lambda
              #,@(build-clauses #'(arg ...))
              (args (apply miss args)))))))
-  (arity-case (vector-length fv) 20 dispatch
+  (arity-case (1- (vector-length fv)) 20 dispatch
               (lambda args
                 (let ((nargs (length args)))
                   (if (< nargs (vector-length fv))
@@ -3095,7 +3097,10 @@ var{initargs}."
 ;;; {SMOB and port classes}
 ;;;
 
-(define <arbiter> (find-subclass <top> '<arbiter>))
+(begin-deprecated
+ (define-public <arbiter> (find-subclass <top> '<arbiter>))
+ (define-public <async> (find-subclass <top> '<async>)))
+
 (define <promise> (find-subclass <top> '<promise>))
 (define <thread> (find-subclass <top> '<thread>))
 (define <mutex> (find-subclass <top> '<mutex>))
@@ -3104,7 +3109,6 @@ var{initargs}."
 (define <hook> (find-subclass <top> '<hook>))
 (define <bitvector> (find-subclass <top> '<bitvector>))
 (define <random-state> (find-subclass <top> '<random-state>))
-(define <async> (find-subclass <top> '<async>))
 (define <directory> (find-subclass <top> '<directory>))
 (define <array> (find-subclass <top> '<array>))
 (define <character-set> (find-subclass <top> '<character-set>))

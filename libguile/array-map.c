@@ -1,5 +1,5 @@
 /* Copyright (C) 1996, 1998, 2000, 2001, 2004, 2005, 2006, 2008, 2009,
- *   2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+ *   2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -34,7 +34,6 @@
 #include "libguile/eq.h"
 #include "libguile/eval.h"
 #include "libguile/feature.h"
-#include "libguile/root.h"
 #include "libguile/vectors.h"
 #include "libguile/bitvectors.h"
 #include "libguile/srfi-4.h"
@@ -42,22 +41,10 @@
 
 #include "libguile/validate.h"
 #include "libguile/array-map.h"
-
+#include <assert.h>
 
 /* The WHAT argument for `scm_gc_malloc ()' et al.  */
 static const char vi_gc_hint[] = "array-indices";
-
-static SCM
-AREF (SCM v, size_t pos)
-{
-  return scm_c_array_ref_1 (v, pos);
-}
-
-static void
-ASET (SCM v, size_t pos, SCM val)
-{
-  scm_c_array_set_1_x (v, val, pos);
-}
 
 static SCM
 make1array (SCM v, ssize_t inc)
@@ -99,6 +86,10 @@ cindk (SCM ra, ssize_t *ve, int kend)
 #define LBND(ra, k) SCM_I_ARRAY_DIMS (ra)[k].lbnd
 #define UBND(ra, k) SCM_I_ARRAY_DIMS (ra)[k].ubnd
 
+
+/* scm_ramapc() always calls cproc with rank-1 arrays created by
+   make1array. cproc (rafe, ramap, rafill, racp) can assume that the
+   dims[0].lbnd of these arrays is always 0. */
 int
 scm_ramapc (void *cproc_ptr, SCM data, SCM ra0, SCM lra, const char *what)
 {
@@ -167,7 +158,7 @@ scm_ramapc (void *cproc_ptr, SCM data, SCM ra0, SCM lra, const char *what)
             scm_misc_error (what, "array shape mismatch: ~S", scm_list_1 (ra0));
           va1 = make1array (ra1, 1);
 
-          if (LBND (ra0, 0) < LBND (va1, 0) || UBND (ra0, 0) > UBND (va1, 0))
+          if (LBND (ra0, 0) < 0 /* LBND (va1, 0) */ || UBND (ra0, 0) > UBND (va1, 0))
             scm_misc_error (what, "array shape mismatch: ~S", scm_list_1 (ra0));
         }
       *plva = scm_cons (va1, SCM_EOL);
@@ -224,14 +215,12 @@ scm_ramapc (void *cproc_ptr, SCM data, SCM ra0, SCM lra, const char *what)
 static int
 rafill (SCM dst, SCM fill)
 {
+  size_t n = SCM_I_ARRAY_DIMS (dst)->ubnd + 1;
+  size_t i = SCM_I_ARRAY_BASE (dst);
+  ssize_t inc = SCM_I_ARRAY_DIMS (dst)->inc;
   scm_t_array_handle h;
-  size_t n, i;
-  ssize_t inc;
-  scm_array_get_handle (SCM_I_ARRAY_V (dst), &h);
-  i = SCM_I_ARRAY_BASE (dst);
-  inc = SCM_I_ARRAY_DIMS (dst)->inc;
-  n = (SCM_I_ARRAY_DIMS (dst)->ubnd - SCM_I_ARRAY_DIMS (dst)->lbnd + 1);
   dst = SCM_I_ARRAY_V (dst);
+  scm_array_get_handle (dst, &h);
 
   for (; n-- > 0; i += inc)
     h.vset (h.vector, i, fill);
@@ -255,19 +244,17 @@ SCM_DEFINE (scm_array_fill_x, "array-fill!", 2, 0, 0,
 static int
 racp (SCM src, SCM dst)
 {
-  scm_t_array_handle h_s, h_d;
-  size_t n, i_s, i_d;
+  size_t i_s, i_d, n;
   ssize_t inc_s, inc_d;
-
+  scm_t_array_handle h_s, h_d;
   dst = SCM_CAR (dst);
   i_s = SCM_I_ARRAY_BASE (src);
   i_d = SCM_I_ARRAY_BASE (dst);
+  n = (SCM_I_ARRAY_DIMS (src)->ubnd + 1);
   inc_s = SCM_I_ARRAY_DIMS (src)->inc;
   inc_d = SCM_I_ARRAY_DIMS (dst)->inc;
-  n = (SCM_I_ARRAY_DIMS (src)->ubnd - SCM_I_ARRAY_DIMS (src)->lbnd + 1);
   src = SCM_I_ARRAY_V (src);
   dst = SCM_I_ARRAY_V (dst);
-
   scm_array_get_handle (src, &h_s);
   scm_array_get_handle (dst, &h_d);
 
@@ -276,6 +263,8 @@ racp (SCM src, SCM dst)
     {
       SCM const * el_s = h_s.elements;
       SCM * el_d = h_d.writable_elements;
+      if (!el_d)
+        scm_wrong_type_arg_msg ("array-copy!", SCM_ARG2, dst, "mutable array");
       for (; n-- > 0; i_s += inc_s, i_d += inc_d)
         el_d[i_d] = el_s[i_s];
     }
@@ -307,308 +296,75 @@ SCM_DEFINE (scm_array_copy_x, "array-copy!", 2, 0, 0,
 #undef FUNC_NAME
 
 
-#if SCM_ENABLE_DEPRECATED == 1
-
-/* to be used as cproc in scm_ramapc to fill an array dimension with
-   "fill". */
-int
-scm_array_fill_int (SCM ra, SCM fill, SCM ignore SCM_UNUSED)
-{
-  unsigned long i;
-  unsigned long n = SCM_I_ARRAY_DIMS (ra)->ubnd - SCM_I_ARRAY_DIMS (ra)->lbnd + 1;
-  long inc = SCM_I_ARRAY_DIMS (ra)->inc;
-  unsigned long base = SCM_I_ARRAY_BASE (ra);
-
-  ra = SCM_I_ARRAY_V (ra);
-
-  for (i = base; n--; i += inc)
-    ASET (ra, i, fill);
-
-  return 1;
-}
-
-/* Functions callable by ARRAY-MAP! */
-
-int
-scm_ra_eqp (SCM ra0, SCM ras)
-{
-  SCM ra1 = SCM_CAR (ras), ra2 = SCM_CAR (SCM_CDR (ras));
-  scm_t_array_handle ra0_handle;
-  scm_t_array_dim *ra0_dims;
-  size_t n;
-  ssize_t inc0;
-  size_t i0 = 0;
-  unsigned long i1 = SCM_I_ARRAY_BASE (ra1), i2 = SCM_I_ARRAY_BASE (ra2);
-  long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-  long inc2 = SCM_I_ARRAY_DIMS (ra1)->inc;
-  ra1 = SCM_I_ARRAY_V (ra1);
-  ra2 = SCM_I_ARRAY_V (ra2);
-
-  scm_array_get_handle (ra0, &ra0_handle);
-  ra0_dims = scm_array_handle_dims (&ra0_handle);
-  n = ra0_dims[0].ubnd - ra0_dims[0].lbnd + 1;
-  inc0 = ra0_dims[0].inc;
-
-  {
-    for (; n-- > 0; i0 += inc0, i1 += inc1, i2 += inc2)
-      if (scm_is_true (scm_array_handle_ref (&ra0_handle, i0)))
-	if (!scm_is_eq (AREF (ra1, i1), AREF (ra2, i2)))
-	  scm_array_handle_set (&ra0_handle, i0, SCM_BOOL_F);
-  }
-
-  scm_array_handle_release (&ra0_handle);
-  return 1;
-}
-
-/* opt 0 means <, nonzero means >= */
-
-static int
-ra_compare (SCM ra0, SCM ra1, SCM ra2, int opt)
-{
-  scm_t_array_handle ra0_handle;
-  scm_t_array_dim *ra0_dims;
-  size_t n;
-  ssize_t inc0;
-  size_t i0 = 0;
-  unsigned long i1 = SCM_I_ARRAY_BASE (ra1), i2 = SCM_I_ARRAY_BASE (ra2);
-  long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-  long inc2 = SCM_I_ARRAY_DIMS (ra1)->inc;
-  ra1 = SCM_I_ARRAY_V (ra1);
-  ra2 = SCM_I_ARRAY_V (ra2);
-
-  scm_array_get_handle (ra0, &ra0_handle);
-  ra0_dims = scm_array_handle_dims (&ra0_handle);
-  n = ra0_dims[0].ubnd - ra0_dims[0].lbnd + 1;
-  inc0 = ra0_dims[0].inc;
-
-  {
-    for (; n-- > 0; i0 += inc0, i1 += inc1, i2 += inc2)
-      if (scm_is_true (scm_array_handle_ref (&ra0_handle, i0)))
-	if (opt ?
-	    scm_is_true (scm_less_p (AREF (ra1, i1), AREF (ra2, i2))) :
-	    scm_is_false (scm_less_p (AREF (ra1, i1), AREF (ra2, i2))))
-	  scm_array_handle_set (&ra0_handle, i0, SCM_BOOL_F);
-  }
-
-  scm_array_handle_release (&ra0_handle);
-  return 1;
-}
-
-
-
-int
-scm_ra_lessp (SCM ra0, SCM ras)
-{
-  return ra_compare (ra0, SCM_CAR (ras), SCM_CAR (SCM_CDR (ras)), 0);
-}
-
-
-int
-scm_ra_leqp (SCM ra0, SCM ras)
-{
-  return ra_compare (ra0, SCM_CAR (SCM_CDR (ras)), SCM_CAR (ras), 1);
-}
-
-
-int
-scm_ra_grp (SCM ra0, SCM ras)
-{
-  return ra_compare (ra0, SCM_CAR (SCM_CDR (ras)), SCM_CAR (ras), 0);
-}
-
-
-int
-scm_ra_greqp (SCM ra0, SCM ras)
-{
-  return ra_compare (ra0, SCM_CAR (ras), SCM_CAR (SCM_CDR (ras)), 1);
-}
-
-
-int
-scm_ra_sum (SCM ra0, SCM ras)
-{
-  long n = SCM_I_ARRAY_DIMS (ra0)->ubnd - SCM_I_ARRAY_DIMS (ra0)->lbnd + 1;
-  unsigned long i0 = SCM_I_ARRAY_BASE (ra0);
-  long inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
-  ra0 = SCM_I_ARRAY_V (ra0);
-  if (!scm_is_null(ras))
-    {
-      SCM ra1 = SCM_CAR (ras);
-      unsigned long i1 = SCM_I_ARRAY_BASE (ra1);
-      long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-      ra1 = SCM_I_ARRAY_V (ra1);
-      switch (SCM_TYP7 (ra0) == SCM_TYP7 (ra1) ? SCM_TYP7 (ra0) : 0)
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0, i1 += inc1)
-	      ASET (ra0, i0, scm_sum (AREF(ra0, i0), AREF(ra1, i1)));
-	    break;
-	  }
-	}
-    }
-  return 1;
-}
-
-
-
-int
-scm_ra_difference (SCM ra0, SCM ras)
-{
-  long n = SCM_I_ARRAY_DIMS (ra0)->ubnd - SCM_I_ARRAY_DIMS (ra0)->lbnd + 1;
-  unsigned long i0 = SCM_I_ARRAY_BASE (ra0);
-  long inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
-  ra0 = SCM_I_ARRAY_V (ra0);
-  if (scm_is_null (ras))
-    {
-      switch (SCM_TYP7 (ra0))
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0)
-	      ASET (ra0, i0, scm_difference (AREF(ra0, i0), SCM_UNDEFINED));
-	    break;
-	  }
-	}
-    }
-  else
-    {
-      SCM ra1 = SCM_CAR (ras);
-      unsigned long i1 = SCM_I_ARRAY_BASE (ra1);
-      long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-      ra1 = SCM_I_ARRAY_V (ra1);
-      switch (SCM_TYP7 (ra0) == SCM_TYP7 (ra1) ? SCM_TYP7 (ra0) : 0)
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0, i1 += inc1)
-	      ASET (ra0, i0, scm_difference (AREF (ra0, i0), AREF (ra1, i1)));
-	    break;
-	  }
-	}
-    }
-  return 1;
-}
-
-
-
-int
-scm_ra_product (SCM ra0, SCM ras)
-{
-  long n = SCM_I_ARRAY_DIMS (ra0)->ubnd - SCM_I_ARRAY_DIMS (ra0)->lbnd + 1;
-  unsigned long i0 = SCM_I_ARRAY_BASE (ra0);
-  long inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
-  ra0 = SCM_I_ARRAY_V (ra0);
-  if (!scm_is_null (ras))
-    {
-      SCM ra1 = SCM_CAR (ras);
-      unsigned long i1 = SCM_I_ARRAY_BASE (ra1);
-      long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-      ra1 = SCM_I_ARRAY_V (ra1);
-      switch (SCM_TYP7 (ra0) == SCM_TYP7 (ra1) ? SCM_TYP7 (ra0) : 0)
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0, i1 += inc1)
-	      ASET (ra0, i0, scm_product (AREF (ra0, i0), AREF (ra1, i1)));
-	  }
-	}
-    }
-  return 1;
-}
-
-
-int
-scm_ra_divide (SCM ra0, SCM ras)
-{
-  long n = SCM_I_ARRAY_DIMS (ra0)->ubnd - SCM_I_ARRAY_DIMS (ra0)->lbnd + 1;
-  unsigned long i0 = SCM_I_ARRAY_BASE (ra0);
-  long inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
-  ra0 = SCM_I_ARRAY_V (ra0);
-  if (scm_is_null (ras))
-    {
-      switch (SCM_TYP7 (ra0))
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0)
-	      ASET (ra0, i0, scm_divide (AREF (ra0, i0), SCM_UNDEFINED));
-	    break;
-	  }
-	}
-    }
-  else
-    {
-      SCM ra1 = SCM_CAR (ras);
-      unsigned long i1 = SCM_I_ARRAY_BASE (ra1);
-      long inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-      ra1 = SCM_I_ARRAY_V (ra1);
-      switch (SCM_TYP7 (ra0) == SCM_TYP7 (ra1) ? SCM_TYP7 (ra0) : 0)
-	{
-	default:
-	  {
-	    for (; n-- > 0; i0 += inc0, i1 += inc1)
-	      {
-		SCM res =  scm_divide (AREF (ra0, i0), AREF (ra1, i1));
-		ASET (ra0, i0, res);
-	      }
-	    break;
-	  }
-	}
-    }
-  return 1;
-}
-
-
-int
-scm_array_identity (SCM dst, SCM src)
-{
-  return racp (SCM_CAR (src), scm_cons (dst, SCM_EOL));
-}
-
-#endif /* SCM_ENABLE_DEPRECATED */
-
 static int
 ramap (SCM ra0, SCM proc, SCM ras)
 {
+  size_t i0 = SCM_I_ARRAY_BASE (ra0);
+  ssize_t inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
+  size_t n = SCM_I_ARRAY_DIMS (ra0)->ubnd + 1;
   scm_t_array_handle h0;
-  size_t n, i0;
-  ssize_t i, inc0;
-  i0 = SCM_I_ARRAY_BASE (ra0);
-  inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
-  i = SCM_I_ARRAY_DIMS (ra0)->lbnd;
-  n = SCM_I_ARRAY_DIMS (ra0)->ubnd - i + 1;
   ra0 = SCM_I_ARRAY_V (ra0);
   scm_array_get_handle (ra0, &h0);
+
   if (scm_is_null (ras))
     for (; n--; i0 += inc0)
       h0.vset (h0.vector, i0, scm_call_0 (proc));
   else
     {
       SCM ra1 = SCM_CAR (ras);
+      size_t i1 = SCM_I_ARRAY_BASE (ra1);
+      ssize_t inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
       scm_t_array_handle h1;
-      size_t i1;
-      ssize_t inc1;
-      i1 = SCM_I_ARRAY_BASE (ra1);
-      inc1 = SCM_I_ARRAY_DIMS (ra1)->inc;
-      ras = SCM_CDR (ras);
       ra1 = SCM_I_ARRAY_V (ra1);
       scm_array_get_handle (ra1, &h1);
+      ras = SCM_CDR (ras);
       if (scm_is_null (ras))
         for (; n--; i0 += inc0, i1 += inc1)
           h0.vset (h0.vector, i0, scm_call_1 (proc, h1.vref (h1.vector, i1)));
       else
         {
-          ras = scm_vector (ras);
-          for (; n--; i0 += inc0, i1 += inc1, ++i)
+          SCM ra2 = SCM_CAR (ras);
+          size_t i2 = SCM_I_ARRAY_BASE (ra2);
+          ssize_t inc2 = SCM_I_ARRAY_DIMS (ra2)->inc;
+          scm_t_array_handle h2;
+          ra2 = SCM_I_ARRAY_V (ra2);
+          scm_array_get_handle (ra2, &h2);
+          ras = SCM_CDR (ras);
+          if (scm_is_null (ras))
+            for (; n--; i0 += inc0, i1 += inc1, i2 += inc2)
+              h0.vset (h0.vector, i0, scm_call_2 (proc, h1.vref (h1.vector, i1), h2.vref (h2.vector, i2)));
+          else
             {
+              scm_t_array_handle *hs;
+              size_t restn = scm_ilength (ras);
               SCM args = SCM_EOL;
-              unsigned long k;
-              for (k = scm_c_vector_length (ras); k--;)
-                args = scm_cons (AREF (scm_c_vector_ref (ras, k), i), args);
-              h0.vset (h0.vector, i0,
-                       scm_apply_1 (proc, h1.vref (h1.vector, i1), args));
+              SCM *p = &args;
+              SCM **sa = scm_gc_malloc (sizeof(SCM *) * restn, vi_gc_hint);
+              size_t k;
+              ssize_t i;
+              
+              for (k = 0; k < restn; ++k)
+                {
+                  *p = scm_cons (SCM_UNSPECIFIED, SCM_EOL);
+                  sa[k] = SCM_CARLOC (*p);
+                  p = SCM_CDRLOC (*p);
+                }
+
+              hs = scm_gc_malloc (sizeof(scm_t_array_handle) * restn, vi_gc_hint);
+              for (k = 0; k < restn; ++k, ras = scm_cdr (ras))
+                scm_array_get_handle (scm_car (ras), hs+k);
+
+              for (i = 0; n--; i0 += inc0, i1 += inc1, i2 += inc2, ++i)
+                {
+                  for (k = 0; k < restn; ++k)
+                    *(sa[k]) = scm_array_handle_ref (hs+k, i*hs[k].dims[0].inc);
+                  h0.vset (h0.vector, i0, scm_apply_2 (proc, h1.vref (h1.vector, i1), h2.vref (h2.vector, i2), args));
+                }
+
+              for (k = 0; k < restn; ++k)
+                scm_array_handle_release (hs+k);
             }
+          scm_array_handle_release (&h2);
         }
       scm_array_handle_release (&h1);
     }
@@ -645,30 +401,44 @@ SCM_DEFINE (scm_array_map_x, "array-map!", 2, 0, 1,
 static int
 rafe (SCM ra0, SCM proc, SCM ras)
 {
-  ssize_t i = SCM_I_ARRAY_DIMS (ra0)->lbnd;
-  size_t n = SCM_I_ARRAY_DIMS (ra0)->ubnd - i + 1;
-
+  size_t i0 = SCM_I_ARRAY_BASE (ra0);
+  ssize_t inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
+  size_t n = SCM_I_ARRAY_DIMS (ra0)->ubnd + 1;
   scm_t_array_handle h0;
-  size_t i0;
-  ssize_t inc0;
-  i0 = SCM_I_ARRAY_BASE (ra0);
-  inc0 = SCM_I_ARRAY_DIMS (ra0)->inc;
   ra0 = SCM_I_ARRAY_V (ra0);
   scm_array_get_handle (ra0, &h0);
+
   if (scm_is_null (ras))
     for (; n--; i0 += inc0)
       scm_call_1 (proc, h0.vref (h0.vector, i0));
   else
     {
-      ras = scm_vector (ras);
-      for (; n--; i0 += inc0, ++i)
+      scm_t_array_handle *hs;      
+      size_t restn = scm_ilength (ras);
+
+      SCM args = SCM_EOL;
+      SCM *p = &args;
+      SCM **sa = scm_gc_malloc (sizeof(SCM *) * restn, vi_gc_hint);
+      for (size_t k = 0; k < restn; ++k)
         {
-          SCM args = SCM_EOL;
-          unsigned long k;
-          for (k = scm_c_vector_length (ras); k--;)
-            args = scm_cons (AREF (scm_c_vector_ref (ras, k), i), args);
+          *p = scm_cons (SCM_UNSPECIFIED, SCM_EOL);
+          sa[k] = SCM_CARLOC (*p);
+          p = SCM_CDRLOC (*p);
+        }
+
+      hs = scm_gc_malloc (sizeof(scm_t_array_handle) * restn, vi_gc_hint);
+      for (size_t k = 0; k < restn; ++k, ras = scm_cdr (ras))
+        scm_array_get_handle (scm_car (ras), hs+k);
+
+      for (ssize_t i = 0; n--; i0 += inc0, ++i)
+        {
+          for (size_t k = 0; k < restn; ++k)
+            *(sa[k]) = scm_array_handle_ref (hs+k, i*hs[k].dims[0].inc);
           scm_apply_1 (proc, h0.vref (h0.vector, i0), args);
         }
+
+      for (size_t k = 0; k < restn; ++k)
+        scm_array_handle_release (hs+k);
     }
   scm_array_handle_release (&h0);
   return 1;
@@ -706,15 +476,12 @@ static void
 array_index_map_n (SCM ra, SCM proc)
 {
   scm_t_array_handle h;
-  size_t i;
   int k, kmax = SCM_I_ARRAY_NDIM (ra) - 1;
-  ssize_t *vi;
-  SCM **si;
   SCM args = SCM_EOL;
   SCM *p = &args;
 
-  vi = scm_gc_malloc_pointerless (sizeof(ssize_t) * (kmax + 1), vi_gc_hint);
-  si = scm_gc_malloc_pointerless (sizeof(SCM *) * (kmax + 1), vi_gc_hint);
+  ssize_t *vi = scm_gc_malloc_pointerless (sizeof(ssize_t) * (kmax + 1), vi_gc_hint);
+  SCM **si = scm_gc_malloc_pointerless (sizeof(SCM *) * (kmax + 1), vi_gc_hint);
 
   for (k = 0; k <= kmax; k++)
     {
@@ -732,6 +499,7 @@ array_index_map_n (SCM ra, SCM proc)
     {
       if (k == kmax)
         {
+          size_t i;
           vi[kmax] = SCM_I_ARRAY_DIMS (ra)[kmax].lbnd;
           i = cindk (ra, vi, kmax+1);
           for (; vi[kmax] <= SCM_I_ARRAY_DIMS (ra)[kmax].ubnd; ++vi[kmax])
@@ -862,13 +630,269 @@ SCM_DEFINE (scm_i_array_equal_p, "array-equal?", 0, 2, 1,
     return SCM_BOOL_T;
 
   while (!scm_is_null (rest))
-    { if (scm_is_false (scm_array_equal_p (ra0, ra1)))
+    {
+      if (scm_is_false (scm_array_equal_p (ra0, ra1)))
         return SCM_BOOL_F;
       ra0 = ra1;
       ra1 = scm_car (rest);
       rest = scm_cdr (rest);
     }
   return scm_array_equal_p (ra0, ra1);
+}
+#undef FUNC_NAME
+
+
+/* Copy array descriptor with different base. */
+SCM
+scm_i_array_rebase (SCM a, size_t base)
+{
+    size_t ndim = SCM_I_ARRAY_NDIM (a);
+    SCM b = scm_words (((scm_t_bits) ndim << 17) + scm_tc7_array, 3 + ndim*3);
+    SCM_I_ARRAY_SET_V (b, SCM_I_ARRAY_V (a));
+/* FIXME do check base */
+    SCM_I_ARRAY_SET_BASE (b, base);
+    memcpy (SCM_I_ARRAY_DIMS (b), SCM_I_ARRAY_DIMS (a), sizeof (scm_t_array_dim)*ndim);
+    return b;
+}
+
+static inline size_t padtoptr(size_t d) { return (d + (sizeof (void *) - 1)) & ~(sizeof (void *) - 1); }
+
+SCM_DEFINE (scm_array_slice_for_each, "array-slice-for-each", 2, 0, 1,
+            (SCM frame_rank, SCM op, SCM args),
+            "Apply @var{op} to each of the cells of rank rank(@var{arg})-@var{frame_rank}\n"
+            "of the arrays @var{args}, in unspecified order. The first\n"
+            "@var{frame_rank} dimensions of each @var{arg} must match.\n"
+            "Rank-0 cells are passed as rank-0 arrays.\n\n"
+            "The value returned is unspecified.\n\n"
+            "For example:\n"
+            "@lisp\n"
+            ";; Sort the rows of rank-2 array A.\n\n"
+            "(array-slice-for-each 1 (lambda (x) (sort! x <)) a)\n"
+            "\n"
+            ";; Compute the arguments of the (x y) vectors in the rows of rank-2\n"
+            ";; array XYS and store them in rank-1 array ANGLES. Inside OP,\n"
+            ";; XY is a rank-1 (2-1) array, and ANGLE is a rank-0 (1-1) array.\n\n"
+            "(array-slice-for-each 1 \n"
+            "  (lambda (xy angle)\n"
+            "    (array-set! angle (atan (array-ref xy 1) (array-ref xy 0))))\n"
+            "  xys angles)\n"
+            "@end lisp")
+#define FUNC_NAME s_scm_array_slice_for_each
+{
+  int const N = scm_ilength (args);
+  int const frank = scm_to_int (frame_rank);
+  int ocd;
+  ssize_t step;
+  SCM dargs_ = SCM_EOL;
+  char const * msg;
+  scm_t_array_dim * ais;
+  int n, k;
+  ssize_t z;
+
+  /* to be allocated inside the pool */
+  scm_t_array_handle * ah;
+  SCM * args_;
+  scm_t_array_dim ** as;
+  int * rank;
+
+  ssize_t * s;
+  SCM * ai;
+  SCM ** dargs;
+  ssize_t * i;
+
+  int * order;
+  size_t * base;
+
+  /* size the pool */
+  char * pool;
+  char * pool0;
+  size_t pool_size = 0;
+  pool_size += padtoptr(N*sizeof (scm_t_array_handle));
+  pool_size += padtoptr(N*sizeof (SCM));
+  pool_size += padtoptr(N*sizeof (scm_t_array_dim *));
+  pool_size += padtoptr(N*sizeof (int));
+
+  pool_size += padtoptr(frank*sizeof (ssize_t));
+  pool_size += padtoptr(N*sizeof (SCM));
+  pool_size += padtoptr(N*sizeof (SCM *));
+  pool_size += padtoptr(frank*sizeof (ssize_t));
+
+  pool_size += padtoptr(frank*sizeof (int));
+  pool_size += padtoptr(N*sizeof (size_t));
+  pool = scm_gc_malloc (pool_size, "pool");
+
+  /* place the items in the pool */
+#define AFIC_ALLOC_ADVANCE(pool, count, type, name)    \
+  name = (void *)pool;                                 \
+  pool += padtoptr(count*sizeof (type));
+
+  pool0 = pool;
+  AFIC_ALLOC_ADVANCE (pool, N, scm_t_array_handle, ah);
+  AFIC_ALLOC_ADVANCE (pool, N, SCM, args_);
+  AFIC_ALLOC_ADVANCE (pool, N, scm_t_array_dim *, as);
+  AFIC_ALLOC_ADVANCE (pool, N, int, rank);
+
+  AFIC_ALLOC_ADVANCE (pool, frank, ssize_t, s);
+  AFIC_ALLOC_ADVANCE (pool, N, SCM, ai);
+  AFIC_ALLOC_ADVANCE (pool, N, SCM *, dargs);
+  AFIC_ALLOC_ADVANCE (pool, frank, ssize_t, i);
+
+  AFIC_ALLOC_ADVANCE (pool, frank, int, order);
+  AFIC_ALLOC_ADVANCE (pool, N, size_t, base);
+  assert((pool0+pool_size==pool) && "internal error");
+#undef AFIC_ALLOC_ADVANCE
+
+  for (n=0; scm_is_pair(args); args=scm_cdr(args), ++n)
+    {
+      args_[n] = scm_car(args);
+      scm_array_get_handle(args_[n], ah+n);
+      as[n] = scm_array_handle_dims(ah+n);
+      rank[n] = scm_array_handle_rank(ah+n);
+    }
+  /* checks */
+  msg = NULL;
+  if (frank<0)
+    msg = "bad frame rank";
+  else
+    {
+      for (n=0; n!=N; ++n)
+        {
+          if (rank[n]<frank)
+            {
+              msg = "frame too large for arguments";
+              goto check_msg;
+            }
+          for (k=0; k!=frank; ++k)
+            {
+              if (as[n][k].lbnd!=0)
+                {
+                  msg = "non-zero base index is not supported";
+                  goto check_msg;
+                }
+              if (as[0][k].ubnd!=as[n][k].ubnd)
+                {
+                  msg = "mismatched frames";
+                  goto check_msg;
+                }
+              s[k] = as[n][k].ubnd + 1;
+
+              /* this check is needed if the array cannot be entirely */
+              /* unrolled, because the unrolled subloop will be run before */
+              /* checking the dimensions of the frame. */
+              if (s[k]==0)
+                goto end;
+            }
+        }
+    }
+ check_msg: ;
+  if (msg!=NULL)
+    {
+      for (n=0; n!=N; ++n)
+        scm_array_handle_release(ah+n);
+      scm_misc_error("array-slice-for-each", msg, scm_cons_star(frame_rank, args));
+    }
+  /* prepare moving cells. */
+  for (n=0; n!=N; ++n)
+    {
+      ai[n] = scm_i_make_array(rank[n]-frank);
+      SCM_I_ARRAY_SET_V (ai[n], scm_shared_array_root(args_[n]));
+      /* FIXME scm_array_handle_base (ah+n) should be in Guile */
+      SCM_I_ARRAY_SET_BASE (ai[n], ah[n].base);
+      ais = SCM_I_ARRAY_DIMS(ai[n]);
+      for (k=frank; k!=rank[n]; ++k)
+        {
+          ais[k-frank] = as[n][k];
+        }
+    }
+  /* prepare rest list for callee. */
+  {
+    SCM *p = &dargs_;
+    for (n=0; n<N; ++n)
+      {
+        *p = scm_cons (SCM_UNSPECIFIED, SCM_EOL);
+        dargs[n] = SCM_CARLOC (*p);
+        p = SCM_CDRLOC (*p);
+      }
+  }
+  /* special case for rank 0. */
+  if (frank==0)
+    {
+      for (n=0; n<N; ++n)
+        *dargs[n] = ai[n];
+      scm_apply_0(op, dargs_);
+      for (n=0; n<N; ++n)
+        scm_array_handle_release(ah+n);
+      return SCM_UNSPECIFIED;
+    }
+  /* FIXME determine best looping order. */
+  for (k=0; k!=frank; ++k)
+    {
+      i[k] = 0;
+      order[k] = frank-1-k;
+    }
+  /* find outermost compact dim. */
+  step = s[order[0]];
+  ocd = 1;
+  for (; ocd<frank; step *= s[order[ocd]], ++ocd)
+    for (n=0; n!=N; ++n)
+      if (step*as[n][order[0]].inc!=as[n][order[ocd]].inc)
+        goto ocd_reached;
+ ocd_reached: ;
+  /* rank loop. */
+  for (n=0; n!=N; ++n)
+    base[n] = SCM_I_ARRAY_BASE(ai[n]);
+  for (;;)
+    {
+      /* unrolled loop. */
+      for (z=0; z!=step; ++z)
+        {
+          /* we are forced to create fresh array descriptors for each */
+          /* call since we don't know whether the callee will keep them, */
+          /* and Guile offers no way to copy the descriptor (since */
+          /* descriptors are immutable). Yet another reason why this */
+          /* should be in Scheme. */
+          for (n=0; n<N; ++n)
+            {
+              *dargs[n] = scm_i_array_rebase(ai[n], base[n]);
+              base[n] += as[n][order[0]].inc;
+            }
+          scm_apply_0(op, dargs_);
+        }
+      for (n=0; n<N; ++n)
+        base[n] -= step*as[n][order[0]].inc;
+      for (k=ocd; ; ++k)
+        {
+          if (k==frank)
+            goto end;
+          else if (i[order[k]]<s[order[k]]-1)
+            {
+              ++i[order[k]];
+              for (n=0; n<N; ++n)
+                base[n] += as[n][order[k]].inc;
+              break;
+            }
+          else
+            {
+              i[order[k]] = 0;
+              for (n=0; n<N; ++n)
+                base[n] += as[n][order[k]].inc*(1-s[order[k]]);
+            }
+        }
+    }
+ end:;
+  for (n=0; n<N; ++n)
+    scm_array_handle_release(ah+n);
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_array_slice_for_each_in_order, "array-slice-for-each-in-order", 2, 0, 1,
+            (SCM frank, SCM op, SCM a),
+            "Same as array-slice-for-each, but visit the cells sequentially\n"
+            "and in row-major order.\n")
+#define FUNC_NAME s_scm_array_slice_for_each_in_order
+{
+  return scm_array_slice_for_each (frank, op, a);
 }
 #undef FUNC_NAME
 

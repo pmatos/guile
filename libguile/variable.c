@@ -25,7 +25,6 @@
 #include "libguile/_scm.h"
 #include "libguile/eq.h"
 #include "libguile/ports.h"
-#include "libguile/root.h"
 #include "libguile/smob.h"
 #include "libguile/deprecation.h"
 
@@ -36,11 +35,11 @@
 void
 scm_i_variable_print (SCM exp, SCM port, scm_print_state *pstate)
 {
-  scm_puts_unlocked ("#<variable ", port);
+  scm_puts ("#<variable ", port);
   scm_uintprint (SCM_UNPACK (exp), 16, port);
-  scm_puts_unlocked (" value: ", port);
+  scm_puts (" value: ", port);
   scm_iprin1 (SCM_VARIABLE_REF (exp), port, pstate);
-  scm_putc_unlocked('>', port);
+  scm_putc ('>', port);
 }
 
 

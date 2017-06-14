@@ -1,4 +1,4 @@
-/* Copyright (C) 1995-2001, 2006, 2008-2011, 2013
+/* Copyright (C) 1995-2001, 2006, 2008-2011, 2013, 2015
  *   Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
@@ -75,6 +75,8 @@
 #define A(nreq)                                                         \
   SCM_PACK_OP_24 (assert_nargs_ee, nreq + 1),                           \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0,                                                                    \
   0
 
@@ -82,11 +84,15 @@
   SCM_PACK_OP_24 (assert_nargs_le, nopt + 1),                           \
   SCM_PACK_OP_24 (alloc_frame, nopt + 1),                               \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0
 
 #define C()                                                             \
   SCM_PACK_OP_24 (bind_rest, 1),                                        \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0,                                                                    \
   0
 
@@ -94,17 +100,23 @@
   SCM_PACK_OP_24 (assert_nargs_ge, nreq + 1),                           \
   SCM_PACK_OP_24 (assert_nargs_le, nreq + nopt + 1),                    \
   SCM_PACK_OP_24 (alloc_frame, nreq + nopt + 1),                        \
-  SCM_PACK_OP_24 (subr_call, 0)
+  SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0)
 
 #define AC(nreq)                                                        \
   SCM_PACK_OP_24 (assert_nargs_ge, nreq + 1),                           \
   SCM_PACK_OP_24 (bind_rest, nreq + 1),                                 \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0
 
 #define BC(nopt)                                                        \
   SCM_PACK_OP_24 (bind_rest, nopt + 1),                                 \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0,                                                                    \
   0
 
@@ -112,6 +124,8 @@
   SCM_PACK_OP_24 (assert_nargs_ge, nreq + 1),                           \
   SCM_PACK_OP_24 (bind_rest, nreq + nopt + 1),                          \
   SCM_PACK_OP_24 (subr_call, 0),                                        \
+  SCM_PACK_OP_24 (handle_interrupts, 0),                                \
+  SCM_PACK_OP_24 (return_values, 0),                                    \
   0
 
 
@@ -212,7 +226,7 @@ static const scm_t_uint32 subr_stub_code[] = {
 /* (nargs * nargs) + nopt + rest * (nargs + 1) */
 #define SUBR_STUB_CODE(nreq,nopt,rest)                                \
   &subr_stub_code[((nreq + nopt + rest) * (nreq + nopt + rest)        \
-                   + nopt + rest * (nreq + nopt + rest + 1)) * 4]
+                   + nopt + rest * (nreq + nopt + rest + 1)) * 6]
 
 static const scm_t_uint32*
 get_subr_stub_code (unsigned int nreq, unsigned int nopt, unsigned int rest)
@@ -251,35 +265,13 @@ create_subr (int define, const char *name,
   return ret;
 }
 
-/* Given a program that is a primitive, determine its minimum arity.
-   This is possible because each primitive's code is 4 32-bit words
-   long, and they are laid out contiguously in an ordered pattern.  */
 int
-scm_i_primitive_arity (SCM prim, int *req, int *opt, int *rest)
+scm_i_primitive_code_p (const scm_t_uint32 *code)
 {
-  const scm_t_uint32 *code = SCM_PROGRAM_CODE (prim);
-  unsigned idx, nargs, base, next;
-
   if (code < subr_stub_code)
     return 0;
   if (code > subr_stub_code + (sizeof(subr_stub_code) / sizeof(scm_t_uint32)))
     return 0;
-
-  idx = (code - subr_stub_code) / 4;
-
-  nargs = -1;
-  next = 0;
-  do
-    {
-      base = next;
-      nargs++;
-      next = (nargs + 1) * (nargs + 1);
-    }
-  while (idx >= next);
-
-  *rest = (next - idx) < (idx - base);
-  *req = *rest ? (next - 1) - idx : (base + nargs) - idx;
-  *opt = *rest ? idx - (next - nargs) : idx - base;
 
   return 1;
 }
@@ -287,12 +279,57 @@ scm_i_primitive_arity (SCM prim, int *req, int *opt, int *rest)
 scm_t_uintptr
 scm_i_primitive_call_ip (SCM subr)
 {
+  size_t i;
   const scm_t_uint32 *code = SCM_PROGRAM_CODE (subr);
 
-  /* A stub is 4 32-bit words long, or 16 bytes.  The call will be one
+  /* A stub is 6 32-bit words long, or 24 bytes.  The call will be one
      instruction, in either the fourth, third, or second word.  Return a
      byte offset from the entry.  */
-  return (scm_t_uintptr)(code + (code[3] ? 3 : code[2] ? 2 : 1));
+  for (i = 1; i < 4; i++)
+    if ((code[i] & 0xff) == scm_op_subr_call)
+      return (scm_t_uintptr) (code + i);
+  abort ();
+}
+
+SCM
+scm_apply_subr (union scm_vm_stack_element *sp, scm_t_ptrdiff nslots)
+{
+  SCM (*subr)() = SCM_SUBRF (sp[nslots - 1].as_scm);
+
+#define ARG(i) (sp[i].as_scm)
+  switch (nslots - 1)
+    {
+    case 0:
+      return subr ();
+    case 1:
+      return subr (ARG (0));
+    case 2:
+      return subr (ARG (1), ARG (0));
+    case 3:
+      return subr (ARG (2), ARG (1), ARG (0));
+    case 4:
+      return subr (ARG (3), ARG (2), ARG (1), ARG (0));
+    case 5:
+      return subr (ARG (4), ARG (3), ARG (2), ARG (1), ARG (0));
+    case 6:
+      return subr (ARG (5), ARG (4), ARG (3), ARG (2), ARG (1),
+                   ARG (0));
+    case 7:
+      return subr (ARG (6), ARG (5), ARG (4), ARG (3), ARG (2),
+                   ARG (1), ARG (0));
+    case 8:
+      return subr (ARG (7), ARG (6), ARG (5), ARG (4), ARG (3),
+                   ARG (2), ARG (1), ARG (0));
+    case 9:
+      return subr (ARG (8), ARG (7), ARG (6), ARG (5), ARG (4),
+                   ARG (3), ARG (2), ARG (1), ARG (0));
+    case 10:
+      return subr (ARG (9), ARG (8), ARG (7), ARG (6), ARG (5),
+                   ARG (4), ARG (3), ARG (2), ARG (1), ARG (0));
+    default:
+      abort ();
+    }
+#undef ARG
 }
 
 SCM

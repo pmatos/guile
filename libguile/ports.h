@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "libguile/bytevectors.h"
 #include "libguile/gc.h"
 #include "libguile/tags.h"
 #include "libguile/error.h"
@@ -36,113 +37,29 @@
 #include "libguile/struct.h"
 #include "libguile/threads.h"
 #include "libguile/strings.h"
+#include "libguile/vectors.h"
 
 
 
-#define SCM_INITIAL_PUTBACK_BUF_SIZE 4
-
-/* values for the rw_active flag.  */
-typedef enum scm_t_port_rw_active {
-  SCM_PORT_NEITHER = 0,
-  SCM_PORT_READ = 1,
-  SCM_PORT_WRITE = 2
-} scm_t_port_rw_active;
-
-/* An internal-only structure defined in ports-internal.h. */
-struct scm_port_internal;
-
-/* C representation of a Scheme port.  */
-
-typedef struct 
-{
-  SCM port;			/* Link back to the port object.  */
-  scm_i_pthread_mutex_t *lock;  /* A recursive lock for this port.  */
-
-  /* pointer to internal-only port structure */
-  struct scm_port_internal *internal;
-
-  /* data for the underlying port implementation as a raw C value. */
-  scm_t_bits stream;
-
-  SCM file_name;		/* debugging support.  */
-  long line_number;		/* debugging support.  */
-  int column_number;		/* debugging support.  */
-
-  /* port buffers.  the buffer(s) are set up for all ports.  
-     in the case of string ports, the buffer is the string itself.
-     in the case of unbuffered file ports, the buffer is a
-     single char: shortbuf.  */
-
-  /* this buffer is filled from read_buf to read_end using the ptob 
-     buffer_fill.  then input requests are taken from read_pos until
-     it reaches read_end.  */
-
-  unsigned char *read_buf;	/* buffer start.  */
-  const unsigned char *read_pos;/* the next unread char.  */
-  unsigned char *read_end;      /* pointer to last buffered char + 1.  */
-  scm_t_off read_buf_size;		/* size of the buffer.  */
-
-  /* when chars are put back into the buffer, e.g., using peek-char or
-     unread-string, the read-buffer pointers are switched to cbuf.
-     the original pointers are saved here and restored when the put-back
-     chars have been consumed.  */
-  unsigned char *saved_read_buf;
-  const unsigned char *saved_read_pos;
-  unsigned char *saved_read_end;
-  scm_t_off saved_read_buf_size;
-
-  /* write requests are saved into this buffer at write_pos until it
-     reaches write_buf + write_buf_size, then the ptob flush is
-     called.  */
-
-  unsigned char *write_buf;     /* buffer start.  */
-  unsigned char *write_pos;     /* pointer to last buffered char + 1.  */
-  unsigned char *write_end;     /* pointer to end of buffer + 1.  */
-  scm_t_off write_buf_size;		/* size of the buffer.  */
-
-  unsigned char shortbuf;       /* buffer for "unbuffered" streams.  */
-
-  int rw_random;                /* true if the port is random access.
-				   implies that the buffers must be
-				   flushed before switching between
-				   reading and writing, seeking, etc.  */
-
-  scm_t_port_rw_active rw_active; /* for random access ports,
-                                     indicates which of the buffers
-                                     is currently in use.  can be
-                                     SCM_PORT_WRITE, SCM_PORT_READ,
-                                     or SCM_PORT_NEITHER.  */
-
-
-  /* a buffer for un-read chars and strings.  */
-  unsigned char *putback_buf;
-  size_t putback_buf_size;        /* allocated size of putback_buf.  */
-
-  /* Character encoding support  */
-  char *encoding;
-  scm_t_string_failed_conversion_handler ilseq_handler;
-} scm_t_port;
-
-
 SCM_INTERNAL SCM scm_i_port_weak_set;
 
-
-#define SCM_READ_BUFFER_EMPTY_P(c_port) (c_port->read_pos >= c_port->read_end)
 
 
 
 #define SCM_EOF_OBJECT_P(x) (scm_is_eq ((x), SCM_EOF_VAL))
 
-/* PORT FLAGS
- * A set of flags characterizes a port.
- * Note that we reserve the bits 1 << 24 and above for use by the
- * routines in the port's scm_ptobfuns structure.
- */
-#define SCM_OPN		(1L<<16) /* Is the port open? */
-#define SCM_RDNG	(2L<<16) /* Is it a readable port? */
-#define SCM_WRTNG	(4L<<16) /* Is it writable? */
-#define SCM_BUF0	(8L<<16) /* Is it unbuffered? */
-#define SCM_BUFLINE     (64L<<16) /* Is it line-buffered? */
+/* A port's first word contains its tag, which is a tc7 value.  Above
+   there is a flag indicating whether the port is open or not, and then
+   some "mode bits": flags indicating whether the port is an input
+   and/or an output port and how Guile should buffer the port.  */
+#define SCM_OPN		(1U<<8) /* Is the port open? */
+#define SCM_RDNG	(1U<<9) /* Is it a readable port? */
+#define SCM_WRTNG	(1U<<10) /* Is it writable? */
+#define SCM_BUF0	(1U<<11) /* Is it unbuffered? */
+#define SCM_BUFLINE     (1U<<12) /* Is it line-buffered? */
+#ifdef BUILDING_LIBGUILE
+#define SCM_F_PORT_FINALIZING (1U<<13) /* Port is being closed via GC. */
+#endif
 
 #define SCM_PORTP(x) (SCM_HAS_TYP7 (x, scm_tc7_port))
 #define SCM_OPPORTP(x) (SCM_PORTP (x) && (SCM_CELL_WORD_0 (x) & SCM_OPN))
@@ -154,99 +71,56 @@ SCM_INTERNAL SCM scm_i_port_weak_set;
 #define SCM_CLOSEDP(x) (!SCM_OPENP (x))
 #define SCM_CLR_PORT_OPEN_FLAG(p) \
   SCM_SET_CELL_WORD_0 ((p), SCM_CELL_WORD_0 (p) & ~SCM_OPN)
+#ifdef BUILDING_LIBGUILE
+#define SCM_PORT_FINALIZING_P(x) \
+  (SCM_CELL_WORD_0 (x) & SCM_F_PORT_FINALIZING)
+#define SCM_SET_PORT_FINALIZING(p) \
+  SCM_SET_CELL_WORD_0 ((p), SCM_CELL_WORD_0 (p) | SCM_F_PORT_FINALIZING)
+#endif
 
-#define SCM_PTAB_ENTRY(x)         ((scm_t_port *) SCM_CELL_WORD_1 (x))
-#define SCM_PORT_DESCRIPTOR(port) ((scm_t_ptob_descriptor *) SCM_CELL_WORD_2 (port))
-#define SCM_SETPTAB_ENTRY(x, ent)  (SCM_SET_CELL_WORD_1 ((x), (scm_t_bits) (ent)))
-#define SCM_STREAM(x)             (SCM_PTAB_ENTRY(x)->stream)
-#define SCM_SETSTREAM(x, s)        (SCM_PTAB_ENTRY(x)->stream = (scm_t_bits) (s))
-#define SCM_FILENAME(x)           (SCM_PTAB_ENTRY(x)->file_name)
-#define SCM_SET_FILENAME(x, n)    (SCM_PTAB_ENTRY(x)->file_name = (n))
-#define SCM_LINUM(x)              (SCM_PTAB_ENTRY(x)->line_number)
-#define SCM_COL(x)                (SCM_PTAB_ENTRY(x)->column_number)
+typedef struct scm_t_port_type scm_t_port_type;
+typedef struct scm_t_port scm_t_port;
 
-#define SCM_INCLINE(port)  	do {SCM_LINUM (port) += 1; SCM_COL (port) = 0;} while (0)
-#define SCM_ZEROCOL(port)  	do {SCM_COL (port) = 0;} while (0)
-#define SCM_INCCOL(port)  	do {SCM_COL (port) += 1;} while (0)
-#define SCM_DECCOL(port)  	do {if (SCM_COL (port) > 0) SCM_COL (port) -= 1;} while (0)
-#define SCM_TABCOL(port)  	do {SCM_COL (port) += 8 - SCM_COL (port) % 8;} while (0)
+#define SCM_STREAM(port) (SCM_CELL_WORD_1 (port))
+#define SCM_SETSTREAM(port, stream) (SCM_SET_CELL_WORD_1 (port, stream))
+#define SCM_PORT(x)         ((scm_t_port *) SCM_CELL_WORD_2 (x))
+#define SCM_PORT_TYPE(port) ((scm_t_port_type *) SCM_CELL_WORD_3 (port))
 
-/* Maximum number of port types.  */
-#define SCM_I_MAX_PORT_TYPE_COUNT  256
 
 
 
-typedef enum scm_t_port_type_flags {
-  SCM_PORT_TYPE_HAS_FLUSH = 1 << 0
-} scm_t_port_type_flags;
-
-/* port-type description.  */
-typedef struct scm_t_ptob_descriptor
-{
-  char *name;
-  SCM (*mark) (SCM);
-  size_t (*free) (SCM);
-  int (*print) (SCM exp, SCM port, scm_print_state *pstate);
-  SCM (*equalp) (SCM, SCM);
-  int (*close) (SCM port);
-
-  void (*write) (SCM port, const void *data, size_t size);
-  void (*flush) (SCM port);
-
-  void (*end_input) (SCM port, int offset);
-  int (*fill_input) (SCM port);
-  int (*input_waiting) (SCM port);
-
-  scm_t_off (*seek) (SCM port, scm_t_off OFFSET, int WHENCE);
-  void (*truncate) (SCM port, scm_t_off length);
-
-  /* When non-NULL, this is the method called by 'setvbuf' for this port.
-     It must create read and write buffers for PORT with the specified
-     sizes (a size of 0 is for unbuffered ports, which should use the
-     'shortbuf' field.)  Size -1 means to use the port's preferred buffer
-     size.  */
-  void (*setvbuf) (SCM port, long read_size, long write_size);
-
-  unsigned flags;
-} scm_t_ptob_descriptor;
-
-#define SCM_TC2PTOBNUM(x) (0x0ff & ((x) >> 8))
-#define SCM_PTOBNUM(x) (SCM_TC2PTOBNUM (SCM_CELL_TYPE (x)))
-/* SCM_PTOBNAME can be 0 if name is missing */
-#define SCM_PTOBNAME(ptobnum) (scm_c_port_type_ref (ptobnum)->name)
-
 /* Port types, and their vtables.  */
-SCM_INTERNAL long scm_c_num_port_types (void);
-SCM_API scm_t_ptob_descriptor* scm_c_port_type_ref (long ptobnum);
-SCM_API long scm_c_port_type_add_x (scm_t_ptob_descriptor *desc);
-SCM_API scm_t_bits scm_make_port_type (char *name,
-				       int (*fill_input) (SCM port),
-				       void (*write) (SCM port, 
-						      const void *data,
-						      size_t size));
-SCM_API void scm_set_port_mark (scm_t_bits tc, SCM (*mark) (SCM));
-SCM_API void scm_set_port_free (scm_t_bits tc, size_t (*free) (SCM));
-SCM_API void scm_set_port_print (scm_t_bits tc,
+SCM_API scm_t_port_type *scm_make_port_type
+	(char *name,
+         size_t (*read) (SCM port, SCM dst, size_t start, size_t count),
+         size_t (*write) (SCM port, SCM src, size_t start, size_t count));
+SCM_API void scm_set_port_scm_read (scm_t_port_type *ptob, SCM read);
+SCM_API void scm_set_port_scm_write (scm_t_port_type *ptob, SCM write);
+SCM_API void scm_set_port_read_wait_fd (scm_t_port_type *ptob,
+                                        int (*wait_fd) (SCM port));
+SCM_API void scm_set_port_write_wait_fd (scm_t_port_type *ptob,
+                                         int (*wait_fd) (SCM port));
+SCM_API void scm_set_port_print (scm_t_port_type *ptob,
 				 int (*print) (SCM exp,
 					       SCM port,
 					       scm_print_state *pstate));
-SCM_API void scm_set_port_equalp (scm_t_bits tc, SCM (*equalp) (SCM, SCM));
-SCM_API void scm_set_port_close (scm_t_bits tc, int (*close) (SCM));
-
-SCM_API void scm_set_port_flush (scm_t_bits tc, void (*flush) (SCM port));
-SCM_API void scm_set_port_end_input (scm_t_bits tc,
-                                     void (*end_input) (SCM port,
-                                                        int offset));
-SCM_API void scm_set_port_seek (scm_t_bits tc,
+SCM_API void scm_set_port_close (scm_t_port_type *ptob, void (*close) (SCM));
+SCM_API void scm_set_port_needs_close_on_gc (scm_t_port_type *ptob,
+                                             int needs_close_p);
+SCM_API void scm_set_port_seek (scm_t_port_type *ptob,
 				scm_t_off (*seek) (SCM port,
 						   scm_t_off OFFSET,
 						   int WHENCE));
-SCM_API void scm_set_port_truncate (scm_t_bits tc,
+SCM_API void scm_set_port_truncate (scm_t_port_type *ptob,
 				    void (*truncate) (SCM port,
 						      scm_t_off length));
-SCM_API void scm_set_port_input_waiting (scm_t_bits tc, int (*input_waiting) (SCM));
-SCM_API void scm_set_port_setvbuf (scm_t_bits tc,
-                                   void (*setvbuf) (SCM, long, long));
+SCM_API void scm_set_port_input_waiting (scm_t_port_type *ptob,
+                                         int (*input_waiting) (SCM));
+SCM_API void scm_set_port_get_natural_buffer_sizes
+  (scm_t_port_type *ptob,
+   void (*get_natural_buffer_sizes) (SCM, size_t *, size_t *));
+SCM_API void scm_set_port_random_access_p (scm_t_port_type *ptob,
+                                           int (*random_access_p) (SCM port));
 
 /* The input, output, error, and load ports.  */
 SCM_API SCM scm_current_input_port (void);
@@ -269,15 +143,13 @@ SCM_API long scm_mode_bits (char *modes);
 SCM_API SCM scm_port_mode (SCM port);
 
 /* Low-level constructors.  */
-SCM_API SCM
-scm_c_make_port_with_encoding (scm_t_bits tag,
-                               unsigned long mode_bits,
-                               const char *encoding,
-                               scm_t_string_failed_conversion_handler handler,
-                               scm_t_bits stream);
-SCM_API SCM scm_c_make_port (scm_t_bits tag, unsigned long mode_bits,
+SCM_API SCM scm_c_make_port_with_encoding (scm_t_port_type *ptob,
+                                           unsigned long mode_bits,
+                                           SCM encoding,
+                                           SCM conversion_strategy,
+                                           scm_t_bits stream);
+SCM_API SCM scm_c_make_port (scm_t_port_type *ptob, unsigned long mode_bits,
                              scm_t_bits stream);
-SCM_API SCM scm_new_port_table_entry (scm_t_bits tag);
 
 /* Predicates.  */
 SCM_API SCM scm_port_p (SCM x);
@@ -293,70 +165,74 @@ SCM_API SCM scm_close_output_port (SCM port);
 
 /* Encoding characters to byte streams, and decoding byte streams to
    characters.  */
-SCM_INTERNAL const char *scm_i_default_port_encoding (void);
-SCM_INTERNAL void scm_i_set_default_port_encoding (const char *);
 SCM_INTERNAL scm_t_string_failed_conversion_handler
-scm_i_default_port_conversion_handler (void);
-SCM_INTERNAL void
-scm_i_set_default_port_conversion_handler (scm_t_string_failed_conversion_handler);
+scm_i_string_failed_conversion_handler (SCM conversion_strategy);
+SCM_INTERNAL SCM scm_i_default_port_encoding (void);
+SCM_INTERNAL void scm_i_set_default_port_encoding (const char *encoding);
+SCM_INTERNAL SCM scm_i_default_port_conversion_strategy (void);
+SCM_INTERNAL void scm_i_set_default_port_conversion_strategy (SCM strategy);
 SCM_INTERNAL void scm_i_set_port_encoding_x (SCM port, const char *str);
+SCM_INTERNAL SCM scm_sys_port_encoding (SCM port);
+SCM_INTERNAL SCM scm_sys_set_port_encoding_x (SCM port, SCM encoding);
 SCM_API SCM scm_port_encoding (SCM port);
 SCM_API SCM scm_set_port_encoding_x (SCM port, SCM encoding);
 SCM_API SCM scm_port_conversion_strategy (SCM port);
 SCM_API SCM scm_set_port_conversion_strategy_x (SCM port, SCM behavior);
 
-/* Acquiring and releasing the port lock.  */
-SCM_API void scm_dynwind_lock_port (SCM port);
-SCM_INLINE int scm_c_lock_port (SCM port, scm_i_pthread_mutex_t **lock);
-SCM_INLINE int scm_c_try_lock_port (SCM port, scm_i_pthread_mutex_t **lock);
-
 /* Input.  */
+SCM_INTERNAL SCM scm_port_maybe_consume_initial_byte_order_mark (SCM, SCM, SCM);
 SCM_API int scm_get_byte_or_eof (SCM port);
-SCM_INLINE int scm_get_byte_or_eof_unlocked (SCM port);
-SCM_API int scm_slow_get_byte_or_eof_unlocked (SCM port);
 SCM_API int scm_peek_byte_or_eof (SCM port);
-SCM_INLINE int scm_peek_byte_or_eof_unlocked (SCM port);
-SCM_API int scm_slow_peek_byte_or_eof_unlocked (SCM port);
 SCM_API size_t scm_c_read (SCM port, void *buffer, size_t size);
-SCM_API size_t scm_c_read_unlocked (SCM port, void *buffer, size_t size);
+SCM_API size_t scm_c_read_bytes (SCM port, SCM dst, size_t start, size_t count);
 SCM_API scm_t_wchar scm_getc (SCM port);
-SCM_API scm_t_wchar scm_getc_unlocked (SCM port);
 SCM_API SCM scm_read_char (SCM port);
 
 /* Pushback.  */
 SCM_API void scm_unget_bytes (const unsigned char *buf, size_t len, SCM port);
-SCM_API void scm_unget_bytes_unlocked (const unsigned char *buf, size_t len, SCM port);
 SCM_API void scm_unget_byte (int c, SCM port);
-SCM_API void scm_unget_byte_unlocked (int c, SCM port);
 SCM_API void scm_ungetc (scm_t_wchar c, SCM port);
-SCM_API void scm_ungetc_unlocked (scm_t_wchar c, SCM port);
 SCM_API void scm_ungets (const char *s, int n, SCM port);
-SCM_API void scm_ungets_unlocked (const char *s, int n, SCM port);
 SCM_API SCM scm_peek_char (SCM port);
 SCM_API SCM scm_unread_char (SCM cobj, SCM port);
 SCM_API SCM scm_unread_string (SCM str, SCM port);
 
 /* Manipulating the buffers.  */
-SCM_API void scm_port_non_buffer (scm_t_port *pt);
-SCM_API int scm_fill_input (SCM port);
-SCM_API int scm_fill_input_unlocked (SCM port);
+SCM_API SCM scm_setvbuf (SCM port, SCM mode, SCM size);
+SCM_INTERNAL SCM scm_fill_input (SCM port, size_t minimum_size,
+                                 size_t *cur_out, size_t *avail_out);
 SCM_INTERNAL size_t scm_take_from_input_buffers (SCM port, char *dest, size_t read_len);
 SCM_API SCM scm_drain_input (SCM port);
 SCM_API void scm_end_input (SCM port);
-SCM_API void scm_end_input_unlocked (SCM port);
 SCM_API SCM scm_force_output (SCM port);
 SCM_API void scm_flush (SCM port);
-SCM_API void scm_flush_unlocked (SCM port);
+
+SCM_INTERNAL SCM scm_port_random_access_p (SCM port);
+SCM_INTERNAL SCM scm_port_read_buffering (SCM port);
+SCM_INTERNAL SCM scm_expand_port_read_buffer_x (SCM port, SCM size,
+                                                SCM putback_p);
+SCM_INTERNAL SCM scm_port_read (SCM port);
+SCM_INTERNAL SCM scm_port_write (SCM port);
+SCM_INTERNAL SCM scm_port_read_buffer (SCM port);
+SCM_INTERNAL SCM scm_port_write_buffer (SCM port);
+SCM_INTERNAL SCM scm_port_auxiliary_write_buffer (SCM port);
 
 /* Output.  */
-SCM_API void scm_putc (char c, SCM port);
-SCM_INLINE void scm_putc_unlocked (char c, SCM port);
-SCM_API void scm_puts (const char *str_data, SCM port);
-SCM_INLINE void scm_puts_unlocked (const char *str_data, SCM port);
 SCM_API void scm_c_write (SCM port, const void *buffer, size_t size);
-SCM_API void scm_c_write_unlocked (SCM port, const void *buffer, size_t size);
+SCM_API void scm_c_write_bytes (SCM port, SCM src, size_t start, size_t count);
+SCM_API void scm_c_put_latin1_chars (SCM port, const scm_t_uint8 *buf,
+                                     size_t len);
+SCM_API void scm_c_put_utf32_chars (SCM port, const scm_t_uint32 *buf,
+                                    size_t len);
+SCM_API void scm_c_put_string (SCM port, SCM str, size_t start, size_t count);
+SCM_API SCM scm_put_string (SCM port, SCM str, SCM start, SCM count);
+SCM_API void scm_c_put_char (SCM port, scm_t_wchar ch);
+SCM_API SCM scm_put_char (SCM port, SCM ch);
+SCM_INTERNAL void scm_c_put_escaped_char (SCM port, scm_t_wchar ch);
+SCM_INTERNAL int scm_c_can_put_char (SCM port, scm_t_wchar ch);
+SCM_API void scm_putc (char c, SCM port);
+SCM_API void scm_puts (const char *str_data, SCM port);
 SCM_API void scm_lfwrite (const char *ptr, size_t size, SCM port);
-SCM_API void scm_lfwrite_unlocked (const char *ptr, size_t size, SCM port);
 SCM_INTERNAL void scm_lfwrite_substr (SCM str, size_t start, size_t end,
 				      SCM port);
 
@@ -391,75 +267,6 @@ SCM_API SCM scm_sys_make_void_port (SCM mode);
 /* Initialization.  */
 SCM_INTERNAL void scm_init_ports (void);
 
-
-/* Inline function implementations.  */
-
-#if SCM_CAN_INLINE || defined SCM_INLINE_C_IMPLEMENTING_INLINES
-SCM_INLINE_IMPLEMENTATION int
-scm_c_lock_port (SCM port, scm_i_pthread_mutex_t **lock)
-{
-  *lock = SCM_PTAB_ENTRY (port)->lock;
-
-  if (*lock)
-    return scm_i_pthread_mutex_lock (*lock);
-  else
-    return 0;
-}
-
-SCM_INLINE_IMPLEMENTATION int
-scm_c_try_lock_port (SCM port, scm_i_pthread_mutex_t **lock)
-{
-  *lock = SCM_PTAB_ENTRY (port)->lock;
-  if (*lock)
-    {
-      int ret = scm_i_pthread_mutex_trylock (*lock);
-      if (ret != 0)
-        *lock = NULL;
-      return ret;
-    }
-  else
-    return 0;
-}
-
-SCM_INLINE_IMPLEMENTATION int
-scm_get_byte_or_eof_unlocked (SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (SCM_LIKELY ((pt->rw_active == SCM_PORT_READ || !pt->rw_random)
-                  && pt->read_pos < pt->read_end))
-    return *pt->read_pos++;
-  else
-    return scm_slow_get_byte_or_eof_unlocked (port);
-}
-
-/* Like `scm_get_byte_or_eof' but does not change PORT's `read_pos'.  */
-SCM_INLINE_IMPLEMENTATION int
-scm_peek_byte_or_eof_unlocked (SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (SCM_LIKELY ((pt->rw_active == SCM_PORT_READ || !pt->rw_random)
-                  && pt->read_pos < pt->read_end))
-    return *pt->read_pos;
-  else
-    return scm_slow_peek_byte_or_eof_unlocked (port);
-}
-
-SCM_INLINE_IMPLEMENTATION void
-scm_putc_unlocked (char c, SCM port)
-{
-  SCM_ASSERT_TYPE (SCM_OPOUTPORTP (port), port, 0, NULL, "output port");
-  scm_lfwrite_unlocked (&c, 1, port);
-}
-
-SCM_INLINE_IMPLEMENTATION void
-scm_puts_unlocked (const char *s, SCM port)
-{
-  SCM_ASSERT_TYPE (SCM_OPOUTPORTP (port), port, 0, NULL, "output port");
-  scm_lfwrite_unlocked (s, strlen (s), port);
-}
-#endif  /* SCM_CAN_INLINE || defined SCM_INLINE_C_IMPLEMENTING_INLINES */
 
 #endif  /* SCM_PORTS_H */
 

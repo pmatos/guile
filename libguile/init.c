@@ -35,8 +35,8 @@
 
 /* Everybody has an init function.  */
 #include "libguile/alist.h"
-#include "libguile/arbiters.h"
 #include "libguile/async.h"
+#include "libguile/atomic.h"
 #include "libguile/backtrace.h"
 #include "libguile/bitvectors.h"
 #include "libguile/boolean.h"
@@ -56,6 +56,7 @@
 #include "libguile/eval.h"
 #include "libguile/evalext.h"
 #include "libguile/expand.h"
+#include "libguile/fdes-finalizers.h"
 #include "libguile/feature.h"
 #include "libguile/filesys.h"
 #include "libguile/finalizers.h"
@@ -123,6 +124,7 @@
 #include "libguile/strports.h"
 #include "libguile/struct.h"
 #include "libguile/symbols.h"
+#include "libguile/syntax.h"
 #include "libguile/throw.h"
 #include "libguile/arrays.h"
 #include "libguile/trees.h"
@@ -343,7 +345,7 @@ invoke_main_func (void *body_data)
    * asyncs a chance to run.  This must be done after
    * the call to scm_restore_signals.
    */
-  SCM_ASYNC_TICK;
+  scm_async_tick ();
 
   /* Indicate success by returning non-NULL.
    */
@@ -397,7 +399,8 @@ scm_i_init_guile (void *base)
   scm_bootstrap_loader ();
   scm_bootstrap_programs ();
   scm_bootstrap_vm ();
-  scm_register_r6rs_ports ();
+  scm_register_atomic ();
+  scm_register_fdes_finalizers ();
   scm_register_foreign ();
   scm_register_foreign_object ();
   scm_register_srfi_1 ();
@@ -409,13 +412,10 @@ scm_i_init_guile (void *base)
   scm_smob_prehistory ();
   scm_init_variable ();
   scm_init_continuations ();      /* requires smob_prehistory */
-  scm_init_root ();		  /* requires continuations */
   scm_init_threads ();            /* requires smob_prehistory */
   scm_init_gsubr ();
-  scm_init_thread_procs ();       /* requires gsubrs */
   scm_init_procprop ();
   scm_init_alist ();
-  scm_init_arbiters ();           /* requires smob_prehistory */
   scm_init_async ();              /* requires smob_prehistory */
   scm_init_boolean ();
   scm_init_chars ();
@@ -430,9 +430,10 @@ scm_i_init_guile (void *base)
   scm_init_control ();            /* requires fluids */
   scm_init_feature ();
   scm_init_backtrace ();
+  scm_init_ports ();
+  scm_register_r6rs_ports ();     /* requires ports */
   scm_init_fports ();
   scm_init_strports ();
-  scm_init_ports ();
   scm_init_hash ();
   scm_init_hashtab ();
   scm_init_deprecation ();
@@ -507,6 +508,7 @@ scm_i_init_guile (void *base)
   scm_init_evalext ();
   scm_init_debug ();	/* Requires macro smobs */
   scm_init_simpos ();
+  scm_init_syntax ();
 #if HAVE_MODULES
   scm_init_dynamic_linking (); /* Requires smob_prehistory */
 #endif

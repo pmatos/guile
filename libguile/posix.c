@@ -1,6 +1,6 @@
 /* Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
  *   2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013,
- *   2014 Free Software Foundation, Inc.
+ *   2014, 2016 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -80,6 +80,10 @@
 #include "libguile/gettext.h"
 #include "libguile/threads.h"
 
+
+#ifdef __MINGW32__
+# include "posix-w32.h"
+#endif
 
 #if HAVE_SYS_WAIT_H
 # include <sys/wait.h>
@@ -238,8 +242,10 @@ SCM_DEFINE (scm_pipe, "pipe", 0, 0, 0,
   if (rv)
     SCM_SYSERROR;
   
-  p_rd = scm_fdes_to_port (fd[0], "r", sym_read_pipe);
-  p_wt = scm_fdes_to_port (fd[1], "w", sym_write_pipe);
+  p_rd = scm_i_fdes_to_port (fd[0], scm_mode_bits ("r"), sym_read_pipe,
+                             SCM_FPORT_OPTION_NOT_SEEKABLE);
+  p_wt = scm_i_fdes_to_port (fd[1], scm_mode_bits ("w"), sym_write_pipe,
+                             SCM_FPORT_OPTION_NOT_SEEKABLE);
   return scm_cons (p_rd, p_wt);
 }
 #undef FUNC_NAME
@@ -626,6 +632,7 @@ SCM_DEFINE (scm_setrlimit, "setrlimit", 3, 0, 0,
 #endif /* HAVE_GETRLIMIT */
 
 
+#ifdef HAVE_KILL
 SCM_DEFINE (scm_kill, "kill", 2, 0, 0,
             (SCM pid, SCM sig),
 	    "Sends a signal to the specified process or group of processes.\n\n"
@@ -653,30 +660,12 @@ SCM_DEFINE (scm_kill, "kill", 2, 0, 0,
 #define FUNC_NAME s_scm_kill
 {
   /* Signal values are interned in scm_init_posix().  */
-#ifdef HAVE_KILL
   if (kill (scm_to_int (pid), scm_to_int  (sig)) != 0)
     SCM_SYSERROR;
-#else
-  /* Mingw has raise(), but not kill().  (Other raw DOS environments might
-     be similar.)  Use raise() when the requested pid is our own process,
-     otherwise bomb.  */
-  if (scm_to_int (pid) == getpid ())
-    {
-      if (raise (scm_to_int (sig)) != 0)
-        {
-        err:
-          SCM_SYSERROR;
-        }
-      else
-        {
-          errno = ENOSYS;
-          goto err;
-        }
-    }
-#endif
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
+#endif
 
 #ifdef HAVE_WAITPID
 SCM_DEFINE (scm_waitpid, "waitpid", 1, 1, 0,
@@ -735,7 +724,7 @@ SCM_DEFINE (scm_waitpid, "waitpid", 1, 1, 0,
 #undef FUNC_NAME
 #endif /* HAVE_WAITPID */
 
-#ifndef __MINGW32__
+#ifdef WIFEXITED
 SCM_DEFINE (scm_status_exit_val, "status:exit-val", 1, 0, 0, 
             (SCM status),
 	    "Return the exit status value, as would be set if a process\n"
@@ -754,7 +743,9 @@ SCM_DEFINE (scm_status_exit_val, "status:exit-val", 1, 0, 0,
     return SCM_BOOL_F;
 }
 #undef FUNC_NAME
+#endif /* WIFEXITED */
 
+#ifdef WIFSIGNALED
 SCM_DEFINE (scm_status_term_sig, "status:term-sig", 1, 0, 0, 
             (SCM status),
 	    "Return the signal number which terminated the process, if any,\n"
@@ -770,7 +761,9 @@ SCM_DEFINE (scm_status_term_sig, "status:term-sig", 1, 0, 0,
     return SCM_BOOL_F;
 }
 #undef FUNC_NAME
+#endif /* WIFSIGNALED */
 
+#ifdef WIFSTOPPED
 SCM_DEFINE (scm_status_stop_sig, "status:stop-sig", 1, 0, 0, 
             (SCM status),
 	    "Return the signal number which stopped the process, if any,\n"
@@ -786,7 +779,7 @@ SCM_DEFINE (scm_status_stop_sig, "status:stop-sig", 1, 0, 0,
     return SCM_BOOL_F;
 }
 #undef FUNC_NAME
-#endif /* __MINGW32__ */
+#endif /* WIFSTOPPED */
 
 #ifdef HAVE_GETPPID
 SCM_DEFINE (scm_getppid, "getppid", 0, 0, 0,
@@ -800,8 +793,7 @@ SCM_DEFINE (scm_getppid, "getppid", 0, 0, 0,
 #undef FUNC_NAME
 #endif /* HAVE_GETPPID */
 
-
-#ifndef __MINGW32__
+#ifdef HAVE_GETUID
 SCM_DEFINE (scm_getuid, "getuid", 0, 0, 0,
             (),
 	    "Return an integer representing the current real user ID.")
@@ -810,9 +802,9 @@ SCM_DEFINE (scm_getuid, "getuid", 0, 0, 0,
   return scm_from_int (getuid ());
 }
 #undef FUNC_NAME
+#endif /* HAVE_GETUID */
 
-
-
+#ifdef HAVE_GETGID
 SCM_DEFINE (scm_getgid, "getgid", 0, 0, 0,
             (),
 	    "Return an integer representing the current real group ID.")
@@ -821,9 +813,9 @@ SCM_DEFINE (scm_getgid, "getgid", 0, 0, 0,
   return scm_from_int (getgid ());
 }
 #undef FUNC_NAME
+#endif /* HAVE_GETGID */
 
-
-
+#ifdef HAVE_GETUID
 SCM_DEFINE (scm_geteuid, "geteuid", 0, 0, 0,
             (),
 	    "Return an integer representing the current effective user ID.\n"
@@ -839,8 +831,9 @@ SCM_DEFINE (scm_geteuid, "geteuid", 0, 0, 0,
 #endif
 }
 #undef FUNC_NAME
+#endif /* HAVE_GETUID */
 
-
+#ifdef HAVE_GETGID
 SCM_DEFINE (scm_getegid, "getegid", 0, 0, 0,
             (),
 	    "Return an integer representing the current effective group ID.\n"
@@ -856,8 +849,9 @@ SCM_DEFINE (scm_getegid, "getegid", 0, 0, 0,
 #endif
 }
 #undef FUNC_NAME
+#endif /* HAVE_GETGID */
 
-
+#ifdef HAVE_SETUID
 SCM_DEFINE (scm_setuid, "setuid", 1, 0, 0, 
             (SCM id),
 	    "Sets both the real and effective user IDs to the integer @var{id}, provided\n"
@@ -870,7 +864,9 @@ SCM_DEFINE (scm_setuid, "setuid", 1, 0, 0,
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
+#endif /* HAVE_SETUID */
 
+#ifdef HAVE_SETGID
 SCM_DEFINE (scm_setgid, "setgid", 1, 0, 0, 
             (SCM id),
 	    "Sets both the real and effective group IDs to the integer @var{id}, provided\n"
@@ -883,7 +879,9 @@ SCM_DEFINE (scm_setgid, "setgid", 1, 0, 0,
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
+#endif /* HAVE_SETGID */
 
+#ifdef HAVE_SETUID
 SCM_DEFINE (scm_seteuid, "seteuid", 1, 0, 0, 
             (SCM id),
 	    "Sets the effective user ID to the integer @var{id}, provided the process\n"
@@ -905,10 +903,9 @@ SCM_DEFINE (scm_seteuid, "seteuid", 1, 0, 0,
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
-#endif /* __MINGW32__ */
+#endif /* HAVE_SETUID */
 
-
-#ifdef HAVE_SETEGID
+#ifdef HAVE_SETGID
 SCM_DEFINE (scm_setegid, "setegid", 1, 0, 0,
             (SCM id),
 	    "Sets the effective group ID to the integer @var{id}, provided the process\n"
@@ -931,8 +928,7 @@ SCM_DEFINE (scm_setegid, "setegid", 1, 0, 0,
     
 }
 #undef FUNC_NAME
-#endif
-
+#endif /* HAVE_SETGID */
 
 #ifdef HAVE_GETPGRP
 SCM_DEFINE (scm_getpgrp, "getpgrp", 0, 0, 0,
@@ -947,7 +943,6 @@ SCM_DEFINE (scm_getpgrp, "getpgrp", 0, 0, 0,
 }
 #undef FUNC_NAME
 #endif /* HAVE_GETPGRP */
-
 
 #ifdef HAVE_SETPGID
 SCM_DEFINE (scm_setpgid, "setpgid", 2, 0, 0, 
@@ -1247,10 +1242,98 @@ SCM_DEFINE (scm_fork, "primitive-fork", 0, 0, 0,
   return scm_from_int (pid);
 }
 #undef FUNC_NAME
+#endif /* HAVE_FORK */
 
+#ifdef HAVE_FORK
+#define HAVE_START_CHILD 1
 /* Since Guile uses threads, we have to be very careful to avoid calling
    functions that are not async-signal-safe in the child.  That's why
    this function is implemented in C.  */
+static pid_t
+start_child (const char *exec_file, char **exec_argv,
+	     int reading, int c2p[2], int writing, int p2c[2],
+             int in, int out, int err)
+{
+  int pid;
+  int max_fd = 1024;
+
+#if defined (HAVE_GETRLIMIT) && defined (RLIMIT_NOFILE)
+  {
+    struct rlimit lim = { 0, 0 };
+    if (getrlimit (RLIMIT_NOFILE, &lim) == 0)
+      max_fd = lim.rlim_cur;
+  }
+#endif
+
+  pid = fork ();
+
+  if (pid != 0)
+    /* The parent, with either and error (pid == -1), or the PID of the
+       child.  Return directly in either case.  */
+    return pid;
+
+  /* The child.  */
+  if (reading)
+    close (c2p[0]);
+  if (writing)
+    close (p2c[1]);
+
+  /* Close all file descriptors in ports inherited from the parent
+     except for in, out, and err.  Heavy-handed, but robust.  */
+  while (max_fd--)
+    if (max_fd != in && max_fd != out && max_fd != err)
+      close (max_fd);
+
+  /* Ignore errors on these open() calls.  */
+  if (in == -1)
+    in = open ("/dev/null", O_RDONLY);
+  if (out == -1)
+    out = open ("/dev/null", O_WRONLY);
+  if (err == -1)
+    err = open ("/dev/null", O_WRONLY);
+
+  if (in > 0)
+    {
+      if (out == 0)
+        do out = dup (out); while (errno == EINTR);
+      if (err == 0)
+        do err = dup (err); while (errno == EINTR);
+      do dup2 (in, 0); while (errno == EINTR);
+      close (in);
+    }
+  if (out > 1)
+    {
+      if (err == 1)
+        do err = dup (err); while (errno == EINTR);
+      do dup2 (out, 1); while (errno == EINTR);
+      close (out);
+    }
+  if (err > 2)
+    {
+      do dup2 (err, 2); while (errno == EINTR);
+      close (err);
+    }
+
+  execvp (exec_file, exec_argv);
+
+  /* The exec failed!  There is nothing sensible to do.  */
+  if (err > 0)
+    {
+      char *msg = strerror (errno);
+      fprintf (fdopen (err, "a"), "In execvp of %s: %s\n",
+               exec_file, msg);
+    }
+
+  /* Use exit status 127, like shells in this case, as per POSIX
+     <http://pubs.opengroup.org/onlinepubs/007904875/utilities/xcu_chap02.html#tag_02_09_01_01>.  */
+  _exit (127);
+
+  /* Not reached.  */
+  return -1;
+}
+#endif
+
+#ifdef HAVE_START_CHILD
 static SCM
 scm_open_process (SCM mode, SCM prog, SCM args)
 #define FUNC_NAME "open-process"
@@ -1263,7 +1346,7 @@ scm_open_process (SCM mode, SCM prog, SCM args)
   int pid;
   char *exec_file;
   char **exec_argv;
-  int max_fd = 1024;
+  SCM read_port = SCM_BOOL_F, write_port = SCM_BOOL_F;
 
   exec_file = scm_to_locale_string (prog);
   exec_argv = scm_i_allocate_string_pointers (scm_cons (prog, args));
@@ -1312,15 +1395,8 @@ scm_open_process (SCM mode, SCM prog, SCM args)
       in = SCM_FPORT_FDES (port);
   }
 
-#if defined (HAVE_GETRLIMIT) && defined (RLIMIT_NOFILE)
-  {
-    struct rlimit lim = { 0, 0 };
-    if (getrlimit (RLIMIT_NOFILE, &lim) == 0)
-      max_fd = lim.rlim_cur;
-  }
-#endif
-
-  pid = fork ();
+  pid = start_child (exec_file, exec_argv, reading, c2p, writing, p2c,
+                     in, out, err);
 
   if (pid == -1)
     {
@@ -1340,91 +1416,102 @@ scm_open_process (SCM mode, SCM prog, SCM args)
       SCM_SYSERROR;
     }
 
-  if (pid)
-    /* Parent. */
-    {
-      SCM read_port = SCM_BOOL_F, write_port = SCM_BOOL_F;
-
-      /* There is no sense in catching errors on close().  */
-      if (reading)
-        {
-          close (c2p[1]);
-          read_port = scm_fdes_to_port (c2p[0], "r0", sym_read_pipe);
-        }
-      if (writing)
-        {
-          close (p2c[0]);
-          write_port = scm_fdes_to_port (p2c[1], "w0", sym_write_pipe);
-        }
-
-      return scm_values
-        (scm_list_3 (read_port, write_port, scm_from_int (pid)));
-    }
-
-  /* The child.  */
+  /* There is no sense in catching errors on close().  */
   if (reading)
-    close (c2p[0]);
+    {
+      close (c2p[1]);
+      read_port = scm_i_fdes_to_port (c2p[0], scm_mode_bits ("r0"),
+                                      sym_read_pipe,
+                                      SCM_FPORT_OPTION_NOT_SEEKABLE);
+    }
   if (writing)
-    close (p2c[1]);
-
-  /* Close all file descriptors in ports inherited from the parent
-     except for in, out, and err.  Heavy-handed, but robust.  */
-  while (max_fd--)
-    if (max_fd != in && max_fd != out && max_fd != err)
-      close (max_fd);
-
-  /* Ignore errors on these open() calls.  */
-  if (in == -1)
-    in = open ("/dev/null", O_RDONLY);
-  if (out == -1)
-    out = open ("/dev/null", O_WRONLY);
-  if (err == -1)
-    err = open ("/dev/null", O_WRONLY);
-    
-  if (in > 0)
     {
-      if (out == 0)
-        do out = dup (out); while (errno == EINTR);
-      if (err == 0)
-        do err = dup (err); while (errno == EINTR);
-      do dup2 (in, 0); while (errno == EINTR);
-      close (in);
-    }
-  if (out > 1)
-    {
-      if (err == 1)
-        do err = dup (err); while (errno == EINTR);
-      do dup2 (out, 1); while (errno == EINTR);
-      close (out);
-    }
-  if (err > 2)
-    {
-      do dup2 (err, 2); while (errno == EINTR);
-      close (err);
+      close (p2c[0]);
+      write_port = scm_i_fdes_to_port (p2c[1], scm_mode_bits ("w0"),
+                                       sym_write_pipe,
+                                       SCM_FPORT_OPTION_NOT_SEEKABLE);
     }
 
-  execvp (exec_file, exec_argv);
-
-  /* The exec failed!  There is nothing sensible to do.  */
-  if (err > 0)
-    {
-      char *msg = strerror (errno);
-      fprintf (fdopen (err, "a"), "In execlp of %s: %s\n",
-               exec_file, msg);
-    }
-
-  _exit (EXIT_FAILURE);
-  /* Not reached.  */
-  return SCM_BOOL_F;
+  return scm_values (scm_list_3 (read_port,
+                                 write_port,
+                                 scm_from_int (pid)));
 }
 #undef FUNC_NAME
-#endif /* HAVE_FORK */
 
-#ifdef __MINGW32__
-# include "win32-uname.h"
+static void
+restore_sigaction (SCM pair)
+{
+  SCM sig, handler, flags;
+  sig = scm_car (pair);
+  handler = scm_cadr (pair);
+  flags = scm_cddr (pair);
+  scm_sigaction (sig, handler, flags);
+}
+
+static void
+scm_dynwind_sigaction (int sig, SCM handler, SCM flags)
+{
+  SCM old, scm_sig;
+  scm_sig = scm_from_int (sig);
+  old = scm_sigaction (scm_sig, handler, flags);
+  scm_dynwind_unwind_handler_with_scm (restore_sigaction,
+                                       scm_cons (scm_sig, old),
+                                       SCM_F_WIND_EXPLICITLY);
+}
+
+SCM_DEFINE (scm_system_star, "system*", 0, 0, 1,
+           (SCM args),
+"Execute the command indicated by @var{args}.  The first element must\n"
+"be a string indicating the command to be executed, and the remaining\n"
+"items must be strings representing each of the arguments to that\n"
+"command.\n"
+"\n"
+"This function returns the exit status of the command as provided by\n"
+"@code{waitpid}.  This value can be handled with @code{status:exit-val}\n"
+"and the related functions.\n"
+"\n"
+"@code{system*} is similar to @code{system}, but accepts only one\n"
+"string per-argument, and performs no shell interpretation.  The\n"
+"command is executed using fork and execlp.  Accordingly this function\n"
+"may be safer than @code{system} in situations where shell\n"
+"interpretation is not required.\n"
+"\n"
+"Example: (system* \"echo\" \"foo\" \"bar\")")
+#define FUNC_NAME s_scm_system_star
+{
+  SCM prog, res;
+  int pid, status, wait_result;
+
+  if (scm_is_null (args))
+    SCM_WRONG_NUM_ARGS ();
+  prog = scm_car (args);
+  args = scm_cdr (args);
+
+  scm_dynwind_begin (0);
+  /* Make sure the child can't kill us (as per normal system call).  */
+  scm_dynwind_sigaction (SIGINT,
+                         scm_from_uintptr_t ((scm_t_uintptr) SIG_IGN),
+                         SCM_UNDEFINED);
+#ifdef SIGQUIT
+  scm_dynwind_sigaction (SIGQUIT,
+                         scm_from_uintptr_t ((scm_t_uintptr) SIG_IGN),
+                         SCM_UNDEFINED);
 #endif
 
-#if defined (HAVE_UNAME) || defined (__MINGW32__)
+  res = scm_open_process (scm_nullstr, prog, args);
+  pid = scm_to_int (scm_c_value_ref (res, 2));
+  SCM_SYSCALL (wait_result = waitpid (pid, &status, 0));
+  if (wait_result == -1)
+    SCM_SYSERROR;
+
+  scm_dynwind_end ();
+
+  return scm_from_int (status);
+}
+#undef FUNC_NAME
+#endif /* HAVE_START_CHILD */
+
+#ifdef HAVE_UNAME
 SCM_DEFINE (scm_uname, "uname", 0, 0, 0,
             (),
 	    "Return an object with some information about the computer\n"
@@ -1973,7 +2060,6 @@ SCM_DEFINE (scm_setpriority, "setpriority", 3, 0, 0,
 #endif /* HAVE_SETPRIORITY */
 
 #ifdef HAVE_SCHED_GETAFFINITY
-
 static SCM
 cpu_set_to_bitvector (const cpu_set_t *cs)
 {
@@ -1998,10 +2084,7 @@ SCM_DEFINE (scm_getaffinity, "getaffinity", 1, 0, 0,
 	    "process @var{pid}.  Each CPU the process has affinity with\n"
 	    "has its corresponding bit set in the returned bitvector.\n"
 	    "The number of bits set is a good estimate of how many CPUs\n"
-	    "Guile can use without stepping on other processes' toes.\n\n"
-	    "Currently this procedure is only defined on GNU variants\n"
-	    "(@pxref{CPU Affinity, @code{sched_getaffinity},, libc, The\n"
-	    "GNU C Library Reference Manual}).\n")
+	    "Guile can use without stepping on other processes' toes.")
 #define FUNC_NAME s_scm_getaffinity
 {
   int err;
@@ -2015,19 +2098,14 @@ SCM_DEFINE (scm_getaffinity, "getaffinity", 1, 0, 0,
   return cpu_set_to_bitvector (&cs);
 }
 #undef FUNC_NAME
-
 #endif /* HAVE_SCHED_GETAFFINITY */
 
 #ifdef HAVE_SCHED_SETAFFINITY
-
 SCM_DEFINE (scm_setaffinity, "setaffinity", 2, 0, 0,
 	    (SCM pid, SCM mask),
 	    "Install the CPU affinity mask @var{mask}, a bitvector, for\n"
 	    "the process or thread with ID @var{pid}.  The return value\n"
-	    "is unspecified.\n\n"
-	    "Currently this procedure is only defined on GNU variants\n"
-	    "(@pxref{CPU Affinity, @code{sched_setaffinity},, libc, The\n"
-	    "GNU C Library Reference Manual}).\n")
+	    "is unspecified.")
 #define FUNC_NAME s_scm_setaffinity
 {
   cpu_set_t cs;
@@ -2056,7 +2134,6 @@ SCM_DEFINE (scm_setaffinity, "setaffinity", 2, 0, 0,
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
-
 #endif /* HAVE_SCHED_SETAFFINITY */
 
 
@@ -2236,13 +2313,13 @@ SCM_DEFINE (scm_gethostname, "gethostname", 0, 0, 0,
 #endif /* HAVE_GETHOSTNAME */
 
 
-#ifdef HAVE_FORK
+#ifdef HAVE_START_CHILD
 static void
 scm_init_popen (void)
 {
   scm_c_define_gsubr ("open-process", 2, 0, 1, scm_open_process);
 }
-#endif
+#endif /* HAVE_START_CHILD */
 
 void
 scm_init_posix ()
@@ -2341,11 +2418,14 @@ scm_init_posix ()
 
 #ifdef HAVE_FORK
   scm_add_feature ("fork");
+#endif	/* HAVE_FORK */
+#ifdef HAVE_START_CHILD
+  scm_add_feature ("popen");
   scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
                             "scm_init_popen",
 			    (scm_t_extension_init_func) scm_init_popen,
 			    NULL);
-#endif	/* HAVE_FORK */
+#endif /* HAVE_START_CHILD */
 }
 
 /*

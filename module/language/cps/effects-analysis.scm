@@ -41,11 +41,12 @@
 
 (define-module (language cps effects-analysis)
   #:use-module (language cps)
-  #:use-module (language cps dfg)
+  #:use-module (language cps utils)
+  #:use-module (language cps intmap)
   #:use-module (ice-9 match)
   #:export (expression-effects
             compute-effects
-            synthesize-definition-effects!
+            synthesize-definition-effects
 
             &allocation
             &type-check
@@ -61,7 +62,9 @@
             &module
             &struct
             &string
+            &thread
             &bytevector
+            &closure
 
             &object
             &field
@@ -168,6 +171,9 @@
   ;; Indicates that an expression depends on the current module.
   &module
 
+  ;; Indicates that an expression depends on the current thread.
+  &thread
+
   ;; Indicates that an expression depends on the value of a struct
   ;; field.  The effect field indicates the specific field, or zero for
   ;; an unknown field.
@@ -179,7 +185,10 @@
   ;; Indicates that an expression depends on the contents of a
   ;; bytevector.  We cannot be more precise, as bytevectors may alias
   ;; other bytevectors.
-  &bytevector)
+  &bytevector
+
+  ;; Indicates a dependency on a free variable of a closure.
+  &closure)
 
 (define-inlinable (&field kind field)
   (ash (logior (ash field &memory-kind-bits) kind) &effect-kind-bits))
@@ -227,32 +236,26 @@ is or might be a read or a write to the same location as A."
        (not (zero? (logand b (logior &read &write))))
        (locations-same?)))
 
-(define (lookup-constant-index sym dfg)
-  (call-with-values (lambda () (find-constant-value sym dfg))
-    (lambda (has-const? val)
-      (and has-const? (integer? val) (exact? val) (<= 0 val) val))))
-
-(define-inlinable (indexed-field kind n dfg)
-  (cond
-   ((lookup-constant-index n dfg)
-    => (lambda (idx)
-         (&field kind idx)))
-   (else (&object kind))))
+(define-inlinable (indexed-field kind var constants)
+  (let ((val (intmap-ref constants var (lambda (_) #f))))
+    (if (and (exact-integer? val) (<= 0 val))
+        (&field kind val)
+        (&object kind))))
 
 (define *primitive-effects* (make-hash-table))
 
-(define-syntax-rule (define-primitive-effects* dfg
+(define-syntax-rule (define-primitive-effects* constants
                       ((name . args) effects ...)
                       ...)
   (begin
     (hashq-set! *primitive-effects* 'name
                 (case-lambda*
-                 ((dfg . args) (logior effects ...))
+                 ((constants . args) (logior effects ...))
                  (_ &all-effects)))
     ...))
 
 (define-syntax-rule (define-primitive-effects ((name . args) effects ...) ...)
-  (define-primitive-effects* dfg ((name . args) effects ...) ...))
+  (define-primitive-effects* constants ((name . args) effects ...) ...))
 
 ;; Miscellaneous.
 (define-primitive-effects
@@ -284,7 +287,15 @@ is or might be a read or a write to the same location as A."
   ((fluid-ref f)                   (&read-object &fluid)       &type-check)
   ((fluid-set! f v)                (&write-object &fluid)      &type-check)
   ((push-fluid f v)                (&write-object &fluid)      &type-check)
-  ((pop-fluid)                     (&write-object &fluid)      &type-check))
+  ((pop-fluid)                     (&write-object &fluid))
+  ((push-dynamic-state state)      (&write-object &fluid)      &type-check)
+  ((pop-dynamic-state)             (&write-object &fluid)))
+
+;; Threads.  Calls cause &all-effects, which reflects the fact that any
+;; call can capture a partial continuation and reinstate it on another
+;; thread.
+(define-primitive-effects
+  ((current-thread)                (&read-object &thread)))
 
 ;; Prompts.
 (define-primitive-effects
@@ -310,38 +321,38 @@ is or might be a read or a write to the same location as A."
   ((box-set! v x)                  (&write-object &box)        &type-check))
 
 ;; Vectors.
-(define (vector-field n dfg)
-  (indexed-field &vector n dfg))
-(define (read-vector-field n dfg)
-  (logior &read (vector-field n dfg)))
-(define (write-vector-field n dfg)
-  (logior &write (vector-field n dfg)))
-(define-primitive-effects* dfg
+(define (vector-field n constants)
+  (indexed-field &vector n constants))
+(define (read-vector-field n constants)
+  (logior &read (vector-field n constants)))
+(define (write-vector-field n constants)
+  (logior &write (vector-field n constants)))
+(define-primitive-effects* constants
   ((vector . _)                    (&allocate &vector))
-  ((make-vector n init)            (&allocate &vector)         &type-check)
+  ((make-vector n init)            (&allocate &vector))
   ((make-vector/immediate n init)  (&allocate &vector))
-  ((vector-ref v n)                (read-vector-field n dfg)   &type-check)
-  ((vector-ref/immediate v n)      (read-vector-field n dfg)   &type-check)
-  ((vector-set! v n x)             (write-vector-field n dfg)  &type-check)
-  ((vector-set!/immediate v n x)   (write-vector-field n dfg)  &type-check)
+  ((vector-ref v n)                (read-vector-field n constants) &type-check)
+  ((vector-ref/immediate v n)      (read-vector-field n constants) &type-check)
+  ((vector-set! v n x)             (write-vector-field n constants) &type-check)
+  ((vector-set!/immediate v n x)   (write-vector-field n constants) &type-check)
   ((vector-length v)                                           &type-check))
 
 ;; Structs.
-(define (struct-field n dfg)
-  (indexed-field &struct n dfg))
-(define (read-struct-field n dfg)
-  (logior &read (struct-field n dfg)))
-(define (write-struct-field n dfg)
-  (logior &write (struct-field n dfg)))
-(define-primitive-effects* dfg
+(define (struct-field n constants)
+  (indexed-field &struct n constants))
+(define (read-struct-field n constants)
+  (logior &read (struct-field n constants)))
+(define (write-struct-field n constants)
+  (logior &write (struct-field n constants)))
+(define-primitive-effects* constants
   ((allocate-struct vt n)          (&allocate &struct)         &type-check)
   ((allocate-struct/immediate v n) (&allocate &struct)         &type-check)
   ((make-struct vt ntail . _)      (&allocate &struct)         &type-check)
   ((make-struct/no-tail vt . _)    (&allocate &struct)         &type-check)
-  ((struct-ref s n)                (read-struct-field n dfg)   &type-check)
-  ((struct-ref/immediate s n)      (read-struct-field n dfg)   &type-check)
-  ((struct-set! s n x)             (write-struct-field n dfg)  &type-check)
-  ((struct-set!/immediate s n x)   (write-struct-field n dfg)  &type-check)
+  ((struct-ref s n)                (read-struct-field n constants) &type-check)
+  ((struct-ref/immediate s n)      (read-struct-field n constants) &type-check)
+  ((struct-set! s n x)             (write-struct-field n constants) &type-check)
+  ((struct-set!/immediate s n x)   (write-struct-field n constants) &type-check)
   ((struct-vtable s)                                           &type-check))
 
 ;; Strings.
@@ -352,9 +363,22 @@ is or might be a read or a write to the same location as A."
   ((string->number _)              (&read-object &string)      &type-check)
   ((string-length s)                                           &type-check))
 
+;; Unboxed floats and integers.
+(define-primitive-effects
+  ((scm->f64 _)                                                &type-check)
+  ((load-f64 _))
+  ((f64->scm _))
+  ((scm->u64 _)                                                &type-check)
+  ((scm->u64/truncate _)                                       &type-check)
+  ((load-u64 _))
+  ((u64->scm _))
+  ((scm->s64 _)                                                &type-check)
+  ((load-s64 _))
+  ((s64->scm _)))
+
 ;; Bytevectors.
 (define-primitive-effects
-  ((bytevector-length _)                                       &type-check)
+  ((bv-length _)                                               &type-check)
 
   ((bv-u8-ref bv n)                (&read-object &bytevector)  &type-check)
   ((bv-s8-ref bv n)                (&read-object &bytevector)  &type-check)
@@ -378,6 +402,17 @@ is or might be a read or a write to the same location as A."
   ((bv-f32-set! bv n x)            (&write-object &bytevector) &type-check)
   ((bv-f64-set! bv n x)            (&write-object &bytevector) &type-check))
 
+;; Closures.
+(define (closure-field n constants)
+  (indexed-field &closure n constants))
+(define (read-closure-field n constants)
+  (logior &read (closure-field n constants)))
+(define (write-closure-field n constants)
+  (logior &write (closure-field n constants)))
+(define-primitive-effects* constants
+  ((free-ref closure idx)          (read-closure-field idx constants))
+  ((free-set! closure idx val)     (write-closure-field idx constants)))
+
 ;; Modules.
 (define-primitive-effects
   ((current-module)                (&read-object &module))
@@ -385,7 +420,7 @@ is or might be a read or a write to the same location as A."
   ((resolve name bound?)           (&read-object &module)      &type-check)
   ((cached-toplevel-box scope name bound?)                     &type-check)
   ((cached-module-box mod name public? bound?)                 &type-check)
-  ((define! name val)              (&read-object &module) (&write-object &box)))
+  ((define! name)                  (&read-object &module)))
 
 ;; Numbers.
 (define-primitive-effects
@@ -394,13 +429,38 @@ is or might be a read or a write to the same location as A."
   ((> . _)                         &type-check)
   ((<= . _)                        &type-check)
   ((>= . _)                        &type-check)
+  ((u64-= . _))
+  ((u64-< . _))
+  ((u64-> . _))
+  ((u64-<= . _))
+  ((u64->= . _))
+  ((u64-<-scm . _)                 &type-check)
+  ((u64-<=-scm . _)                &type-check)
+  ((u64-=-scm . _)                 &type-check)
+  ((u64->=-scm . _)                 &type-check)
+  ((u64->-scm . _)                 &type-check)
+  ((f64-= . _))
+  ((f64-< . _))
+  ((f64-> . _))
+  ((f64-<= . _))
+  ((f64->= . _))
   ((zero? . _)                     &type-check)
   ((add . _)                       &type-check)
+  ((add/immediate . _)             &type-check)
   ((mul . _)                       &type-check)
   ((sub . _)                       &type-check)
+  ((sub/immediate . _)             &type-check)
   ((div . _)                       &type-check)
-  ((sub1 . _)                      &type-check)
-  ((add1 . _)                      &type-check)
+  ((fadd . _))
+  ((fsub . _))
+  ((fmul . _))
+  ((fdiv . _))
+  ((uadd . _))
+  ((usub . _))
+  ((umul . _))
+  ((uadd/immediate . _))
+  ((usub/immediate . _))
+  ((umul/immediate . _))
   ((quo . _)                       &type-check)
   ((rem . _)                       &type-check)
   ((mod . _)                       &type-check)
@@ -418,7 +478,16 @@ is or might be a read or a write to the same location as A."
   ((logand . _)                    &type-check)
   ((logior . _)                    &type-check)
   ((logxor . _)                    &type-check)
+  ((logsub . _)                    &type-check)
   ((lognot . _)                    &type-check)
+  ((ulogand . _))
+  ((ulogior . _))
+  ((ulogxor . _))
+  ((ulogsub . _))
+  ((ursh . _))
+  ((ulsh . _))
+  ((ursh/immediate . _))
+  ((ulsh/immediate . _))
   ((logtest a b)                   &type-check)
   ((logbit? a b)                   &type-check)
   ((sqrt _)                        &type-check)
@@ -426,56 +495,55 @@ is or might be a read or a write to the same location as A."
 
 ;; Characters.
 (define-primitive-effects
-  ((char<? . _)                    &type-check)
-  ((char<=? . _)                   &type-check)
-  ((char>=? . _)                   &type-check)
-  ((char>? . _)                    &type-check)
   ((integer->char _)               &type-check)
   ((char->integer _)               &type-check))
 
-(define (primitive-effects dfg name args)
+;; Atomics are a memory and a compiler barrier; they cause all effects
+;; so no need to have a case for them here.  (Though, see
+;; https://jfbastien.github.io/no-sane-compiler/.)
+
+(define (primitive-effects constants name args)
   (let ((proc (hashq-ref *primitive-effects* name)))
     (if proc
-        (apply proc dfg args)
+        (apply proc constants args)
         &all-effects)))
 
-(define (expression-effects exp dfg)
+(define (expression-effects exp constants)
   (match exp
     ((or ($ $const) ($ $prim) ($ $values))
      &no-effects)
-    ((or ($ $fun) ($ $rec))
+    (($ $closure _ 0)
+     &no-effects)
+    ((or ($ $fun) ($ $rec) ($ $closure))
      (&allocate &unknown-memory-kinds))
     (($ $prompt)
-     (&write-object &prompt))
+     ;; Although the "main" path just writes &prompt, we don't know what
+     ;; nonlocal predecessors of the handler do, so we conservatively
+     ;; assume &all-effects.
+     &all-effects)
     ((or ($ $call) ($ $callk))
      &all-effects)
     (($ $branch k exp)
-     (expression-effects exp dfg))
+     (expression-effects exp constants))
     (($ $primcall name args)
-     (primitive-effects dfg name args))))
+     (primitive-effects constants name args))))
 
-(define* (compute-effects dfg #:optional (min-label (dfg-min-label dfg))
-                          (label-count (dfg-label-count dfg)))
-  (let ((effects (make-vector label-count &no-effects)))
-    (define (idx->label idx) (+ idx min-label))
-    (let lp ((n 0))
-      (when (< n label-count)
-        (vector-set!
-         effects
-         n
-         (match (lookup-cont (idx->label n) dfg)
-           (($ $kargs names syms body)
-            (expression-effects (find-expression body) dfg))
-           (($ $kreceive arity kargs)
-            (match arity
-              (($ $arity _ () #f () #f) &type-check)
-              (($ $arity () () _ () #f) (&allocate &pair))
-              (($ $arity _ () _ () #f) (logior (&allocate &pair) &type-check))))
-           (($ $kfun) &type-check)
-           (($ $kclause) &type-check)
-           (($ $ktail) &no-effects)))
-        (lp (1+ n))))
-    effects))
+(define (compute-effects conts)
+  (let ((constants (compute-constant-values conts)))
+    (intmap-map
+     (lambda (label cont)
+       (match cont
+         (($ $kargs names syms ($ $continue k src exp))
+          (expression-effects exp constants))
+         (($ $kreceive arity kargs)
+          (match arity
+            (($ $arity _ () #f () #f) &type-check)
+            (($ $arity () () _ () #f) (&allocate &pair))
+            (($ $arity _ () _ () #f) (logior (&allocate &pair) &type-check))))
+         (($ $kfun) &type-check)
+         (($ $kclause) &type-check)
+         (($ $ktail) &no-effects)))
+     conts)))
 
 ;; There is a way to abuse effects analysis in CSE to also do scalar
 ;; replacement, effectively adding `car' and `cdr' expressions to `cons'
@@ -487,13 +555,9 @@ is or might be a read or a write to the same location as A."
 ;; that allocations aren't eliminated anyway, and the new effects will
 ;; just cause the allocations not to commute with e.g. set-car!  which
 ;; is what we want anyway.
-(define* (synthesize-definition-effects! effects dfg min-label #:optional
-                                         (label-count (vector-length effects)))
-  (define (label->idx label) (- label min-label))
-  (let lp ((label min-label))
-    (when (< label (+ min-label label-count))
-      (let* ((lidx (label->idx label))
-             (fx (vector-ref effects lidx)))
-        (unless (zero? (logand (logior &write &allocation) fx))
-          (vector-set! effects lidx (logior (vector-ref effects lidx) &read)))
-        (lp (1+ label))))))
+(define (synthesize-definition-effects effects)
+  (intmap-map (lambda (label fx)
+                (if (logtest (logior &write &allocation) fx)
+                    (logior fx &read)
+                    fx))
+              effects))

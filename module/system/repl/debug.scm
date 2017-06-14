@@ -1,6 +1,6 @@
 ;;; Guile VM debugging facilities
 
-;;; Copyright (C) 2001, 2009, 2010, 2011, 2013, 2014 Free Software Foundation, Inc.
+;;; Copyright (C) 2001, 2009, 2010, 2011, 2013, 2014, 2015 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or
 ;;; modify it under the terms of the GNU Lesser General Public
@@ -24,16 +24,18 @@
   #:use-module (system base language)
   #:use-module (system vm vm)
   #:use-module (system vm frame)
+  #:use-module (system vm debug)
+  #:use-module (ice-9 format)
+  #:use-module (ice-9 match)
   #:use-module (ice-9 rdelim)
   #:use-module (ice-9 pretty-print)
-  #:use-module (ice-9 format)
   #:use-module ((system vm inspect) #:select ((inspect . %inspect)))
   #:use-module (system vm program)
   #:export (<debug>
             make-debug debug?
             debug-frames debug-index debug-error-message
             terminal-width
-            print-registers print-locals print-frame print-frames frame->module
+            print-registers print-locals print-frame print-frames
             stack->vector narrow-stack->vector
             frame->stack-vector))
 
@@ -94,12 +96,13 @@
     (format port fmt val))
   
   (format port "~aRegisters:~%" per-line-prefix)
-  (print "ip = #x~x" (frame-instruction-pointer frame))
-  (when (program? (frame-procedure frame))
-    (let ((code (program-code (frame-procedure frame))))
-      (format port " (#x~x~@d)" code
-              (- (frame-instruction-pointer frame) code))))
-  (newline port)
+  (let ((ip (frame-instruction-pointer frame)))
+    (print "ip = #x~x" ip)
+    (let ((info (find-program-debug-info ip)))
+      (when info
+        (let ((addr (program-debug-info-addr info)))
+          (format port " (#x~x + ~d * 4)" addr (/ (- ip addr) 4)))))
+    (newline port))
   (print "sp = ~a\n" (frame-stack-pointer frame))
   (print "fp = ~a\n" (frame-address frame)))
 
@@ -113,7 +116,7 @@
       (format port "~aLocal variables:~%" per-line-prefix)
       (for-each
        (lambda (binding)
-         (let ((v (frame-local-ref frame (binding-slot binding))))
+         (let ((v (binding-ref binding)))
            (display per-line-prefix port)
            (run-hook before-print-hook v)
            (format port "~a = ~v:@y\n" (binding-name binding) width v)))
@@ -134,7 +137,8 @@
         (format port "~&In ~a:~&" file))
     (format port "~9@a~:[~*~3_~;~3d~] ~v:@y~%"
             (if line (format #f "~a:~a" line col) "")
-            index index width (frame-call-representation frame))
+            index index width
+            (frame-call-representation frame #:top-frame? (zero? index)))
     (if full?
         (print-locals frame #:width width
                       #:per-line-prefix "     "))))
@@ -160,32 +164,6 @@
             (lp (+ i inc)
                 (frame-source frame)))))))
 
-;; Ideally here we would have something much more syntactic, in that a set! to a
-;; local var that is not settable would raise an error, and export etc forms
-;; would modify the module in question: but alack, this is what we have now.
-;; Patches welcome!
-(define (frame->module frame)
-  (let ((proc (frame-procedure frame)))
-    (if #f
-        ;; FIXME: program-module does not exist.
-        (let* ((mod (or (program-module proc) (current-module)))
-               (mod* (make-module)))
-          (module-use! mod* mod)
-          (for-each
-           (lambda (binding)
-             (let* ((x (frame-local-ref frame (binding-slot binding)))
-                    (var (if (variable? x) x (make-variable x))))
-               (format #t
-                       "~:[Read-only~;Mutable~] local variable ~a = ~70:@y\n"
-                       (not (variable? x))
-                       (binding-name binding)
-                       (if (variable-bound? var) (variable-ref var) var))
-               (module-add! mod* (binding-name binding) var)))
-           (frame-bindings frame))
-          mod*)
-        (current-module))))
-
-
 (define (stack->vector stack)
   (let* ((len (stack-length stack))
          (v (make-vector len)))
@@ -204,20 +182,21 @@
         #()))) ; ? Can be the case for a tail-call to `throw' tho
 
 (define (frame->stack-vector frame)
-  (let ((tag (and (pair? (fluid-ref %stacks))
-                  (cdar (fluid-ref %stacks)))))
-    (narrow-stack->vector
-     (make-stack frame)
-     ;; Take the stack from the given frame, cutting 0
-     ;; frames.
-     0
-     ;; Narrow the end of the stack to the most recent
-     ;; start-stack.
-     tag
-     ;; And one more frame, because %start-stack
-     ;; invoking the start-stack thunk has its own frame
-     ;; too.
-     0 (and tag 1))))
+  (let ((stack (make-stack frame)))
+    (match (fluid-ref %stacks)
+      ((stack-tag . prompt-tag)
+       (narrow-stack->vector
+        stack
+        ;; Take the stack from the given frame, cutting 0 frames.
+        0
+        ;; Narrow the end of the stack to the most recent start-stack.
+        prompt-tag
+        ;; And one more frame, because %start-stack invoking the
+        ;; start-stack thunk has its own frame too.
+        0 (and prompt-tag 1)))
+      (_
+       ;; Otherwise take the whole stack.
+       (stack->vector stack)))))
 
 ;; (define (debug)
 ;;   (run-debugger
@@ -227,5 +206,5 @@
 ;;     2
 ;;     ;; Narrow the end of the stack to the most recent start-stack.
 ;;     (and (pair? (fluid-ref %stacks))
-;;          (cdar (fluid-ref %stacks))))))
+;;          (cdr (fluid-ref %stacks))))))
 

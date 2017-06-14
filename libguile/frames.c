@@ -1,4 +1,4 @@
-/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 2001, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -25,14 +25,6 @@
 #include "_scm.h"
 #include "frames.h"
 #include "vm.h"
-#include <verify.h>
-
-/* Make sure assumptions on the layout of `struct scm_vm_frame' hold.  */
-verify (sizeof (SCM) == sizeof (SCM *));
-verify (sizeof (struct scm_vm_frame) == 3 * sizeof (SCM));
-verify (offsetof (struct scm_vm_frame, dynamic_link) == 0);
-
-
 
 SCM
 scm_c_make_frame (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
@@ -49,66 +41,49 @@ scm_c_make_frame (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
 void
 scm_i_frame_print (SCM frame, SCM port, scm_print_state *pstate)
 {
-  scm_puts_unlocked ("#<frame ", port);
+  scm_puts ("#<frame ", port);
   scm_uintprint (SCM_UNPACK (frame), 16, port);
-  scm_putc_unlocked (' ', port);
-  scm_write (scm_frame_procedure (frame), port);
-  /* don't write args, they can get us into trouble. */
-  scm_puts_unlocked (">", port);
+  if (scm_module_system_booted_p)
+    {
+      SCM name = scm_frame_procedure_name (frame);
+
+      if (scm_is_true (name))
+        {
+          scm_putc (' ', port);
+          scm_write (name, port);
+        }
+    }
+  /* Don't write args, they can be ridiculously long. */
+  scm_puts (">", port);
 }
 
-static SCM*
-frame_stack_base (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
+static union scm_vm_stack_element*
+frame_stack_top (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
 {
   switch (kind)
     {
-      case SCM_VM_FRAME_KIND_CONT:
-        return ((struct scm_vm_cont *) frame->stack_holder)->stack_base;
+      case SCM_VM_FRAME_KIND_CONT: 
+        {
+          struct scm_vm_cont *cont = frame->stack_holder;
+          return cont->stack_bottom + cont->stack_size;
+        }
 
       case SCM_VM_FRAME_KIND_VM:
-        return ((struct scm_vm *) frame->stack_holder)->stack_base;
+        return ((struct scm_vm *) frame->stack_holder)->stack_top;
 
       default:
         abort ();
     }
 }
 
-static scm_t_ptrdiff
-frame_offset (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
-{
-  switch (kind)
-    {
-    case SCM_VM_FRAME_KIND_CONT:
-      return ((struct scm_vm_cont *) frame->stack_holder)->reloc;
-
-    case SCM_VM_FRAME_KIND_VM:
-      return 0;
-
-    default:
-      abort ();
-    }
-}
-
-SCM*
-scm_i_frame_stack_base (SCM frame)
-#define FUNC_NAME "frame-stack-base"
+union scm_vm_stack_element*
+scm_i_frame_stack_top (SCM frame)
+#define FUNC_NAME "frame-stack-top"
 {
   SCM_VALIDATE_VM_FRAME (1, frame);
 
-  return frame_stack_base (SCM_VM_FRAME_KIND (frame),
-                           SCM_VM_FRAME_DATA (frame));
-}
-#undef FUNC_NAME
-
-scm_t_ptrdiff
-scm_i_frame_offset (SCM frame)
-#define FUNC_NAME "frame-offset"
-{
-  SCM_VALIDATE_VM_FRAME (1, frame);
-
-  return frame_offset (SCM_VM_FRAME_KIND (frame),
-                       SCM_VM_FRAME_DATA (frame));
-
+  return frame_stack_top (SCM_VM_FRAME_KIND (frame),
+                          SCM_VM_FRAME_DATA (frame));
 }
 #undef FUNC_NAME
 
@@ -130,10 +105,10 @@ SCM_DEFINE (scm_frame_p, "frame?", 1, 0, 0,
 SCM
 scm_c_frame_closure (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
 {
-  SCM *fp, *sp;
+  union scm_vm_stack_element *fp, *sp;
 
-  fp = frame_stack_base (kind, frame) + frame->fp_offset;
-  sp = frame_stack_base (kind, frame) + frame->sp_offset;
+  fp = frame_stack_top (kind, frame) - frame->fp_offset;
+  sp = frame_stack_top (kind, frame) - frame->sp_offset;
 
   if (SCM_FRAME_NUM_LOCALS (fp, sp) > 0)
     return SCM_FRAME_LOCAL (fp, 0);
@@ -141,16 +116,26 @@ scm_c_frame_closure (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
   return SCM_BOOL_F;
 }
 
-SCM_DEFINE (scm_frame_procedure, "frame-procedure", 1, 0, 0,
+static SCM frame_procedure_name_var;
+
+static void
+init_frame_procedure_name_var (void)
+{
+  frame_procedure_name_var
+    = scm_c_private_lookup ("system vm frame", "frame-procedure-name");
+}
+
+SCM_DEFINE (scm_frame_procedure_name, "frame-procedure-name", 1, 0, 0,
 	    (SCM frame),
 	    "")
-#define FUNC_NAME s_scm_frame_procedure
+#define FUNC_NAME s_scm_frame_procedure_name
 {
+  static scm_i_pthread_once_t once = SCM_I_PTHREAD_ONCE_INIT;
+  scm_i_pthread_once (&once, init_frame_procedure_name_var);
+
   SCM_VALIDATE_VM_FRAME (1, frame);
 
-  /* FIXME: Retrieve procedure from address?  */
-  return scm_c_frame_closure (SCM_VM_FRAME_KIND (frame),
-                              SCM_VM_FRAME_DATA (frame));
+  return scm_call_1 (scm_variable_ref (frame_procedure_name_var), frame);
 }
 #undef FUNC_NAME
 
@@ -209,12 +194,12 @@ SCM_DEFINE (scm_frame_source, "frame-source", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_frame_num_locals, "frame-num-locals", 1, 0, 0,
-	    (SCM frame),
-	    "")
+static const char s_scm_frame_num_locals[] = "frame-num-locals";
+static SCM
+scm_frame_num_locals (SCM frame)
 #define FUNC_NAME s_scm_frame_num_locals
 {
-  SCM *fp, *sp;
+  union scm_vm_stack_element *fp, *sp;
 
   SCM_VALIDATE_VM_FRAME (1, frame);
 
@@ -225,45 +210,104 @@ SCM_DEFINE (scm_frame_num_locals, "frame-num-locals", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_frame_local_ref, "frame-local-ref", 2, 0, 0,
-	    (SCM frame, SCM index),
-	    "")
+enum stack_item_representation
+  {
+    STACK_ITEM_SCM = 0,
+    STACK_ITEM_F64 = 1,
+    STACK_ITEM_U64 = 2,
+    STACK_ITEM_S64 = 3
+  };
+
+static enum stack_item_representation
+scm_to_stack_item_representation (SCM x, const char *subr, int pos)
+{
+  if (scm_is_eq (x, scm_from_latin1_symbol ("scm")))
+    return STACK_ITEM_SCM;
+  if (scm_is_eq (x, scm_from_latin1_symbol ("f64")))
+    return STACK_ITEM_F64;
+  if (scm_is_eq (x, scm_from_latin1_symbol ("u64")))
+    return STACK_ITEM_U64;
+  if (scm_is_eq (x, scm_from_latin1_symbol ("s64")))
+    return STACK_ITEM_S64;
+
+  scm_wrong_type_arg (subr, pos, x);
+  return 0;  /* Not reached.  */
+}
+
+static const char s_scm_frame_local_ref[] = "frame-local-ref";
+static SCM
+scm_frame_local_ref (SCM frame, SCM index, SCM representation)
 #define FUNC_NAME s_scm_frame_local_ref
 {
-  SCM *fp, *sp;
+  union scm_vm_stack_element *fp, *sp;
   unsigned int i;
+  enum stack_item_representation repr;
 
   SCM_VALIDATE_VM_FRAME (1, frame);
   SCM_VALIDATE_UINT_COPY (2, index, i);
-
-  fp = SCM_VM_FRAME_FP (frame);
-  sp = SCM_VM_FRAME_SP (frame);
-
-  if (i < SCM_FRAME_NUM_LOCALS (fp, sp))
-    return SCM_FRAME_LOCAL (fp, i);
-
-  SCM_OUT_OF_RANGE (SCM_ARG2, index);
-}
-#undef FUNC_NAME
-
-/* Need same not-yet-active frame logic here as in frame-num-locals */
-SCM_DEFINE (scm_frame_local_set_x, "frame-local-set!", 3, 0, 0,
-	    (SCM frame, SCM index, SCM val),
-	    "")
-#define FUNC_NAME s_scm_frame_local_set_x
-{
-  SCM *fp, *sp;
-  unsigned int i;
-
-  SCM_VALIDATE_VM_FRAME (1, frame);
-  SCM_VALIDATE_UINT_COPY (2, index, i);
+  repr = scm_to_stack_item_representation (representation, FUNC_NAME, SCM_ARG3);
 
   fp = SCM_VM_FRAME_FP (frame);
   sp = SCM_VM_FRAME_SP (frame);
 
   if (i < SCM_FRAME_NUM_LOCALS (fp, sp))
     {
-      SCM_FRAME_LOCAL (fp, i) = val;
+      union scm_vm_stack_element *item = SCM_FRAME_SLOT (fp, i);
+      switch (repr)
+        {
+          case STACK_ITEM_SCM:
+            return item->as_scm;
+          case STACK_ITEM_F64:
+            return scm_from_double (item->as_f64);
+          case STACK_ITEM_U64:
+            return scm_from_uint64 (item->as_u64);
+          case STACK_ITEM_S64:
+            return scm_from_int64 (item->as_s64);
+          default:
+            abort();
+        }
+    }
+
+  SCM_OUT_OF_RANGE (SCM_ARG2, index);
+}
+#undef FUNC_NAME
+
+static const char s_scm_frame_local_set_x[] = "frame-local-set!";
+static SCM
+scm_frame_local_set_x (SCM frame, SCM index, SCM val, SCM representation)
+#define FUNC_NAME s_scm_frame_local_set_x
+{
+  union scm_vm_stack_element *fp, *sp;
+  unsigned int i;
+  enum stack_item_representation repr;
+
+  SCM_VALIDATE_VM_FRAME (1, frame);
+  SCM_VALIDATE_UINT_COPY (2, index, i);
+  repr = scm_to_stack_item_representation (representation, FUNC_NAME, SCM_ARG3);
+
+  fp = SCM_VM_FRAME_FP (frame);
+  sp = SCM_VM_FRAME_SP (frame);
+
+  if (i < SCM_FRAME_NUM_LOCALS (fp, sp))
+    {
+      union scm_vm_stack_element *item = SCM_FRAME_SLOT (fp, i);
+      switch (repr)
+        {
+          case STACK_ITEM_SCM:
+            item->as_scm = val;
+            break;
+          case STACK_ITEM_F64:
+            item->as_f64 = scm_to_double (val);
+            break;
+          case STACK_ITEM_U64:
+            item->as_u64 = scm_to_uint64 (val);
+            break;
+          case STACK_ITEM_S64:
+            item->as_s64 = scm_to_int64 (val);
+            break;
+          default:
+            abort();
+        }
       return SCM_UNSPECIFIED;
     }
 
@@ -314,9 +358,6 @@ SCM_DEFINE (scm_frame_return_address, "frame-return-address", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-#define RELOC(kind, frame, val)                                 \
-  (((SCM *) (val)) + frame_offset (kind, frame))
-
 SCM_DEFINE (scm_frame_dynamic_link, "frame-dynamic-link", 1, 0, 0,
 	    (SCM frame),
 	    "")
@@ -326,43 +367,34 @@ SCM_DEFINE (scm_frame_dynamic_link, "frame-dynamic-link", 1, 0, 0,
   /* fixme: munge fp if holder is a continuation */
   return scm_from_uintptr_t
     ((scm_t_uintptr)
-     RELOC (SCM_VM_FRAME_KIND (frame), SCM_VM_FRAME_DATA (frame),
-            SCM_FRAME_DYNAMIC_LINK (SCM_VM_FRAME_FP (frame))));
+     SCM_FRAME_DYNAMIC_LINK (SCM_VM_FRAME_FP (frame)));
 }
 #undef FUNC_NAME
 
 int
 scm_c_frame_previous (enum scm_vm_frame_kind kind, struct scm_frame *frame)
 {
-  SCM *this_fp, *new_fp, *new_sp;
-  SCM *stack_base = frame_stack_base (kind, frame);
+  union scm_vm_stack_element *this_fp, *new_fp, *new_sp;
+  union scm_vm_stack_element *stack_top = frame_stack_top (kind, frame);
 
  again:
-  this_fp = frame->fp_offset + stack_base;
+  this_fp = stack_top - frame->fp_offset;
 
-  if (this_fp == stack_base)
+  if (this_fp == stack_top)
     return 0;
 
   new_fp = SCM_FRAME_DYNAMIC_LINK (this_fp);
 
-  if (!new_fp)
-    return 0;
-
-  new_fp = RELOC (kind, frame, new_fp);
-
-  if (new_fp < stack_base)
+  if (new_fp >= stack_top)
     return 0;
 
   new_sp = SCM_FRAME_PREVIOUS_SP (this_fp);
-  frame->fp_offset = new_fp - stack_base;
-  frame->sp_offset = new_sp - stack_base;
+  frame->fp_offset = stack_top - new_fp;
+  frame->sp_offset = stack_top - new_sp;
   frame->ip = SCM_FRAME_RETURN_ADDRESS (this_fp);
 
-  {
-    SCM proc = scm_c_frame_closure (kind, frame);
-    if (SCM_PROGRAM_P (proc) && SCM_PROGRAM_IS_BOOT (proc))
-      goto again;
-  }
+  if (scm_i_vm_is_boot_continuation_code (frame->ip))
+    goto again;
 
   return 1;
 }
@@ -388,12 +420,28 @@ SCM_DEFINE (scm_frame_previous, "frame-previous", 1, 0, 0,
 #undef FUNC_NAME
 
 
+static void
+scm_init_frames_builtins (void *unused)
+{
+  scm_c_define_gsubr (s_scm_frame_num_locals, 1, 0, 0,
+                      (scm_t_subr) scm_frame_num_locals);
+  scm_c_define_gsubr (s_scm_frame_local_ref, 3, 0, 0,
+                      (scm_t_subr) scm_frame_local_ref);
+  scm_c_define_gsubr (s_scm_frame_local_set_x, 4, 0, 0,
+                      (scm_t_subr) scm_frame_local_set_x);
+}
+
 void
 scm_init_frames (void)
 {
 #ifndef SCM_MAGIC_SNARFER
 #include "libguile/frames.x"
 #endif
+
+  scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
+                            "scm_init_frames_builtins",
+                            scm_init_frames_builtins,
+                            NULL);
 }
 
 /*

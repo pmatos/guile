@@ -1,195 +1,304 @@
-;;; Continuation-passing style (CPS) intermediate language (IL)
-
-;; Copyright (C) 2013, 2014, 2015 Free Software Foundation, Inc.
-
-;;;; This library is free software; you can redistribute it and/or
-;;;; modify it under the terms of the GNU Lesser General Public
-;;;; License as published by the Free Software Foundation; either
-;;;; version 3 of the License, or (at your option) any later version.
-;;;;
-;;;; This library is distributed in the hope that it will be useful,
-;;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-;;;; Lesser General Public License for more details.
-;;;;
-;;;; You should have received a copy of the GNU Lesser General Public
-;;;; License along with this library; if not, write to the Free Software
-;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+;;; Diagnostic checker for CPS
+;;; Copyright (C) 2014, 2015 Free Software Foundation, Inc.
+;;;
+;;; This library is free software: you can redistribute it and/or modify
+;;; it under the terms of the GNU Lesser General Public License as
+;;; published by the Free Software Foundation, either version 3 of the
+;;; License, or (at your option) any later version.
+;;; 
+;;; This library is distributed in the hope that it will be useful, but
+;;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;; Lesser General Public License for more details.
+;;; 
+;;; You should have received a copy of the GNU Lesser General Public
+;;; License along with this program.  If not, see
+;;; <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 ;;;
+;;; A routine to detect invalid CPS.
 ;;;
 ;;; Code:
 
 (define-module (language cps verify)
   #:use-module (ice-9 match)
-  #:use-module (srfi srfi-26)
   #:use-module (language cps)
-  #:export (verify-cps))
+  #:use-module (language cps utils)
+  #:use-module (language cps intmap)
+  #:use-module (language cps intset)
+  #:use-module (language cps primitives)
+  #:use-module (srfi srfi-11)
+  #:export (verify))
 
-(define (verify-cps fun)
-  (define seen-labels (make-hash-table))
-  (define seen-vars (make-hash-table))
+(define (intset-pop set)
+  (match (intset-next set)
+    (#f (values set #f))
+    (i (values (intset-remove set i) i))))
 
-  (define (add sym seen env)
-    (when (hashq-ref seen sym)
-      (error "duplicate gensym" sym))
-    (hashq-set! seen sym #t)
-    (cons sym env))
+(define-syntax-rule (make-worklist-folder* seed ...)
+  (lambda (f worklist seed ...)
+    (let lp ((worklist worklist) (seed seed) ...)
+      (call-with-values (lambda () (intset-pop worklist))
+        (lambda (worklist i)
+          (if i
+              (call-with-values (lambda () (f i seed ...))
+                (lambda (i* seed ...)
+                  (let add ((i* i*) (worklist worklist))
+                    (match i*
+                      (() (lp worklist seed ...))
+                      ((i . i*) (add i* (intset-add worklist i)))))))
+              (values seed ...)))))))
 
-  (define (add-env new seen env)
-    (if (null? new)
-        env
-        (add-env (cdr new) seen (add (car new) seen env))))
+(define worklist-fold*
+  (case-lambda
+    ((f worklist seed)
+     ((make-worklist-folder* seed) f worklist seed))))
 
-  (define (add-vars new env)
-    (unless (and-map exact-integer? new)
-      (error "bad vars" new))
-    (add-env new seen-vars env))
+(define (check-distinct-vars conts)
+  (define (adjoin-def var seen)
+    (when (intset-ref seen var)
+      (error "duplicate var name" seen var))
+    (intset-add seen var))
+  (intmap-fold
+   (lambda (label cont seen)
+     (match (intmap-ref conts label)
+       (($ $kargs names vars ($ $continue k src exp))
+        (fold1 adjoin-def vars seen))
+       (($ $kfun src meta self tail clause)
+        (adjoin-def self seen))
+       (_ seen))
+     )
+   conts
+   empty-intset))
 
-  (define (add-labels new env)
-    (unless (and-map exact-integer? new)
-      (error "bad labels" new))
-    (add-env new seen-labels env))
+(define (compute-available-definitions conts kfun)
+  "Compute and return a map of LABEL->VAR..., where VAR... are the
+definitions that are available at LABEL."
+  (define (adjoin-def var defs)
+    (when (intset-ref defs var)
+      (error "var already present in defs" defs var))
+    (intset-add defs var))
 
-  (define (check-ref sym seen env)
-    (cond
-     ((not (hashq-ref seen sym))
-      (error "unbound lexical" sym))
-     ((not (memq sym env))
-      (error "displaced lexical" sym))))
+  (define (propagate defs succ out)
+    (let* ((in (intmap-ref defs succ (lambda (_) #f)))
+           (in* (if in (intset-intersect in out) out)))
+      (if (eq? in in*)
+          (values '() defs)
+          (values (list succ)
+                  (intmap-add defs succ in* (lambda (old new) new))))))
 
-  (define (check-label sym env)
-    (check-ref sym seen-labels env))
+  (define (visit-cont label defs)
+    (let ((in (intmap-ref defs label)))
+      (define (propagate0 out)
+        (values '() defs))
+      (define (propagate1 succ out)
+        (propagate defs succ out))
+      (define (propagate2 succ0 succ1 out)
+        (let*-values (((changed0 defs) (propagate defs succ0 out))
+                      ((changed1 defs) (propagate defs succ1 out)))
+          (values (append changed0 changed1) defs)))
 
-  (define (check-var sym env)
-    (check-ref sym seen-vars env))
+      (match (intmap-ref conts label)
+        (($ $kargs names vars ($ $continue k src exp))
+         (let ((out (fold1 adjoin-def vars in)))
+           (match exp
+             (($ $branch kt) (propagate2 k kt out))
+             (($ $prompt escape? tag handler) (propagate2 k handler out))
+             (_ (propagate1 k out)))))
+        (($ $kreceive arity k)
+         (propagate1 k in))
+        (($ $kfun src meta self tail clause)
+         (let ((out (adjoin-def self in)))
+           (if clause
+               (propagate1 clause out)
+               (propagate0 out))))
+        (($ $kclause arity kbody kalt)
+         (if kalt
+             (propagate2 kbody kalt in)
+             (propagate1 kbody in)))
+        (($ $ktail) (propagate0 in)))))
 
-  (define (check-src src)
-    (if (and src (not (and (list? src) (and-map pair? src)
-                           (and-map symbol? (map car src)))))
-        (error "bad src")))
+  (worklist-fold* visit-cont
+                  (intset kfun)
+                  (intmap-add empty-intmap kfun empty-intset)))
 
-  (define (visit-cont-body cont k-env v-env)
-    (match cont
-      (($ $kreceive ($ $arity ((? symbol?) ...) () (or #f (? symbol?)) () #f) k)
-       (check-label k k-env))
-      (($ $kargs (name ...) (sym ...) body)
-       (unless (= (length name) (length sym))
-         (error "name and sym lengths don't match" name sym))
-       (visit-term body k-env (add-vars sym v-env)))
-      (_ 
-       ;; $kclause, $kfun, and $ktail are only ever seen in $fun.
-       (error "unexpected cont body" cont))))
+(define (intmap-for-each f map)
+  (intmap-fold (lambda (k v seed) (f k v) seed) map *unspecified*))
 
-  (define (visit-clause clause k-env v-env)
-    (match clause
-      (($ $cont kclause
-          ($ $kclause 
-             ($ $arity
-                ((? symbol? req) ...)
-                ((? symbol? opt) ...)
-                (and rest (or #f (? symbol?)))
-                (((? keyword? kw) (? symbol? kwname) kwsym) ...)
-                (or #f #t))
-             ($ $cont kbody (and body ($ $kargs names syms _)))
-             alternate))
-       (for-each (lambda (sym)
-                   (unless (memq sym syms)
-                     (error "bad keyword sym" sym)))
-                 kwsym)
-       ;; FIXME: It is technically possible for kw syms to alias other
-       ;; syms.
-       (unless (equal? (append req opt (if rest (list rest) '()) kwname)
-                       names)
-         (error "clause body names do not match arity names" exp))
-       (let ((k-env (add-labels (list kclause kbody) k-env)))
-         (visit-cont-body body k-env v-env))
-       (when alternate
-         (visit-clause alternate k-env v-env)))
-      (_
-       (error "unexpected clause" clause))))
+(define (check-valid-var-uses conts kfun)
+  (define (adjoin-def var defs) (intset-add defs var))
+  (let visit-fun ((kfun kfun) (free empty-intset) (first-order empty-intset))
+    (define (visit-exp exp bound first-order)
+      (define (check-use var)
+        (unless (intset-ref bound var)
+          (error "unbound var" var)))
+      (define (visit-first-order kfun)
+        (if (intset-ref first-order kfun)
+            first-order
+            (visit-fun kfun empty-intset (intset-add first-order kfun))))
+      (match exp
+        ((or ($ $const) ($ $prim)) first-order)
+        ;; todo: $closure
+        (($ $fun kfun)
+         (visit-fun kfun bound first-order))
+        (($ $closure kfun)
+         (visit-first-order kfun))
+        (($ $rec names vars (($ $fun kfuns) ...))
+         (let ((bound (fold1 adjoin-def vars bound)))
+           (fold1 (lambda (kfun first-order)
+                   (visit-fun kfun bound first-order))
+                  kfuns first-order)))
+        (($ $values args)
+         (for-each check-use args)
+         first-order)
+        (($ $call proc args)
+         (check-use proc)
+         (for-each check-use args)
+         first-order)
+        (($ $callk kfun proc args)
+         (check-use proc)
+         (for-each check-use args)
+         (visit-first-order kfun))
+        (($ $branch kt ($ $values (arg)))
+         (check-use arg)
+         first-order)
+        (($ $branch kt ($ $primcall name args))
+         (for-each check-use args)
+         first-order)
+        (($ $primcall name args)
+         (for-each check-use args)
+         first-order)
+        (($ $prompt escape? tag handler)
+         (check-use tag)
+         first-order)))
+    (intmap-fold
+     (lambda (label bound first-order)
+       (let ((bound (intset-union free bound)))
+         (match (intmap-ref conts label)
+           (($ $kargs names vars ($ $continue k src exp))
+            (visit-exp exp (fold1 adjoin-def vars bound) first-order))
+           (_ first-order))))
+     (compute-available-definitions conts kfun)
+     first-order)))
 
-  (define (visit-entry entry k-env v-env)
-    (match entry
-      (($ $cont kbody
-          ($ $kfun src meta self ($ $cont ktail ($ $ktail)) clause))
-       (when (and meta (not (and (list? meta) (and-map pair? meta))))
-         (error "meta should be alist" meta))
-       (check-src src)
-       ;; Reset the continuation environment, because Guile's
-       ;; continuations are local.
-       (let ((v-env (add-vars (list self) v-env))
-             (k-env (add-labels (list ktail) '())))
-         (when clause
-           (visit-clause clause k-env v-env))))
-      (_ (error "unexpected $kfun" entry))))
+(define (check-label-partition conts kfun)
+  ;; A continuation can only belong to one function.
+  (intmap-fold
+   (lambda (kfun body seen)
+     (intset-fold
+      (lambda (label seen)
+        (intmap-add seen label kfun
+                    (lambda (old new)
+                      (error "label used by two functions" label old new))))
+      body
+      seen))
+   (compute-reachable-functions conts kfun)
+   empty-intmap))
 
-  (define (visit-fun fun k-env v-env)
-    (match fun
-      (($ $fun entry)
-       (visit-entry entry '() v-env))
-      (_
-       (error "unexpected $fun" fun))))
+(define (compute-reachable-labels conts kfun)
+  (intmap-fold (lambda (kfun body seen) (intset-union seen body))
+               (compute-reachable-functions conts kfun)
+               empty-intset))
 
-  (define (visit-expression exp k-env v-env)
+(define (check-arities conts kfun)
+  (define (check-arity exp cont)
+    (define (assert-unary)
+      (match cont
+        (($ $kargs (_) (_)) #t)
+        (_ (error "expected unary continuation" cont))))
+    (define (assert-nullary)
+      (match cont
+        (($ $kargs () ()) #t)
+        (_ (error "expected unary continuation" cont))))
+    (define (assert-n-ary n)
+      (match cont
+        (($ $kargs names vars)
+         (unless (= (length vars) n)
+           (error "expected n-ary continuation" n cont)))
+        (_ (error "expected $kargs continuation" cont))))
+    (define (assert-kreceive-or-ktail)
+      (match cont
+        ((or ($ $kreceive) ($ $ktail)) #t)
+        (_ (error "expected $kreceive or $ktail continuation" cont))))
     (match exp
-      (($ $const val)
-       #t)
-      (($ $prim (? symbol? name))
-       #t)
-      (($ $closure kfun n)
-       #t)
-      (($ $fun)
-       (visit-fun exp k-env v-env))
-      (($ $rec (name ...) (sym ...) (fun ...))
-       (unless (= (length name) (length sym) (length fun))
-         (error "letrec syms, names, and funs not same length" term))
-       ;; FIXME: syms added in two places (here in $rec versus also in
-       ;; target $kargs)
-       (let ((v-env (add-vars sym v-env)))
-         (for-each (cut visit-fun <> k-env v-env) fun)))
-      (($ $call proc (arg ...))
-       (check-var proc v-env)
-       (for-each (cut check-var <> v-env) arg))
-      (($ $callk k* proc (arg ...))
-       ;; We don't check that k* is in scope; it's actually inside some
-       ;; other function, probably.  We rely on the transformation that
-       ;; introduces the $callk to be correct, and the linker to resolve
-       ;; the reference.
-       (check-var proc v-env)
-       (for-each (cut check-var <> v-env) arg))
-      (($ $branch kt ($ $primcall (? symbol? name) (arg ...)))
-       (check-var kt k-env)
-       (for-each (cut check-var <> v-env) arg))
-      (($ $branch kt ($ $values (arg ...)))
-       (check-var kt k-env)
-       (for-each (cut check-var <> v-env) arg))
-      (($ $primcall (? symbol? name) (arg ...))
-       (for-each (cut check-var <> v-env) arg))
-      (($ $values (arg ...))
-       (for-each (cut check-var <> v-env) arg))
+      ((or ($ $const) ($ $prim) ($ $closure) ($ $fun))
+       (assert-unary))
+      (($ $rec names vars funs)
+       (unless (= (length names) (length vars) (length funs))
+         (error "invalid $rec" exp))
+       (assert-n-ary (length names))
+       (match cont
+         (($ $kargs names vars*)
+          (unless (equal? vars* vars)
+            (error "bound variable mismatch" vars vars*)))))
+      (($ $values args)
+       (match cont
+         (($ $ktail) #t)
+         (_ (assert-n-ary (length args)))))
+      (($ $call proc args)
+       (assert-kreceive-or-ktail))
+      (($ $callk k proc args)
+       (assert-kreceive-or-ktail))
+      (($ $branch kt exp)
+       (assert-nullary)
+       (match (intmap-ref conts kt)
+         (($ $kargs () ()) #t)
+         (cont (error "bad kt" cont))))
+      (($ $primcall name args)
+       (match cont
+         (($ $kargs names)
+          (match (prim-arity name)
+            ((out . in)
+             (unless (= in (length args))
+               (error "bad arity to primcall" name args in))
+             (unless (= out (length names))
+               (error "bad return arity from primcall" name names out)))))
+         (($ $kreceive)
+          (when (false-if-exception (prim-arity name))
+            (error "primitive should continue to $kargs, not $kreceive" name)))
+         (($ $ktail)
+          (error "primitive should continue to $kargs, not $ktail" name))))
       (($ $prompt escape? tag handler)
-       (unless (boolean? escape?) (error "escape? should be boolean" escape?))
-       (check-var tag v-env)
-       (check-label handler k-env))
-      (_
-       (error "unexpected expression" exp))))
+       (assert-nullary)
+       (match (intmap-ref conts handler)
+         (($ $kreceive) #t)
+         (cont (error "bad handler" cont))))))
+  (let ((reachable (compute-reachable-labels conts kfun)))
+    (intmap-for-each
+     (lambda (label cont)
+       (when (intset-ref reachable label)
+         (match cont
+           (($ $kargs names vars ($ $continue k src exp))
+            (unless (= (length names) (length vars))
+              (error "broken $kargs" label names vars))
+            (check-arity exp (intmap-ref conts k)))
+           (_ #t))))
+     conts)))
 
-  (define (visit-term term k-env v-env)
-    (match term
-      (($ $letk (($ $cont k cont) ...) body)
-       (let ((k-env (add-labels k k-env)))
-         (for-each (cut visit-cont-body <> k-env v-env) cont)
-         (visit-term body k-env v-env)))
+(define (check-functions-bound-once conts kfun)
+  (let ((reachable (compute-reachable-labels conts kfun)))
+    (define (add-fun fun functions)
+      (when (intset-ref functions fun)
+        (error "function already bound" fun))
+      (intset-add functions fun))
+    (intmap-fold
+     (lambda (label cont functions)
+       (if (intset-ref reachable label)
+           (match cont
+             (($ $kargs _ _ ($ $continue _ _ ($ $fun kfun)))
+              (add-fun kfun functions))
+             (($ $kargs _ _ ($ $continue _ _ ($ $rec _ _ (($ $fun kfuns) ...))))
+              (fold1 add-fun kfuns functions))
+             (_ functions))
+           functions))
+     conts
+     empty-intset)))
 
-      (($ $continue k src exp)
-       (check-label k k-env)
-       (check-src src)
-       (visit-expression exp k-env v-env))
-
-      (_
-       (error "unexpected term" term))))
-
-  (visit-entry fun '() '())
-  fun)
+(define (verify conts)
+  (check-distinct-vars conts)
+  (check-label-partition conts 0)
+  (check-valid-var-uses conts 0)
+  (check-arities conts 0)
+  (check-functions-bound-once conts 0)
+  conts)

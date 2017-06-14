@@ -1,6 +1,5 @@
-/* Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2006,
- *   2007, 2008, 2009, 2010, 2011, 2012, 2013,
- *   2014, 2015 Free Software Foundation, Inc.
+/* Copyright (C) 1995-2001, 2003-2004, 2006-2016
+ * Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -28,19 +27,20 @@
 #  include <config.h>
 #endif
 
+#include <assert.h>
 #include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>  /* for chsize on mingw */
 #include <assert.h>
 #include <iconv.h>
+#include <poll.h>
 #include <uniconv.h>
 #include <unistr.h>
 #include <striconveh.h>
 
-#include <assert.h>
-
 #include "libguile/_scm.h"
 #include "libguile/async.h"
+#include "libguile/atomics-internal.h"
 #include "libguile/deprecation.h"
 #include "libguile/eval.h"
 #include "libguile/fports.h"  /* direct access for seek and truncate */
@@ -51,7 +51,6 @@
 
 #include "libguile/keywords.h"
 #include "libguile/hashtab.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/mallocs.h"
 #include "libguile/validate.h"
@@ -91,261 +90,304 @@
 #endif
 
 
-/* Port encodings are case-insensitive ASCII strings.  */
-static char
-ascii_toupper (char c)
-{
-  return (c < 'a' || c > 'z') ? c : ('A' + (c - 'a'));
-}
 
-/* It is only necessary to use this function on encodings that come from
-   the user and have not been canonicalized yet.  Encodings that are set
-   on ports or in the default encoding fluid are in upper-case, and can
-   be compared with strcmp.  */
-static int
-encoding_matches (const char *enc, const char *upper)
-{
-  if (!enc)
-    enc = "ISO-8859-1";
+/* We need these symbols early, before (ice-9 ports) loads in the
+   snarfed definitions, so we can't use SCM_SYMBOL.  */
+static SCM sym_UTF_8;
+static SCM sym_ISO_8859_1;
+static SCM sym_UTF_16;
+static SCM sym_UTF_16LE;
+static SCM sym_UTF_16BE;
+static SCM sym_UTF_32;
+static SCM sym_UTF_32LE;
+static SCM sym_UTF_32BE;
 
-  while (*enc)
-    if (ascii_toupper (*enc++) != *upper++)
-      return 0;
+/* Port conversion strategies.  */
+static SCM sym_error;
+static SCM sym_substitute;
+static SCM sym_escape;
 
-  return !*upper;
-}
+/* See scm_port_auxiliary_write_buffer and scm_c_write.  */
+static const size_t AUXILIARY_WRITE_BUFFER_SIZE = 256;
 
-static char*
-canonicalize_encoding (const char *enc)
-{
-  char *ret;
-  int i;
+/* Maximum number of bytes in a UTF-8 sequence.  */
+static const size_t UTF8_BUFFER_SIZE = 4;
 
-  if (!enc)
-    return "ISO-8859-1";
-
-  ret = scm_gc_strdup (enc, "port");
-
-  for (i = 0; ret[i]; i++)
-    {
-      if (ret[i] > 127)
-        /* Restrict to ASCII.  */
-        scm_misc_error (NULL, "invalid character encoding ~s",
-                        scm_list_1 (scm_from_latin1_string (enc)));
-      else
-        ret[i] = ascii_toupper (ret[i]);
-    }
-
-  return ret;
-}
+/* Maximum number of codepoints to write an escape sequence.  */
+static const size_t ESCAPE_BUFFER_SIZE = 9;
 
 
 
-/* The port kind table --- a dynamically resized array of port types.  */
 
+/* We have to serialize operations on any given iconv descriptor.  */
+static scm_i_pthread_mutex_t iconv_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
 
-/* scm_ptobs scm_numptob
- * implement a dynamically resized array of ptob records.
- * Indexes into this table are used when generating type
- * tags for smobjects (if you know a tag you can get an index and conversely).
- */
-static scm_t_ptob_descriptor **scm_ptobs = NULL;
-static long scm_numptob = 0; /* Number of port types.  */
-static long scm_ptobs_size = 0; /* Number of slots in the port type
-                                   table.  */
-static scm_i_pthread_mutex_t scm_ptobs_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
+
 
-long
-scm_c_num_port_types (void)
+/* See Unicode 8.0 section 5.22, "Best Practice for U+FFFD
+   Substitution".  */
+static const scm_t_wchar UNICODE_REPLACEMENT_CHARACTER = 0xFFFD;
+
+
+
+static void
+release_port (SCM port)
 {
-  long ret;
-  
-  scm_i_pthread_mutex_lock (&scm_ptobs_lock);
-  ret = scm_numptob;
-  scm_i_pthread_mutex_unlock (&scm_ptobs_lock);
+  scm_t_port *pt = SCM_PORT (port);
 
-  return ret;
-}
-
-scm_t_ptob_descriptor*
-scm_c_port_type_ref (long ptobnum)
-{
-  scm_t_ptob_descriptor *ret = NULL;
-
-  scm_i_pthread_mutex_lock (&scm_ptobs_lock);
-
-  if (0 <= ptobnum && ptobnum < scm_numptob)
-    ret = scm_ptobs[ptobnum];
-
-  scm_i_pthread_mutex_unlock (&scm_ptobs_lock);
-
-  if (!ret)
-    scm_out_of_range ("scm_c_port_type_ref", scm_from_long (ptobnum));
-
-  return ret;
-}
-
-long
-scm_c_port_type_add_x (scm_t_ptob_descriptor *desc)
-{
-  long ret = -1;
-
-  scm_i_pthread_mutex_lock (&scm_ptobs_lock);
-  
-  if (scm_numptob + 1 < SCM_I_MAX_PORT_TYPE_COUNT)
+  /* It's possible for two close-port invocations to race, and since
+     close-port is defined to be idempotent we need to avoid
+     decrementing the refcount past 0.  The normal case is that it's
+     open with a refcount of 1 and we're going to change it to 0.
+     Otherwise if the refcount is higher we just subtract 1 and we're
+     done.  However if the current refcount is 0 then the port has been
+     closed or is closing and we just return.  */
+  scm_t_uint32 cur = 1, next = 0;
+  while (!scm_atomic_compare_and_swap_uint32 (&pt->refcount, &cur, next))
     {
-      if (scm_numptob == scm_ptobs_size)
-        {
-          unsigned long old_size = scm_ptobs_size;
-          scm_t_ptob_descriptor **old_ptobs = scm_ptobs;
-      
-          /* Currently there are only 9 predefined port types, so one
-             resize will cover it.  */
-          scm_ptobs_size = old_size + 10;
-
-          if (scm_ptobs_size >= SCM_I_MAX_PORT_TYPE_COUNT)
-            scm_ptobs_size = SCM_I_MAX_PORT_TYPE_COUNT;
-
-          scm_ptobs = scm_gc_malloc (sizeof (*scm_ptobs) * scm_ptobs_size,
-                                     "scm_ptobs");
-
-          memcpy (scm_ptobs, old_ptobs, sizeof (*scm_ptobs) * scm_numptob);
-        }
-
-      ret = scm_numptob++;
-      scm_ptobs[ret] = desc;
+      if (cur == 0)
+        return;
+      next = cur - 1;
     }
-  
-  scm_i_pthread_mutex_unlock (&scm_ptobs_lock);
+  if (cur > 1)
+    return;
 
-  if (ret < 0)
-    scm_out_of_range ("scm_c_port_type_add_x", scm_from_long (scm_numptob));
+  /* FIXME: `catch' around the close call?  It could throw an exception,
+     and in that case we'd leak the iconv descriptors, if any.  */
+  if (SCM_PORT_TYPE (port)->close)
+    SCM_PORT_TYPE (port)->close (port);
 
-  return ret;
+  scm_i_pthread_mutex_lock (&iconv_lock);
+  pt = SCM_PORT (port);
+  if (scm_is_true (pt->precise_encoding))
+    {
+      if (pt->input_cd != (iconv_t) -1)
+        iconv_close (pt->input_cd);
+      if (pt->output_cd != (iconv_t) -1)
+        iconv_close (pt->output_cd);
+      pt->precise_encoding = SCM_BOOL_F;
+      pt->input_cd = pt->output_cd = (iconv_t) -1;
+    }
+  scm_i_pthread_mutex_unlock (&iconv_lock);
 }
-
-/*
- * We choose to use an interface similar to the smob interface with
- * fill_input and write as standard fields, passed to the port
- * type constructor, and optional fields set by setters.
- */
 
 static void
-flush_port_default (SCM port SCM_UNUSED)
+scm_dynwind_acquire_port (SCM port)
 {
+  scm_t_port *pt = SCM_PORT (port);
+  /* We're acquiring a lease on the port so that we only close it when
+     no one is using it.  The normal case is that it's open with a
+     refcount of 1 and we're going to push it to 2.  Otherwise perhaps
+     there is someone else using it; that's fine, we just add our
+     refcount.  However if the current refcount is 0 then the port has
+     been closed or is closing and we must throw an error.  */
+  scm_t_uint32 cur = 1, next = 2;
+  while (!scm_atomic_compare_and_swap_uint32 (&pt->refcount, &cur, next))
+    {
+      if (cur == 0)
+        scm_wrong_type_arg_msg (NULL, 0, port, "open port");
+      next = cur + 1;
+    }
+  scm_dynwind_unwind_handler_with_scm (release_port, port,
+                                       SCM_F_WIND_EXPLICITLY);
 }
 
-static void
-end_input_default (SCM port SCM_UNUSED, int offset SCM_UNUSED)
+
+
+static SCM trampoline_to_c_read_subr;
+static SCM trampoline_to_c_write_subr;
+
+static int
+default_random_access_p (SCM port)
 {
+  return SCM_PORT_TYPE (port)->seek != NULL;
 }
 
-scm_t_bits
+static int
+default_read_wait_fd (SCM port)
+{
+  scm_misc_error ("read_wait_fd", "unimplemented", SCM_EOL);
+}
+
+static int
+default_write_wait_fd (SCM port)
+{
+  scm_misc_error ("write_wait_fd", "unimplemented", SCM_EOL);
+}
+
+scm_t_port_type *
 scm_make_port_type (char *name,
-		    int (*fill_input) (SCM port),
-		    void (*write) (SCM port, const void *data, size_t size))
+                    size_t (*read) (SCM port, SCM dst, size_t start,
+                                    size_t count),
+                    size_t (*write) (SCM port, SCM src, size_t start,
+                                     size_t count))
 {
-  scm_t_ptob_descriptor *desc;
-  long ptobnum;
+  scm_t_port_type *desc;
 
   desc = scm_gc_malloc_pointerless (sizeof (*desc), "port-type");
   memset (desc, 0, sizeof (*desc));
 
   desc->name = name;
   desc->print = scm_port_print;
-  desc->write = write;
-  desc->flush = flush_port_default;
-  desc->end_input = end_input_default;
-  desc->fill_input = fill_input;
+  desc->c_read = read;
+  desc->c_write = write;
+  desc->scm_read = read ? trampoline_to_c_read_subr : SCM_BOOL_F;
+  desc->scm_write = write ? trampoline_to_c_write_subr : SCM_BOOL_F;
+  desc->read_wait_fd = default_read_wait_fd;
+  desc->write_wait_fd = default_write_wait_fd;
+  desc->random_access_p = default_random_access_p;
+  scm_make_port_classes (desc);
 
-  ptobnum = scm_c_port_type_add_x (desc);
+  return desc;
+}
 
-  /* Make a class object if GOOPS is present.  */
-  if (SCM_UNPACK (scm_i_port_class[0]) != 0)
-    scm_make_port_classes (ptobnum, name);
+static SCM
+trampoline_to_c_read (SCM port, SCM dst, SCM start, SCM count)
+#define FUNC_NAME "port-read"
+{
+  size_t c_start, c_count, ret;
 
-  return scm_tc7_port + ptobnum * 256;
+  SCM_VALIDATE_OPPORT (1, port);
+  SCM_VALIDATE_BYTEVECTOR (2, dst);
+  c_start = scm_to_size_t (start);
+  c_count = scm_to_size_t (count);
+  SCM_ASSERT_RANGE (3, start, c_start <= SCM_BYTEVECTOR_LENGTH (dst));
+  SCM_ASSERT_RANGE (4, count, c_count <= SCM_BYTEVECTOR_LENGTH (dst) - c_start);
+
+  scm_dynwind_begin (0);
+  scm_dynwind_acquire_port (port);
+  ret = SCM_PORT_TYPE (port)->c_read (port, dst, c_start, c_count);
+  scm_dynwind_end ();
+
+  return ret == (size_t) -1 ? SCM_BOOL_F : scm_from_size_t (ret);
+}
+#undef FUNC_NAME
+
+static size_t
+trampoline_to_scm_read (SCM port, SCM dst, size_t start, size_t count)
+{
+  SCM ret = scm_call_4 (SCM_PORT_TYPE (port)->scm_read, port, dst,
+                        scm_from_size_t (start), scm_from_size_t (count));
+  return scm_is_true (ret) ? scm_to_size_t (ret) : (size_t) -1;
+}
+
+static SCM
+trampoline_to_c_write (SCM port, SCM src, SCM start, SCM count)
+#define FUNC_NAME "port-write"
+{
+  size_t c_start, c_count, ret;
+
+  SCM_VALIDATE_OPPORT (1, port);
+  SCM_VALIDATE_BYTEVECTOR (2, src);
+  c_start = scm_to_size_t (start);
+  c_count = scm_to_size_t (count);
+  SCM_ASSERT_RANGE (3, start, c_start <= SCM_BYTEVECTOR_LENGTH (src));
+  SCM_ASSERT_RANGE (4, count, c_count <= SCM_BYTEVECTOR_LENGTH (src) - c_start);
+
+  scm_dynwind_begin (0);
+  scm_dynwind_acquire_port (port);
+  ret = SCM_PORT_TYPE (port)->c_write (port, src, c_start, c_count);
+  scm_dynwind_end ();
+
+  return ret == (size_t) -1 ? SCM_BOOL_F : scm_from_size_t (ret);
+}
+#undef FUNC_NAME
+
+static size_t
+trampoline_to_scm_write (SCM port, SCM src, size_t start, size_t count)
+{
+  SCM ret = scm_call_4 (SCM_PORT_TYPE (port)->scm_write, port, src,
+                        scm_from_size_t (start), scm_from_size_t (count));
+  return scm_is_true (ret) ? scm_to_size_t (ret) : (size_t) -1;
 }
 
 void
-scm_set_port_mark (scm_t_bits tc, SCM (*mark) (SCM))
+scm_set_port_scm_read (scm_t_port_type *ptob, SCM read)
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->mark = mark;
+  ptob->scm_read = read;
+  ptob->c_read = trampoline_to_scm_read;
 }
 
 void
-scm_set_port_free (scm_t_bits tc, size_t (*free) (SCM))
+scm_set_port_scm_write (scm_t_port_type *ptob, SCM write)
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->free = free;
+  ptob->scm_write = write;
+  ptob->c_write = trampoline_to_scm_write;
 }
 
 void
-scm_set_port_print (scm_t_bits tc, int (*print) (SCM exp, SCM port,
-                                                 scm_print_state *pstate))
+scm_set_port_read_wait_fd (scm_t_port_type *ptob, int (*get_fd) (SCM))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->print = print;
+  ptob->read_wait_fd = get_fd;
 }
 
 void
-scm_set_port_equalp (scm_t_bits tc, SCM (*equalp) (SCM, SCM))
+scm_set_port_write_wait_fd (scm_t_port_type *ptob, int (*get_fd) (SCM))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->equalp = equalp;
+  ptob->write_wait_fd = get_fd;
 }
 
 void
-scm_set_port_close (scm_t_bits tc, int (*close) (SCM))
+scm_set_port_print (scm_t_port_type *ptob,
+                    int (*print) (SCM exp, SCM port, scm_print_state *pstate))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->close = close;
+  ptob->print = print;
 }
 
 void
-scm_set_port_flush (scm_t_bits tc, void (*flush) (SCM port))
+scm_set_port_close (scm_t_port_type *ptob, void (*close) (SCM))
 {
-  scm_t_ptob_descriptor *ptob = scm_c_port_type_ref (SCM_TC2PTOBNUM (tc));
-  ptob->flush = flush;
-  ptob->flags |= SCM_PORT_TYPE_HAS_FLUSH;
+  ptob->close = close;
 }
 
 void
-scm_set_port_end_input (scm_t_bits tc, void (*end_input) (SCM port, int offset))
+scm_set_port_needs_close_on_gc (scm_t_port_type *ptob, int needs_close_p)
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->end_input = end_input;
+  if (needs_close_p)
+    ptob->flags |= SCM_PORT_TYPE_NEEDS_CLOSE_ON_GC;
+  else
+    ptob->flags &= ~SCM_PORT_TYPE_NEEDS_CLOSE_ON_GC;
 }
 
 void
-scm_set_port_seek (scm_t_bits tc, scm_t_off (*seek) (SCM, scm_t_off, int))
+scm_set_port_seek (scm_t_port_type *ptob,
+                   scm_t_off (*seek) (SCM, scm_t_off, int))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->seek = seek;
+  ptob->seek = seek;
 }
 
 void
-scm_set_port_truncate (scm_t_bits tc, void (*truncate) (SCM, scm_t_off))
+scm_set_port_truncate (scm_t_port_type *ptob, void (*truncate) (SCM, scm_t_off))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->truncate = truncate;
+  ptob->truncate = truncate;
 }
 
 void
-scm_set_port_input_waiting (scm_t_bits tc, int (*input_waiting) (SCM))
+scm_set_port_input_waiting (scm_t_port_type *ptob, int (*input_waiting) (SCM))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->input_waiting = input_waiting;
+  ptob->input_waiting = input_waiting;
 }
 
 void
-scm_set_port_setvbuf (scm_t_bits tc, void (*setvbuf) (SCM, long, long))
+scm_set_port_random_access_p (scm_t_port_type *ptob,
+                              int (*random_access_p) (SCM))
 {
-  scm_c_port_type_ref (SCM_TC2PTOBNUM (tc))->setvbuf = setvbuf;
+  ptob->random_access_p = random_access_p;
 }
 
-static void
-scm_i_set_pending_eof (SCM port)
+void
+scm_set_port_get_natural_buffer_sizes
+  (scm_t_port_type *ptob,
+   void (*get_natural_buffer_sizes) (SCM, size_t *, size_t *))
 {
-  SCM_PORT_GET_INTERNAL (port)->pending_eof = 1;
+  ptob->get_natural_buffer_sizes = get_natural_buffer_sizes;
 }
 
 static void
 scm_i_clear_pending_eof (SCM port)
 {
-  SCM_PORT_GET_INTERNAL (port)->pending_eof = 0;
+  scm_port_buffer_set_has_eof_p (SCM_PORT (port)->read_buf,
+                                 SCM_BOOL_F);
 }
 
 SCM_DEFINE (scm_i_port_property, "%port-property", 2, 0, 0,
@@ -353,15 +395,9 @@ SCM_DEFINE (scm_i_port_property, "%port-property", 2, 0, 0,
             "Return the property of @var{port} associated with @var{key}.")
 #define FUNC_NAME s_scm_i_port_property
 {
-  scm_i_pthread_mutex_t *lock;
-  SCM result;
-
   SCM_VALIDATE_OPPORT (1, port);
-  scm_c_lock_port (port, &lock);
-  result = scm_assq_ref (SCM_PORT_GET_INTERNAL (port)->alist, key);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  return result;
+
+  return scm_assq_ref (SCM_PORT (port)->alist, key);
 }
 #undef FUNC_NAME
 
@@ -370,15 +406,13 @@ SCM_DEFINE (scm_i_set_port_property_x, "%set-port-property!", 3, 0, 0,
             "Set the property of @var{port} associated with @var{key} to @var{value}.")
 #define FUNC_NAME s_scm_i_set_port_property_x
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_t_port_internal *pti;
+  scm_t_port *pt;
 
   SCM_VALIDATE_OPPORT (1, port);
-  scm_c_lock_port (port, &lock);
-  pti = SCM_PORT_GET_INTERNAL (port);
-  pti->alist = scm_assq_set_x (pti->alist, key, value);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
+
+  pt = SCM_PORT (port);
+  pt->alist = scm_assq_set_x (pt->alist, key, value);
+
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -457,14 +491,9 @@ SCM_DEFINE (scm_current_load_port, "current-load-port", 0, 0, 0,
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_set_current_input_port, "set-current-input-port", 1, 0, 0,
-           (SCM port),
-	    "@deffnx {Scheme Procedure} set-current-output-port port\n"
-	    "@deffnx {Scheme Procedure} set-current-error-port port\n"
-	    "Change the ports returned by @code{current-input-port},\n"
-	    "@code{current-output-port} and @code{current-error-port}, respectively,\n"
-	    "so that they use the supplied @var{port} for input or output.")
-#define FUNC_NAME s_scm_set_current_input_port
+SCM
+scm_set_current_input_port (SCM port)
+#define FUNC_NAME "set-current-input-port"
 {
   SCM oinp = scm_fluid_ref (cur_inport_fluid);
   SCM_VALIDATE_OPINPORT (1, port);
@@ -473,11 +502,9 @@ SCM_DEFINE (scm_set_current_input_port, "set-current-input-port", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-
-SCM_DEFINE (scm_set_current_output_port, "set-current-output-port", 1, 0, 0,
-	    (SCM port),
-	    "Set the current default output port to @var{port}.")
-#define FUNC_NAME s_scm_set_current_output_port
+SCM
+scm_set_current_output_port (SCM port)
+#define FUNC_NAME "scm-set-current-output-port"
 {
   SCM ooutp = scm_fluid_ref (cur_outport_fluid);
   port = SCM_COERCE_OUTPORT (port);
@@ -487,11 +514,9 @@ SCM_DEFINE (scm_set_current_output_port, "set-current-output-port", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-
-SCM_DEFINE (scm_set_current_error_port, "set-current-error-port", 1, 0, 0,
-	    (SCM port),
-	    "Set the current default error port to @var{port}.")
-#define FUNC_NAME s_scm_set_current_error_port
+SCM
+scm_set_current_error_port (SCM port)
+#define FUNC_NAME "set-current-error-port"
 {
   SCM oerrp = scm_fluid_ref (cur_errport_fluid);
   port = SCM_COERCE_OUTPORT (port);
@@ -500,7 +525,6 @@ SCM_DEFINE (scm_set_current_error_port, "set-current-error-port", 1, 0, 0,
   return oerrp;
 }
 #undef FUNC_NAME
-
 
 SCM
 scm_set_current_warning_port (SCM port)
@@ -513,7 +537,6 @@ scm_set_current_warning_port (SCM port)
   return owarnp;
 }
 #undef FUNC_NAME
-
 
 void
 scm_dynwind_current_input_port (SCM port)
@@ -553,6 +576,25 @@ scm_i_dynwind_current_load_port (SCM port)
 
 
 
+/* Port buffers.  */
+
+static SCM
+make_port_buffer (SCM port, size_t size)
+{
+  SCM ret = scm_c_make_vector (SCM_PORT_BUFFER_FIELD_COUNT, SCM_INUM0);
+
+  SCM_SIMPLE_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_BYTEVECTOR,
+                         scm_c_make_bytevector (size));
+  SCM_SIMPLE_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_POSITION,
+                         SCM_PORT (port)->position);
+  scm_port_buffer_set_has_eof_p (ret, SCM_BOOL_F);
+
+  return ret;
+}
+
+
+
+
 /* Retrieving a port's mode.  */
 
 /* Return the flags that characterize a port based on the mode
@@ -564,9 +606,8 @@ scm_i_dynwind_current_load_port (SCM port)
 static long
 scm_i_mode_bits_n (SCM modes)
 {
-  return (SCM_OPN
-	  | (scm_i_string_contains_char (modes, 'r') 
-	     || scm_i_string_contains_char (modes, '+') ? SCM_RDNG : 0)
+  return ((scm_i_string_contains_char (modes, 'r')
+	   || scm_i_string_contains_char (modes, '+') ? SCM_RDNG : 0)
 	  | (scm_i_string_contains_char (modes, 'w')
 	     || scm_i_string_contains_char (modes, 'a')
 	     || scm_i_string_contains_char (modes, '+') ? SCM_WRTNG : 0)
@@ -639,22 +680,10 @@ SCM scm_i_port_weak_set;
 
 /* Port finalization.  */
 
-struct do_free_data
-{
-  scm_t_ptob_descriptor *ptob;
-  SCM port;
-};
-
 static SCM
-do_free (void *body_data)
+do_close (void *data)
 {
-  struct do_free_data *data = body_data;
-
-  /* `close' is for explicit `close-port' by user.  `free' is for this
-     purpose: ports collected by the GC.  */
-  data->ptob->free (data->port);
-
-  return SCM_BOOL_T;
+  return scm_close_port (SCM_PACK_POINTER (data));
 }
 
 /* Finalize the object (a port) pointed to by PTR.  */
@@ -668,16 +697,9 @@ finalize_port (void *ptr, void *data)
 
   if (SCM_OPENP (port))
     {
-      struct do_free_data data;
-
-      SCM_CLR_PORT_OPEN_FLAG (port);
-
-      data.ptob = SCM_PORT_DESCRIPTOR (port);
-      data.port = port;
-
-      scm_internal_catch (SCM_BOOL_T, do_free, &data,
+      SCM_SET_PORT_FINALIZING (port);
+      scm_internal_catch (SCM_BOOL_T, do_close, ptr,
                           scm_handle_by_message_noexit, NULL);
-
       scm_gc_ports_collected++;
     }
 }
@@ -685,81 +707,92 @@ finalize_port (void *ptr, void *data)
 
 
 
+/* Default buffer size.  Used if the port type won't supply a value.  */
+static const size_t default_buffer_size = 1024;
+
+static void
+initialize_port_buffers (SCM port)
+{
+  scm_t_port *pt = SCM_PORT (port);
+  scm_t_port_type *ptob = SCM_PORT_TYPE (port);
+  size_t read_buf_size, write_buf_size;
+
+  if (SCM_CELL_WORD_0 (port) & SCM_BUF0)
+    read_buf_size = write_buf_size = 1;
+  else
+    {
+      read_buf_size = write_buf_size = default_buffer_size;
+      if (ptob->get_natural_buffer_sizes)
+        ptob->get_natural_buffer_sizes (port, &read_buf_size, &write_buf_size);
+      if (read_buf_size == 0)
+        read_buf_size = 1;
+      if (write_buf_size == 0)
+        write_buf_size = 1;
+    }
+
+  if (!SCM_INPUT_PORT_P (port))
+    read_buf_size = 1;
+  if (!SCM_OUTPUT_PORT_P (port))
+    write_buf_size = 1;
+
+  pt->read_buffering = read_buf_size;
+  pt->read_buf = make_port_buffer (port, read_buf_size);
+  pt->write_buf = make_port_buffer (port, write_buf_size);
+  pt->write_buf_aux = SCM_BOOL_F;
+}
+
 SCM
-scm_c_make_port_with_encoding (scm_t_bits tag, unsigned long mode_bits,
-                               const char *encoding,
-                               scm_t_string_failed_conversion_handler handler,
+scm_c_make_port_with_encoding (scm_t_port_type *ptob, unsigned long mode_bits,
+                               SCM encoding, SCM conversion_strategy,
                                scm_t_bits stream)
 {
   SCM ret;
-  scm_t_port *entry;
-  scm_t_port_internal *pti;
-  scm_t_ptob_descriptor *ptob;
+  scm_t_port *pt;
 
-  entry = scm_gc_typed_calloc (scm_t_port);
-  pti = scm_gc_typed_calloc (scm_t_port_internal);
-  ptob = scm_c_port_type_ref (SCM_TC2PTOBNUM (tag));
+  pt = scm_gc_typed_calloc (scm_t_port);
 
-  ret = scm_words (tag | mode_bits, 3);
-  SCM_SET_CELL_WORD_1 (ret, (scm_t_bits) entry);
-  SCM_SET_CELL_WORD_2 (ret, (scm_t_bits) ptob);
+  ret = scm_words (scm_tc7_port | mode_bits | SCM_OPN, 4);
+  SCM_SET_CELL_WORD_1 (ret, stream);
+  SCM_SET_CELL_WORD_2 (ret, (scm_t_bits) pt);
+  SCM_SET_CELL_WORD_3 (ret, (scm_t_bits) ptob);
 
-  entry->lock = scm_gc_malloc_pointerless (sizeof (*entry->lock), "port lock");
-  scm_i_pthread_mutex_init (entry->lock, scm_i_pthread_mutexattr_recursive);
+  pt->encoding = encoding;
+  pt->conversion_strategy = conversion_strategy;
+  pt->file_name = SCM_BOOL_F;
+  pt->position = scm_cons (SCM_INUM0, SCM_INUM0);
 
-  entry->internal = pti;
-  entry->file_name = SCM_BOOL_F;
-  entry->rw_active = SCM_PORT_NEITHER;
-  entry->port = ret;
-  entry->stream = stream;
+  pt->refcount = 1;
 
-  if (encoding_matches (encoding, "UTF-8"))
+  pt->at_stream_start_for_bom_read  = 1;
+  pt->at_stream_start_for_bom_write = 1;
+
+  pt->precise_encoding = SCM_BOOL_F;
+  pt->input_cd = (iconv_t) -1;
+  pt->output_cd = (iconv_t) -1;
+
+  pt->alist = SCM_EOL;
+
+  if (SCM_PORT_TYPE (ret)->flags & SCM_PORT_TYPE_NEEDS_CLOSE_ON_GC)
     {
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_UTF8;
-      entry->encoding = "UTF-8";
-    }
-  else if (encoding_matches (encoding, "ISO-8859-1"))
-    {
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_LATIN1;
-      entry->encoding = "ISO-8859-1";
-    }
-  else
-    {
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_ICONV;
-      entry->encoding = canonicalize_encoding (encoding);
+      scm_i_set_finalizer (SCM2PTR (ret), finalize_port, NULL);
+      scm_weak_set_add_x (scm_i_port_weak_set, ret);
     }
 
-  entry->ilseq_handler = handler;
-  pti->iconv_descriptors = NULL;
+  initialize_port_buffers (ret);
 
-  pti->at_stream_start_for_bom_read  = 1;
-  pti->at_stream_start_for_bom_write = 1;
-
-  pti->pending_eof = 0;
-  pti->alist = SCM_EOL;
-
-  if (SCM_PORT_DESCRIPTOR (ret)->free)
-    scm_i_set_finalizer (SCM2PTR (ret), finalize_port, NULL);
-
-  if (SCM_PORT_DESCRIPTOR (ret)->flags & SCM_PORT_TYPE_HAS_FLUSH)
-    scm_weak_set_add_x (scm_i_port_weak_set, ret);
+  pt->rw_random = ptob->random_access_p (ret);
 
   return ret;
 }
 
 SCM
-scm_c_make_port (scm_t_bits tag, unsigned long mode_bits, scm_t_bits stream)
+scm_c_make_port (scm_t_port_type *ptob,
+                 unsigned long mode_bits, scm_t_bits stream)
 {
-  return scm_c_make_port_with_encoding (tag, mode_bits,
+  return scm_c_make_port_with_encoding (ptob, mode_bits,
                                         scm_i_default_port_encoding (),
-                                        scm_i_default_port_conversion_handler (),
+                                        scm_i_default_port_conversion_strategy (),
                                         stream);
-}
-
-SCM
-scm_new_port_table_entry (scm_t_bits tag)
-{
-  return scm_c_make_port (tag, 0, 0);
 }
 
 
@@ -826,12 +859,6 @@ SCM_DEFINE (scm_eof_object_p, "eof-object?", 1, 0, 0,
 
 /* Closing ports.  */
 
-static void close_iconv_descriptors (scm_t_iconv_descriptors *id);
-
-/* scm_close_port
- * Call the close operation on a port object. 
- * see also scm_close.
- */
 SCM_DEFINE (scm_close_port, "close-port", 1, 0, 0,
            (SCM port),
 	    "Close the specified port object.  Return @code{#t} if it\n"
@@ -842,37 +869,24 @@ SCM_DEFINE (scm_close_port, "close-port", 1, 0, 0,
 	    "descriptors.")
 #define FUNC_NAME s_scm_close_port
 {
-  scm_t_port_internal *pti;
-  int rv;
-
   port = SCM_COERCE_OUTPORT (port);
-
   SCM_VALIDATE_PORT (1, port);
+
   if (SCM_CLOSEDP (port))
     return SCM_BOOL_F;
 
-  pti = SCM_PORT_GET_INTERNAL (port);
+  /* May throw an exception.  */
+  if (SCM_OUTPUT_PORT_P (port))
+    scm_flush (port);
+
   SCM_CLR_PORT_OPEN_FLAG (port);
 
-  if (SCM_PORT_DESCRIPTOR (port)->flags & SCM_PORT_TYPE_HAS_FLUSH)
+  if (SCM_PORT_TYPE (port)->flags & SCM_PORT_TYPE_NEEDS_CLOSE_ON_GC)
     scm_weak_set_remove_x (scm_i_port_weak_set, port);
 
-  if (SCM_PORT_DESCRIPTOR (port)->close)
-    /* Note!  This may throw an exception.  Anything after this point
-       should be resilient to non-local exits.  */
-    rv = SCM_PORT_DESCRIPTOR (port)->close (port);
-  else
-    rv = 0;
+  release_port (port);
 
-  if (pti->iconv_descriptors)
-    {
-      /* If we don't get here, the iconv_descriptors finalizer will
-         clean up. */
-      close_iconv_descriptors (pti->iconv_descriptors);
-      pti->iconv_descriptors = NULL;
-    }
-
-  return scm_from_bool (rv >= 0);
+  return SCM_BOOL_T;
 }
 #undef FUNC_NAME
 
@@ -913,144 +927,119 @@ SCM_DEFINE (scm_close_output_port, "close-output-port", 1, 0, 0,
 /* Encoding characters to byte streams, and decoding byte streams to
    characters.  */
 
+/* Port encodings are case-insensitive ASCII strings.  */
+static char
+ascii_toupper (char c)
+{
+  return (c < 'a' || c > 'z') ? c : ('A' + (c - 'a'));
+}
+
+/* It is only necessary to use this function on encodings that come from
+   the user and have not been canonicalized yet.  Encodings that are set
+   on ports or in the default encoding fluid are in upper-case, and can
+   be compared with strcmp.  */
+static int
+encoding_matches (const char *enc, SCM upper_symbol)
+{
+  const char *upper = scm_i_symbol_chars (upper_symbol);
+
+  if (!enc)
+    enc = "ISO-8859-1";
+
+  while (*enc)
+    if (ascii_toupper (*enc++) != *upper++)
+      return 0;
+
+  return !*upper;
+}
+
+static SCM
+canonicalize_encoding (const char *enc)
+{
+  char *ret;
+  int i;
+
+  if (!enc || encoding_matches (enc, sym_ISO_8859_1))
+    return sym_ISO_8859_1;
+  if (encoding_matches (enc, sym_UTF_8))
+    return sym_UTF_8;
+
+  ret = scm_gc_strdup (enc, "port");
+
+  for (i = 0; ret[i]; i++)
+    {
+      if (ret[i] > 127)
+        /* Restrict to ASCII.  */
+        scm_misc_error (NULL, "invalid character encoding ~s",
+                        scm_list_1 (scm_from_latin1_string (enc)));
+      else
+        ret[i] = ascii_toupper (ret[i]);
+    }
+
+  return scm_from_latin1_symbol (ret);
+}
+
 /* A fluid specifying the default encoding for newly created ports.  If it is
    a string, that is the encoding.  If it is #f, it is in the "native"
    (Latin-1) encoding.  */
-SCM_VARIABLE (default_port_encoding_var, "%default-port-encoding");
-
-static int scm_port_encoding_init = 0;
+static SCM default_port_encoding_var;
 
 /* Use ENCODING as the default encoding for future ports.  */
 void
 scm_i_set_default_port_encoding (const char *encoding)
 {
-  if (!scm_port_encoding_init
-      || !scm_is_fluid (SCM_VARIABLE_REF (default_port_encoding_var)))
-    scm_misc_error (NULL, "tried to set port encoding fluid before it is initialized",
-		    SCM_EOL);
-
-  if (encoding_matches (encoding, "ISO-8859-1"))
+  if (encoding_matches (encoding, sym_ISO_8859_1))
     scm_fluid_set_x (SCM_VARIABLE_REF (default_port_encoding_var), SCM_BOOL_F);
   else
     scm_fluid_set_x (SCM_VARIABLE_REF (default_port_encoding_var),
-                     scm_from_latin1_string (canonicalize_encoding (encoding)));
+                     scm_symbol_to_string (canonicalize_encoding (encoding)));
 }
 
 /* Return the name of the default encoding for newly created ports.  */
-const char *
+SCM
 scm_i_default_port_encoding (void)
 {
-  if (!scm_port_encoding_init)
-    return "ISO-8859-1";
-  else if (!scm_is_fluid (SCM_VARIABLE_REF (default_port_encoding_var)))
-    return "ISO-8859-1";
-  else
-    {
-      SCM encoding;
+  SCM encoding;
 
-      encoding = scm_fluid_ref (SCM_VARIABLE_REF (default_port_encoding_var));
-      if (!scm_is_string (encoding))
-	return "ISO-8859-1";
-      else
-	return scm_i_string_chars (encoding);
-    }
+  encoding = scm_fluid_ref (SCM_VARIABLE_REF (default_port_encoding_var));
+  if (!scm_is_string (encoding))
+    return sym_ISO_8859_1;
+  else
+    return canonicalize_encoding (scm_i_string_chars (encoding));
 }
 
 /* A fluid specifying the default conversion handler for newly created
    ports.  Its value should be one of the symbols below.  */
-SCM_VARIABLE (default_conversion_strategy_var,
-	      "%default-port-conversion-strategy");
-
-/* Whether the above fluid is initialized.  */
-static int scm_conversion_strategy_init = 0;
-
-/* The possible conversion strategies.  */
-SCM_SYMBOL (sym_error, "error");
-SCM_SYMBOL (sym_substitute, "substitute");
-SCM_SYMBOL (sym_escape, "escape");
+static SCM default_conversion_strategy_var;
 
 /* Return the default failed encoding conversion policy for new created
    ports.  */
-scm_t_string_failed_conversion_handler
-scm_i_default_port_conversion_handler (void)
+SCM
+scm_i_default_port_conversion_strategy (void)
 {
-  scm_t_string_failed_conversion_handler handler;
+  SCM value;
 
-  if (!scm_conversion_strategy_init
-      || !scm_is_fluid (SCM_VARIABLE_REF (default_conversion_strategy_var)))
-    handler = SCM_FAILED_CONVERSION_QUESTION_MARK;
-  else
-    {
-      SCM fluid, value;
+  value = scm_fluid_ref (SCM_VARIABLE_REF (default_conversion_strategy_var));
 
-      fluid = SCM_VARIABLE_REF (default_conversion_strategy_var);
-      value = scm_fluid_ref (fluid);
+  if (scm_is_eq (sym_substitute, value) || scm_is_eq (sym_escape, value))
+    return value;
 
-      if (scm_is_eq (sym_substitute, value))
-	handler = SCM_FAILED_CONVERSION_QUESTION_MARK;
-      else if (scm_is_eq (sym_escape, value))
-	handler = SCM_FAILED_CONVERSION_ESCAPE_SEQUENCE;
-      else
-	/* Default to 'error also when the fluid's value is not one of
-	   the valid symbols.  */
-	handler = SCM_FAILED_CONVERSION_ERROR;
-    }
-
-  return handler;
+  /* Default to 'error also when the fluid's value is not one of the
+     valid symbols.  */
+  return sym_error;
 }
 
 /* Use HANDLER as the default conversion strategy for future ports.  */
 void
-scm_i_set_default_port_conversion_handler (scm_t_string_failed_conversion_handler
-					   handler)
+scm_i_set_default_port_conversion_strategy (SCM sym)
 {
-  SCM strategy;
+  if (!scm_is_eq (sym, sym_error)
+      && !scm_is_eq (sym, sym_substitute)
+      && !scm_is_eq (sym, sym_escape))
+    /* Internal error.  */
+    abort ();
 
-  if (!scm_conversion_strategy_init
-      || !scm_is_fluid (SCM_VARIABLE_REF (default_conversion_strategy_var)))
-    scm_misc_error (NULL, "tried to set conversion strategy fluid before it is initialized",
-		    SCM_EOL);
-
-  switch (handler)
-    {
-    case SCM_FAILED_CONVERSION_ERROR:
-      strategy = sym_error;
-      break;
-
-    case SCM_FAILED_CONVERSION_ESCAPE_SEQUENCE:
-      strategy = sym_escape;
-      break;
-
-    case SCM_FAILED_CONVERSION_QUESTION_MARK:
-      strategy = sym_substitute;
-      break;
-
-    default:
-      abort ();
-    }
-
-  scm_fluid_set_x (SCM_VARIABLE_REF (default_conversion_strategy_var),
-		   strategy);
-}
-
-static void
-scm_i_unget_bytes_unlocked (const unsigned char *buf, size_t len, SCM port);
-
-/* If the next LEN bytes from PORT are equal to those in BYTES, then
-   return 1, else return 0.  Leave the port position unchanged.  */
-static int
-looking_at_bytes (SCM port, const unsigned char *bytes, int len)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  int i = 0;
-
-  while (i < len && scm_peek_byte_or_eof_unlocked (port) == bytes[i])
-    {
-      pt->read_pos++;
-      i++;
-    }
-  scm_i_unget_bytes_unlocked (bytes, i, port);
-  return (i == len);
+  scm_fluid_set_x (SCM_VARIABLE_REF (default_conversion_strategy_var), sym);
 }
 
 static const unsigned char scm_utf8_bom[3]    = {0xEF, 0xBB, 0xBF};
@@ -1059,83 +1048,53 @@ static const unsigned char scm_utf16le_bom[2] = {0xFF, 0xFE};
 static const unsigned char scm_utf32be_bom[4] = {0x00, 0x00, 0xFE, 0xFF};
 static const unsigned char scm_utf32le_bom[4] = {0xFF, 0xFE, 0x00, 0x00};
 
-/* Decide what byte order to use for a UTF-16 port.  Return "UTF-16BE"
-   or "UTF-16LE".  MODE must be either SCM_PORT_READ or SCM_PORT_WRITE,
-   and specifies which operation is about to be done.  The MODE
-   determines how we will decide the byte order.  We deliberately avoid
-   reading from the port unless the user is about to do so.  If the user
-   is about to read, then we look for a BOM, and if present, we use it
-   to determine the byte order.  Otherwise we choose big endian, as
-   recommended by the Unicode Standard.  Note that the BOM (if any) is
-   not consumed here.  */
-static const char *
-decide_utf16_encoding (SCM port, scm_t_port_rw_active mode)
-{
-  if (mode == SCM_PORT_READ
-      && SCM_PORT_GET_INTERNAL (port)->at_stream_start_for_bom_read
-      && looking_at_bytes (port, scm_utf16le_bom, sizeof scm_utf16le_bom))
-    return "UTF-16LE";
-  else
-    return "UTF-16BE";
-}
-
-/* Decide what byte order to use for a UTF-32 port.  Return "UTF-32BE"
-   or "UTF-32LE".  See the comment above 'decide_utf16_encoding' for
-   details.  */
-static const char *
-decide_utf32_encoding (SCM port, scm_t_port_rw_active mode)
-{
-  if (mode == SCM_PORT_READ
-      && SCM_PORT_GET_INTERNAL (port)->at_stream_start_for_bom_read
-      && looking_at_bytes (port, scm_utf32le_bom, sizeof scm_utf32le_bom))
-    return "UTF-32LE";
-  else
-    return "UTF-32BE";
-}
-
+/* Called with the iconv lock.  Will release the lock before throwing
+   any error.  */
 static void
-finalize_iconv_descriptors (void *ptr, void *data)
+prepare_iconv_descriptors (SCM port, SCM precise_encoding)
 {
-  close_iconv_descriptors (ptr);
-}
-
-static scm_t_iconv_descriptors *
-open_iconv_descriptors (const char *encoding, int reading, int writing)
-{
-  scm_t_iconv_descriptors *id;
+  scm_t_port *pt = SCM_PORT (port);
   iconv_t input_cd, output_cd;
+  const char *encoding;
   size_t i;
 
-  input_cd = (iconv_t) -1;
-  output_cd = (iconv_t) -1;
+  /* If the specified encoding is UTF-16 or UTF-32, then default to
+     big-endian byte order.  This fallback isn't necessary if you read
+     on the port before writing to it, as the read will sniff the BOM if
+     any and specialize the encoding; see the manual.  */
+  if (scm_is_eq (precise_encoding, sym_UTF_16))
+    precise_encoding = sym_UTF_16BE;
+  else if (scm_is_eq (precise_encoding, sym_UTF_32))
+    precise_encoding = sym_UTF_32BE;
 
+  if (scm_is_eq (pt->precise_encoding, precise_encoding))
+    return;
+
+  input_cd = output_cd = (iconv_t) -1;
+
+  if (!scm_is_symbol (precise_encoding))
+    goto invalid_encoding;
+
+  encoding = scm_i_symbol_chars (precise_encoding);
   for (i = 0; encoding[i]; i++)
     if (encoding[i] > 127)
       goto invalid_encoding;
 
-  if (reading)
+  /* Open a iconv conversion descriptors between ENCODING and UTF-8.  We
+     choose UTF-8, not UTF-32, because iconv implementations can
+     typically convert from anything to UTF-8, but not to UTF-32 (see
+     http://lists.gnu.org/archive/html/bug-libunistring/2010-09/msg00007.html,
+     for more details).  */
+
+  if (SCM_INPUT_PORT_P (port))
     {
-      /* Open an input iconv conversion descriptor, from ENCODING
-         to UTF-8.  We choose UTF-8, not UTF-32, because iconv
-         implementations can typically convert from anything to
-         UTF-8, but not to UTF-32 (see
-         <http://lists.gnu.org/archive/html/bug-libunistring/2010-09/msg00007.html>).  */
-
-      /* Assume opening an iconv descriptor causes about 16 KB of
-         allocation.  */
-      scm_gc_register_allocation (16 * 1024);
-
       input_cd = iconv_open ("UTF-8", encoding);
       if (input_cd == (iconv_t) -1)
         goto invalid_encoding;
     }
 
-  if (writing)
+  if (SCM_OUTPUT_PORT_P (port))
     {
-      /* Assume opening an iconv descriptor causes about 16 KB of
-         allocation.  */
-      scm_gc_register_allocation (16 * 1024);
-
       output_cd = iconv_open (encoding, "UTF-8");
       if (output_cd == (iconv_t) -1)
         {
@@ -1145,144 +1104,160 @@ open_iconv_descriptors (const char *encoding, int reading, int writing)
         }
     }
 
-  id = scm_gc_malloc_pointerless (sizeof (*id), "iconv descriptors");
-  id->input_cd = input_cd;
-  id->output_cd = output_cd;
+  if (pt->input_cd != (iconv_t) -1)
+    iconv_close (pt->input_cd);
+  if (pt->output_cd != (iconv_t) -1)
+    iconv_close (pt->output_cd);
 
-  /* Register a finalizer to close the descriptors.  */
-  scm_i_set_finalizer (id, finalize_iconv_descriptors, NULL);
+  pt->precise_encoding = precise_encoding;
+  pt->input_cd = input_cd;
+  pt->output_cd = output_cd;
 
-  return id;
+  /* Make sure this port has a finalizer.  */
+  scm_i_set_finalizer (SCM2PTR (port), finalize_port, NULL);
+
+  return;
 
  invalid_encoding:
-  {
-    SCM err;
-    err = scm_from_latin1_string (encoding);
-    scm_misc_error ("open_iconv_descriptors",
-		    "invalid or unknown character encoding ~s",
-		    scm_list_1 (err));
-  }
+  scm_i_pthread_mutex_unlock (&iconv_lock);
+  scm_misc_error ("open_iconv_descriptors",
+                  "invalid or unknown character encoding ~s",
+                  scm_list_1 (precise_encoding));
 }
 
-static void
-close_iconv_descriptors (scm_t_iconv_descriptors *id)
+SCM_INTERNAL SCM scm_specialize_port_encoding_x (SCM port, SCM encoding);
+SCM_DEFINE (scm_specialize_port_encoding_x,
+            "specialize-port-encoding!", 2, 0, 0,
+            (SCM port, SCM encoding),
+            "")
+#define FUNC_NAME s_scm_specialize_port_encoding_x
 {
-  if (id->input_cd != (iconv_t) -1)
-    iconv_close (id->input_cd);
-  if (id->output_cd != (iconv_t) -1)
-    iconv_close (id->output_cd);
-  id->input_cd = (void *) -1;
-  id->output_cd = (void *) -1;
-}
+  SCM_VALIDATE_PORT (1, port);
+  SCM_VALIDATE_SYMBOL (2, encoding);
 
-scm_t_iconv_descriptors *
-scm_i_port_iconv_descriptors (SCM port, scm_t_port_rw_active mode)
-{
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
-
-  assert (pti->encoding_mode == SCM_PORT_ENCODING_MODE_ICONV);
-
-  if (!pti->iconv_descriptors)
+  if (scm_is_eq (SCM_PORT (port)->encoding, sym_UTF_16))
     {
-      scm_t_port *pt = SCM_PTAB_ENTRY (port);
-      const char *precise_encoding;
-
-      if (!pt->encoding)
-        pt->encoding = "ISO-8859-1";
-
-      /* If the specified encoding is UTF-16 or UTF-32, then make
-         that more precise by deciding what byte order to use. */
-      if (strcmp (pt->encoding, "UTF-16") == 0)
-        precise_encoding = decide_utf16_encoding (port, mode);
-      else if (strcmp (pt->encoding, "UTF-32") == 0)
-        precise_encoding = decide_utf32_encoding (port, mode);
-      else
-        precise_encoding = pt->encoding;
-
-      pti->iconv_descriptors =
-        open_iconv_descriptors (precise_encoding,
-                                SCM_INPUT_PORT_P (port),
-                                SCM_OUTPUT_PORT_P (port));
+      if (!scm_is_eq (encoding, sym_UTF_16LE)
+          && !scm_is_eq (encoding, sym_UTF_16BE))
+        SCM_OUT_OF_RANGE (2, encoding);
     }
+  else if (scm_is_eq (SCM_PORT (port)->encoding, sym_UTF_32))
+    {
+      if (!scm_is_eq (encoding, sym_UTF_32LE)
+          && !scm_is_eq (encoding, sym_UTF_32BE))
+        SCM_OUT_OF_RANGE (2, encoding);
+    }
+  else
+    SCM_OUT_OF_RANGE (2, encoding);
 
-  return pti->iconv_descriptors;
+  scm_i_pthread_mutex_lock (&iconv_lock);
+  prepare_iconv_descriptors (port, encoding);
+  scm_i_pthread_mutex_unlock (&iconv_lock);
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+/* Acquire the iconv lock and fill in *INPUT_CD and/or *OUTPUT_CD.  */
+void
+scm_port_acquire_iconv_descriptors (SCM port, iconv_t *input_cd,
+                                    iconv_t *output_cd)
+{
+  scm_t_port *pt = SCM_PORT (port);
+
+  scm_i_pthread_mutex_lock (&iconv_lock);
+  if (scm_is_false (pt->precise_encoding))
+    prepare_iconv_descriptors (port, pt->encoding);
+  if (input_cd)
+    *input_cd = pt->input_cd;
+  if (output_cd)
+    *output_cd = pt->output_cd;
+}
+
+void
+scm_port_release_iconv_descriptors (SCM port)
+{
+  scm_i_pthread_mutex_unlock (&iconv_lock);
 }
 
 /* The name of the encoding is itself encoded in ASCII.  */
 void
 scm_i_set_port_encoding_x (SCM port, const char *encoding)
 {
-  scm_t_port *pt;
-  scm_t_port_internal *pti;
-  scm_t_iconv_descriptors *prev;
-
-  /* Set the character encoding for this port.  */
-  pt = SCM_PTAB_ENTRY (port);
-  pti = SCM_PORT_GET_INTERNAL (port);
-  prev = pti->iconv_descriptors;
+  scm_t_port *pt = SCM_PORT (port);
 
   /* In order to handle cases where the encoding changes mid-stream
      (e.g. within an HTTP stream, or within a file that is composed of
      segments with different encodings), we consider this to be "stream
      start" for purposes of BOM handling, regardless of our actual file
      position. */
-  pti->at_stream_start_for_bom_read  = 1;
-  pti->at_stream_start_for_bom_write = 1;
+  pt->at_stream_start_for_bom_read  = 1;
+  pt->at_stream_start_for_bom_write = 1;
+  pt->encoding = canonicalize_encoding (encoding);
 
-  if (encoding_matches (encoding, "UTF-8"))
-    {
-      pt->encoding = "UTF-8";
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_UTF8;
-    }
-  else if (encoding_matches (encoding, "ISO-8859-1"))
-    {
-      pt->encoding = "ISO-8859-1";
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_LATIN1;
-    }
-  else
-    {
-      pt->encoding = canonicalize_encoding (encoding);
-      pti->encoding_mode = SCM_PORT_ENCODING_MODE_ICONV;
-    }
-
-  pti->iconv_descriptors = NULL;
-  if (prev)
-    close_iconv_descriptors (prev);
+  scm_i_pthread_mutex_lock (&iconv_lock);
+  if (pt->input_cd != (iconv_t) -1)
+    iconv_close (pt->input_cd);
+  if (pt->output_cd != (iconv_t) -1)
+    iconv_close (pt->output_cd);
+  pt->precise_encoding = SCM_BOOL_F;
+  pt->input_cd = pt->output_cd = (iconv_t) -1;
+  scm_i_pthread_mutex_unlock (&iconv_lock);
 }
 
-SCM_DEFINE (scm_port_encoding, "port-encoding", 1, 0, 0,
+SCM_DEFINE (scm_sys_port_encoding, "%port-encoding", 1, 0, 0,
 	    (SCM port),
-	    "Returns, as a string, the character encoding that @var{port}\n"
+	    "Returns, as a symbol, the character encoding that @var{port}\n"
 	    "uses to interpret its input and output.\n")
-#define FUNC_NAME s_scm_port_encoding
+#define FUNC_NAME s_scm_sys_port_encoding
 {
-  SCM_VALIDATE_PORT (1, port);
+  SCM_VALIDATE_OPPORT (1, port);
 
-  return scm_from_latin1_string (SCM_PTAB_ENTRY (port)->encoding);
+  return SCM_PORT (port)->encoding;
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_set_port_encoding_x, "set-port-encoding!", 2, 0, 0,
+SCM
+scm_port_encoding (SCM port)
+{
+  return scm_symbol_to_string (scm_sys_port_encoding (port));
+}
+
+SCM_DEFINE (scm_sys_set_port_encoding_x, "%set-port-encoding!", 2, 0, 0,
 	    (SCM port, SCM enc),
 	    "Sets the character encoding that will be used to interpret all\n"
 	    "port I/O.  New ports are created with the encoding\n"
 	    "appropriate for the current locale if @code{setlocale} has \n"
 	    "been called or ISO-8859-1 otherwise\n"
 	    "and this procedure can be used to modify that encoding.\n")
-#define FUNC_NAME s_scm_set_port_encoding_x
+#define FUNC_NAME s_scm_sys_set_port_encoding_x
 {
-  char *enc_str;
+  SCM_VALIDATE_OPPORT (1, port);
+  SCM_VALIDATE_SYMBOL (2, enc);
 
-  SCM_VALIDATE_PORT (1, port);
-  SCM_VALIDATE_STRING (2, enc);
-
-  enc_str = scm_to_latin1_string (enc);
-  scm_i_set_port_encoding_x (port, enc_str);
-  free (enc_str);
+  scm_i_set_port_encoding_x (port, scm_i_symbol_chars (enc));
 
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
+
+SCM
+scm_set_port_encoding_x (SCM port, SCM enc)
+{
+  return scm_sys_set_port_encoding_x (port, scm_string_to_symbol (enc));
+}
+
+scm_t_string_failed_conversion_handler
+scm_i_string_failed_conversion_handler (SCM conversion_strategy)
+{
+  if (scm_is_eq (conversion_strategy, sym_substitute))
+    return SCM_FAILED_CONVERSION_QUESTION_MARK;
+  if (scm_is_eq (conversion_strategy, sym_escape))
+    return SCM_FAILED_CONVERSION_ESCAPE_SEQUENCE;
+
+  /* Default to error.  */
+  return SCM_FAILED_CONVERSION_ERROR;
+}
 
 SCM_DEFINE (scm_port_conversion_strategy, "port-conversion-strategy",
 	    1, 0, 0, (SCM port),
@@ -1299,31 +1274,11 @@ SCM_DEFINE (scm_port_conversion_strategy, "port-conversion-strategy",
 	    "when they are created.\n")
 #define FUNC_NAME s_scm_port_conversion_strategy
 {
-  scm_t_string_failed_conversion_handler h;
-
   if (scm_is_false (port))
-    h = scm_i_default_port_conversion_handler ();
-  else
-    {
-      scm_t_port *pt;
+    return scm_i_default_port_conversion_strategy ();
 
-      SCM_VALIDATE_OPPORT (1, port);
-      pt = SCM_PTAB_ENTRY (port);
-
-      h = pt->ilseq_handler;
-    }
-
-  if (h == SCM_FAILED_CONVERSION_ERROR)
-    return scm_from_latin1_symbol ("error");
-  else if (h == SCM_FAILED_CONVERSION_QUESTION_MARK)
-    return scm_from_latin1_symbol ("substitute");
-  else if (h == SCM_FAILED_CONVERSION_ESCAPE_SEQUENCE)
-    return scm_from_latin1_symbol ("escape");
-  else
-    abort ();
-
-  /* Never gets here. */
-  return SCM_UNDEFINED;
+  SCM_VALIDATE_OPPORT (1, port);
+  return SCM_PORT (port)->conversion_strategy;
 }
 #undef FUNC_NAME
 
@@ -1347,23 +1302,17 @@ SCM_DEFINE (scm_set_port_conversion_strategy_x, "set-port-conversion-strategy!",
 	    "this thread.\n")
 #define FUNC_NAME s_scm_set_port_conversion_strategy_x
 {
-  scm_t_string_failed_conversion_handler handler;
-
-  if (scm_is_eq (sym, sym_error))
-    handler = SCM_FAILED_CONVERSION_ERROR;
-  else if (scm_is_eq (sym, sym_substitute))
-    handler = SCM_FAILED_CONVERSION_QUESTION_MARK;
-  else if (scm_is_eq (sym, sym_escape))
-    handler = SCM_FAILED_CONVERSION_ESCAPE_SEQUENCE;
-  else
+  if (!scm_is_eq (sym, sym_error)
+      && !scm_is_eq (sym, sym_substitute)
+      && !scm_is_eq (sym, sym_escape))
     SCM_MISC_ERROR ("unknown conversion strategy ~s", scm_list_1 (sym));
 
   if (scm_is_false (port))
-    scm_i_set_default_port_conversion_handler (handler);
+    scm_i_set_default_port_conversion_strategy (sym);
   else
     {
       SCM_VALIDATE_OPPORT (1, port);
-      SCM_PTAB_ENTRY (port)->ilseq_handler = handler;
+      SCM_PORT (port)->conversion_strategy = sym;
     }
 
   return SCM_UNSPECIFIED;
@@ -1373,32 +1322,117 @@ SCM_DEFINE (scm_set_port_conversion_strategy_x, "set-port-conversion-strategy!",
 
 
 
-/* The port lock.  */
+/* Non-blocking I/O.  */
 
-static void
-lock_port (void *mutex)
+static int
+port_read_wait_fd (SCM port)
 {
-  scm_i_pthread_mutex_lock ((scm_i_pthread_mutex_t *) mutex);
+  scm_t_port_type *ptob = SCM_PORT_TYPE (port);
+  return ptob->read_wait_fd (port);
 }
 
-static void
-unlock_port (void *mutex)
+static int
+port_write_wait_fd (SCM port)
 {
-  scm_i_pthread_mutex_unlock ((scm_i_pthread_mutex_t *) mutex);
+  scm_t_port_type *ptob = SCM_PORT_TYPE (port);
+  return ptob->write_wait_fd (port);
 }
 
-void
-scm_dynwind_lock_port (SCM port)
-#define FUNC_NAME "dynwind-lock-port"
+SCM_INTERNAL SCM scm_port_read_wait_fd (SCM);
+SCM_DEFINE (scm_port_read_wait_fd, "port-read-wait-fd", 1, 0, 0,
+            (SCM port), "")
+#define FUNC_NAME s_scm_port_read_wait_fd
 {
-  scm_i_pthread_mutex_t *lock;
-  SCM_VALIDATE_OPPORT (SCM_ARG1, port);
-  scm_c_lock_port (port, &lock);
-  if (lock)
+  int fd;
+
+  port = SCM_COERCE_OUTPORT (port);
+  SCM_VALIDATE_OPINPORT (1, port);
+
+  fd = port_read_wait_fd (port);
+  return fd < 0 ? SCM_BOOL_F : scm_from_int (fd);
+}
+#undef FUNC_NAME
+
+SCM_INTERNAL SCM scm_port_write_wait_fd (SCM);
+SCM_DEFINE (scm_port_write_wait_fd, "port-write-wait-fd", 1, 0, 0,
+            (SCM port), "")
+#define FUNC_NAME s_scm_port_write_wait_fd
+{
+  int fd;
+
+  port = SCM_COERCE_OUTPORT (port);
+  SCM_VALIDATE_OPOUTPORT (1, port);
+
+  fd = port_write_wait_fd (port);
+  return fd < 0 ? SCM_BOOL_F : scm_from_int (fd);
+}
+#undef FUNC_NAME
+
+/* Call while having acquired the port.  */
+static int
+port_poll (SCM port, short events, int timeout)
+#define FUNC_NAME "port-poll"
+{
+  struct pollfd pollfd[2];
+  int nfds = 0, rv = 0;
+
+  if (events & POLLIN)
     {
-      scm_dynwind_unwind_handler (unlock_port, lock, SCM_F_WIND_EXPLICITLY);
-      scm_dynwind_rewind_handler (lock_port, lock, 0);
+      pollfd[nfds].fd = port_read_wait_fd (port);
+      pollfd[nfds].events = events & (POLLIN | POLLPRI);
+      pollfd[nfds].revents = 0;
+      nfds++;
     }
+  if (events & POLLOUT)
+    {
+      pollfd[nfds].fd = port_write_wait_fd (port);
+      pollfd[nfds].events = events & (POLLOUT | POLLPRI);
+      pollfd[nfds].revents = 0;
+      nfds++;
+    }
+
+  if (nfds == 2 && pollfd[0].fd == pollfd[1].fd)
+    {
+      pollfd[0].events |= pollfd[1].events;
+      nfds--;
+    }
+
+  SCM_SYSCALL (rv = poll (pollfd, nfds, timeout));
+  if (rv < 0)
+    SCM_SYSERROR;
+
+  return rv;
+}
+#undef FUNC_NAME
+
+SCM_INTERNAL SCM scm_port_poll (SCM, SCM, SCM);
+SCM_DEFINE (scm_port_poll, "port-poll", 2, 1, 0,
+            (SCM port, SCM events, SCM timeout),
+            "")
+#define FUNC_NAME s_scm_port_poll
+{
+  short c_events = 0;
+  int c_timeout;
+  SCM ret;
+
+  port = SCM_COERCE_OUTPORT (port);
+  SCM_VALIDATE_PORT (1, port);
+  SCM_VALIDATE_STRING (2, events);
+  c_timeout = SCM_UNBNDP (timeout) ? -1 : SCM_NUM2INT (3, timeout);
+
+  if (scm_i_string_contains_char (events, 'r'))
+    c_events |= POLLIN;
+  if (scm_i_string_contains_char (events, '!'))
+    c_events |= POLLPRI;
+  if (scm_i_string_contains_char (events, 'w'))
+    c_events |= POLLIN;
+
+  scm_dynwind_begin (0);
+  scm_dynwind_acquire_port (port);
+  ret = scm_from_int (port_poll (port, c_events, c_timeout));
+  scm_dynwind_end ();
+
+  return ret;
 }
 #undef FUNC_NAME
 
@@ -1407,219 +1441,273 @@ scm_dynwind_lock_port (SCM port)
 
 /* Input.  */
 
+static int
+get_byte_or_eof (SCM port)
+{
+  SCM buf = SCM_PORT (port)->read_buf;
+  SCM buf_bv, buf_cur, buf_end;
+  size_t cur, avail;
+
+  buf_bv = scm_port_buffer_bytevector (buf);
+  buf_cur = scm_port_buffer_cur (buf);
+  buf_end = scm_port_buffer_end (buf);
+  cur = SCM_I_INUM (buf_cur);
+
+  if (SCM_LIKELY (SCM_I_INUMP (buf_cur))
+      && SCM_LIKELY (SCM_I_INUMP (buf_end))
+      && SCM_LIKELY (cur < SCM_I_INUM (buf_end))
+      && SCM_LIKELY (cur < SCM_BYTEVECTOR_LENGTH (buf_bv)))
+    {
+      scm_t_uint8 ret = SCM_BYTEVECTOR_CONTENTS (buf_bv)[cur];
+      scm_port_buffer_set_cur (buf, SCM_I_MAKINUM (cur + 1));
+      return ret;
+    }
+
+  buf = scm_fill_input (port, 0, &cur, &avail);
+  buf_bv = scm_port_buffer_bytevector (buf);
+  if (avail > 0)
+    {
+      scm_t_uint8 ret = SCM_BYTEVECTOR_CONTENTS (buf_bv)[cur];
+      scm_port_buffer_set_cur (buf, SCM_I_MAKINUM (cur + 1));
+      return ret;
+    }
+
+  /* The next peek or get should cause the read() function to be called
+     to see if we still have EOF.  */
+  scm_port_buffer_set_has_eof_p (buf, SCM_BOOL_F);
+  return EOF;
+}
+
+/* Like `scm_get_byte_or_eof' but does not change PORT's `read_pos'.  */
+static int
+peek_byte_or_eof (SCM port, SCM *buf_out, size_t *cur_out)
+{
+  SCM buf = SCM_PORT (port)->read_buf;
+  SCM buf_bv, buf_cur, buf_end;
+  size_t cur, avail;
+
+  buf_bv = scm_port_buffer_bytevector (buf);
+  buf_cur = scm_port_buffer_cur (buf);
+  buf_end = scm_port_buffer_end (buf);
+  cur = scm_to_size_t (buf_cur);
+  if (SCM_LIKELY (SCM_I_INUMP (buf_cur))
+      && SCM_LIKELY (SCM_I_INUMP (buf_end))
+      && SCM_LIKELY (cur < SCM_I_INUM (buf_end))
+      && SCM_LIKELY (cur < SCM_BYTEVECTOR_LENGTH (buf_bv)))
+    {
+      scm_t_uint8 ret = SCM_BYTEVECTOR_CONTENTS (buf_bv)[cur];
+      *buf_out = buf;
+      *cur_out = cur;
+      return ret;
+    }
+
+  buf = scm_fill_input (port, 0, &cur, &avail);
+  buf_bv = scm_port_buffer_bytevector (buf);
+  *buf_out = buf;
+  *cur_out = cur;
+  if (avail > 0)
+    {
+      scm_t_uint8 ret = SCM_BYTEVECTOR_CONTENTS (buf_bv)[cur];
+      return ret;
+    }
+
+  return EOF;
+}
+
 int
 scm_get_byte_or_eof (SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  int ret;
-
-  scm_c_lock_port (port, &lock);
-  ret = scm_get_byte_or_eof_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-
-  return ret;
+  return get_byte_or_eof (port);
 }
 
 int
 scm_peek_byte_or_eof (SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  int ret;
-
-  scm_c_lock_port (port, &lock);
-  ret = scm_peek_byte_or_eof_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-
-  return ret;
+  SCM buf;
+  size_t cur;
+  return peek_byte_or_eof (port, &buf, &cur);
 }
 
-/* scm_c_read
- *
- * Used by an application to read arbitrary number of bytes from an
- * SCM port.  Same semantics as libc read, except that scm_c_read only
- * returns less than SIZE bytes if at end-of-file.
- *
- * Warning: Doesn't update port line and column counts!  */
-
-/* This structure, and the following swap_buffer function, are used
-   for temporarily swapping a port's own read buffer, and the buffer
-   that the caller of scm_c_read provides. */
-struct port_and_swap_buffer
+static size_t
+scm_i_read_bytes (SCM port, SCM dst, size_t start, size_t count)
 {
-  scm_t_port *pt;
-  unsigned char *buffer;
-  size_t size;
-};
+  size_t filled;
+  scm_t_port_type *ptob = SCM_PORT_TYPE (port);
 
-static void
-swap_buffer (void *data)
-{
-  struct port_and_swap_buffer *psb = (struct port_and_swap_buffer *) data;
-  unsigned char *old_buf = psb->pt->read_buf;
-  size_t old_size = psb->pt->read_buf_size;
+  assert (count <= SCM_BYTEVECTOR_LENGTH (dst));
+  assert (start + count <= SCM_BYTEVECTOR_LENGTH (dst));
 
-  /* Make the port use (buffer, size) from the struct. */
-  psb->pt->read_pos = psb->pt->read_buf = psb->pt->read_end = psb->buffer;
-  psb->pt->read_buf_size = psb->size;
+  scm_dynwind_begin (0);
+  scm_dynwind_acquire_port (port);
 
-  /* Save the port's old (buffer, size) in the struct. */
-  psb->buffer = old_buf;
-  psb->size = old_size;
+ retry:
+  filled = ptob->c_read (port, dst, start, count);
+
+  if (filled == (size_t) -1)
+    {
+      port_poll (port, POLLIN, -1);
+      goto retry;
+    }
+
+  scm_dynwind_end ();
+
+  assert (filled <= count);
+
+  return filled;
 }
 
-static int scm_i_fill_input_unlocked (SCM port);
+/* In text mode, we will slurp a BOM from the beginning of a UTF-8,
+   UTF-16, or UTF-32 stream, and write one at the beginning of a UTF-16
+   or UTF-32 stream.  In binary mode, we won't.  The mode depends on the
+   caller. */
+enum bom_io_mode { BOM_IO_TEXT, BOM_IO_BINARY };
+static size_t port_clear_stream_start_for_bom_read (SCM, enum bom_io_mode);
 
+/* Used by an application to read arbitrary number of bytes from an SCM
+   port.  Same semantics as libc read, except that scm_c_read_bytes only
+   returns less than SIZE bytes if at end-of-file.
+
+   Warning: Doesn't update port line and column counts!  */
 size_t
-scm_c_read_unlocked (SCM port, void *buffer, size_t size)
-#define FUNC_NAME "scm_c_read"
+scm_c_read_bytes (SCM port, SCM dst, size_t start, size_t count)
+#define FUNC_NAME "scm_c_read_bytes"
 {
+  size_t to_read = count;
   scm_t_port *pt;
-  scm_t_port_internal *pti;
-  size_t n_read = 0, n_available;
-  struct port_and_swap_buffer psb;
+  SCM read_buf;
+  scm_t_uint8 *dst_ptr = (scm_t_uint8 *) SCM_BYTEVECTOR_CONTENTS (dst) + start;
 
   SCM_VALIDATE_OPINPORT (1, port);
 
-  pt = SCM_PTAB_ENTRY (port);
-  pti = SCM_PORT_GET_INTERNAL (port);
-  if (pt->rw_active == SCM_PORT_WRITE)
-    SCM_PORT_DESCRIPTOR (port)->flush (port);
+  pt = SCM_PORT (port);
+  read_buf = pt->read_buf;
 
   if (pt->rw_random)
-    pt->rw_active = SCM_PORT_READ;
+    scm_flush (port);
+
+  port_clear_stream_start_for_bom_read (port, BOM_IO_BINARY);
 
   /* Take bytes first from the port's read buffer. */
-  if (pt->read_pos < pt->read_end)
+  {
+    size_t cur, avail, did_read;
+    avail = scm_port_buffer_can_take (read_buf, &cur);
+    did_read = scm_port_buffer_take (read_buf, dst_ptr, to_read, cur, avail);
+    dst_ptr += did_read;
+    to_read -= did_read;
+  }
+
+  while (to_read)
     {
-      n_available = min (size, pt->read_end - pt->read_pos);
-      memcpy (buffer, pt->read_pos, n_available);
-      buffer = (char *) buffer + n_available;
-      pt->read_pos += n_available;
-      n_read += n_available;
-      size -= n_available;
+      size_t did_read;
+
+      /* If the read is smaller than the buffering on the read side of
+         this port, then go through the buffer.  Otherwise fill our
+         buffer directly.  */
+      if (to_read < pt->read_buffering)
+        {
+          size_t cur, avail;
+
+          read_buf = scm_fill_input (port, 0, &cur, &avail);
+          did_read = scm_port_buffer_take (read_buf, dst_ptr, to_read,
+                                           cur, avail);
+          dst_ptr += did_read;
+          to_read -= did_read;
+          if (did_read == 0)
+            {
+              /* Consider that we've read off this EOF.  */
+              scm_port_buffer_set_has_eof_p (read_buf, SCM_BOOL_F);
+              break;
+            }
+        }
+      else
+        {
+          did_read = scm_i_read_bytes (port, dst,
+                                       start + count - to_read,
+                                       to_read);
+          to_read -= did_read;
+          dst_ptr += did_read;
+          if (did_read == 0)
+            break;
+        }
     }
 
-  /* Avoid the scm_dynwind_* costs if we now have enough data. */
-  if (size == 0)
-    return n_read;
-
-  /* Now we will call scm_i_fill_input_unlocked repeatedly until we have
-     read the requested number of bytes.  (Note that a single
-     scm_i_fill_input_unlocked call does not guarantee to fill the whole
-     of the port's read buffer.) */
-  if (pt->read_buf_size <= 1
-      && pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1)
-    {
-      /* The port that we are reading from is unbuffered - i.e. does not
-	 have its own persistent buffer - but we have a buffer, provided
-	 by our caller, that is the right size for the data that is
-	 wanted.  For the following scm_i_fill_input_unlocked calls,
-	 therefore, we use the buffer in hand as the port's read buffer.
-
-	 We need to make sure that the port's normal (1 byte) buffer is
-	 reinstated in case one of the scm_i_fill_input_unlocked ()
-	 calls throws an exception; we use the scm_dynwind_* API to
-	 achieve that.
-
-         A consequence of this optimization is that the fill_input
-         functions can't unget characters.  That'll push data to the
-         pushback buffer instead of this psb buffer.  */
-#if SCM_DEBUG == 1
-      unsigned char *pback = pt->putback_buf;
-#endif      
-      psb.pt = pt;
-      psb.buffer = buffer;
-      psb.size = size;
-      scm_dynwind_begin (SCM_F_DYNWIND_REWINDABLE);
-      scm_dynwind_rewind_handler (swap_buffer, &psb, SCM_F_WIND_EXPLICITLY);
-      scm_dynwind_unwind_handler (swap_buffer, &psb, SCM_F_WIND_EXPLICITLY);
-
-      /* Call scm_i_fill_input_unlocked until we have all the bytes that
-	 we need, or we hit EOF. */
-      while (pt->read_buf_size && (scm_i_fill_input_unlocked (port) != EOF))
-	{
-	  pt->read_buf_size -= (pt->read_end - pt->read_pos);
-	  pt->read_pos = pt->read_buf = pt->read_end;
-	}
-#if SCM_DEBUG == 1
-      if (pback != pt->putback_buf 
-          || pt->read_buf - (unsigned char *) buffer < 0)
-        scm_misc_error (FUNC_NAME, 
-                        "scm_c_read must not call a fill function that pushes "
-                        "back characters onto an unbuffered port", SCM_EOL);
-#endif      
-      n_read += pt->read_buf - (unsigned char *) buffer;
-      
-      /* Reinstate the port's normal buffer. */
-      scm_dynwind_end ();
-    }
-  else
-    {
-      /* The port has its own buffer.  It is important that we use it,
-	 even if it happens to be smaller than our caller's buffer, so
-	 that a custom port implementation's entry points (in
-	 particular, fill_input) can rely on the buffer always being
-	 the same as they first set up. */
-      while (size && (scm_i_fill_input_unlocked (port) != EOF))
-	{
-	  n_available = min (size, pt->read_end - pt->read_pos);
-	  memcpy (buffer, pt->read_pos, n_available);
-	  buffer = (char *) buffer + n_available;
-	  pt->read_pos += n_available;
-	  n_read += n_available;
-	  size -= n_available;
-	} 
-    }
-
-  return n_read;
+  return count - to_read;
 }
 #undef FUNC_NAME
 
+/* Like scm_c_read_bytes, but always proxies reads through the port's
+   read buffer.  Used by an application when it wants to read into a
+   memory chunk that's not owned by Guile's GC.  */
 size_t
 scm_c_read (SCM port, void *buffer, size_t size)
+#define FUNC_NAME "scm_c_read"
 {
-  scm_i_pthread_mutex_t *lock;
-  size_t ret;
+  size_t copied = 0;
+  scm_t_port *pt;
+  SCM read_buf;
+  scm_t_uint8 *dst = buffer;
 
-  scm_c_lock_port (port, &lock);
-  ret = scm_c_read_unlocked (port, buffer, size);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  SCM_VALIDATE_OPINPORT (1, port);
 
-  return ret;
+  pt = SCM_PORT (port);
+  read_buf = pt->read_buf;
+
+  if (pt->rw_random)
+    scm_flush (port);
+
+  while (copied < size)
+    {
+      size_t cur, avail, count;
+      read_buf = scm_fill_input (port, 0, &cur, &avail);
+      count = scm_port_buffer_take (read_buf, dst + copied, size - copied,
+                                    cur, avail);
+      copied += count;
+      if (count == 0)
+        {
+          /* Consider that we've read off this EOF.  */
+          scm_port_buffer_set_has_eof_p (read_buf, SCM_BOOL_F);
+          break;
+        }
+    }
+
+  return copied;
 }
+#undef FUNC_NAME
 
 /* Update the line and column number of PORT after consumption of C.  */
 static inline void
-update_port_lf (scm_t_wchar c, SCM port)
+update_port_position (SCM position, scm_t_wchar c)
 {
+  int column = scm_to_int (scm_port_position_column (position));
+
   switch (c)
     {
     case '\a':
     case EOF:
       break;
     case '\b':
-      SCM_DECCOL (port);
+      if (column > 0)
+        scm_port_position_set_column (position, scm_from_int (column - 1));
       break;
     case '\n':
-      SCM_INCLINE (port);
+      {
+        long line = scm_to_long (scm_port_position_line (position));
+        scm_port_position_set_line (position, scm_from_long (line + 1));
+        scm_port_position_set_column (position, SCM_INUM0);
+      }
       break;
     case '\r':
-      SCM_ZEROCOL (port);
+      scm_port_position_set_column (position, SCM_INUM0);
       break;
     case '\t':
-      SCM_TABCOL (port);
+      scm_port_position_set_column (position,
+                                    scm_from_int (column + 8 - column % 8));
       break;
     default:
-      SCM_INCCOL (port);
+      scm_port_position_set_column (position, scm_from_int (column + 1));
       break;
     }
 }
-
-#define SCM_MBCHAR_BUF_SIZE (4)
 
 /* Convert the SIZE-byte UTF-8 sequence in UTF8_BUF to a codepoint.
    UTF8_BUF is assumed to contain a valid UTF-8 sequence.  */
@@ -1630,25 +1718,25 @@ utf8_to_codepoint (const scm_t_uint8 *utf8_buf, size_t size)
 
   if (utf8_buf[0] <= 0x7f)
     {
-      assert (size == 1);
+      assert (size >= 1);
       codepoint = utf8_buf[0];
     }
   else if ((utf8_buf[0] & 0xe0) == 0xc0)
     {
-      assert (size == 2);
+      assert (size >= 2);
       codepoint = ((scm_t_wchar) utf8_buf[0] & 0x1f) << 6UL
 	| (utf8_buf[1] & 0x3f);
     }
   else if ((utf8_buf[0] & 0xf0) == 0xe0)
     {
-      assert (size == 3);
+      assert (size >= 3);
       codepoint = ((scm_t_wchar) utf8_buf[0] & 0x0f) << 12UL
 	| ((scm_t_wchar) utf8_buf[1] & 0x3f) << 6UL
 	| (utf8_buf[2] & 0x3f);
     }
   else
     {
-      assert (size == 4);
+      assert (size >= 4);
       codepoint = ((scm_t_wchar) utf8_buf[0] & 0x07) << 18UL
 	| ((scm_t_wchar) utf8_buf[1] & 0x3f) << 12UL
 	| ((scm_t_wchar) utf8_buf[2] & 0x3f) << 6UL
@@ -1658,324 +1746,252 @@ utf8_to_codepoint (const scm_t_uint8 *utf8_buf, size_t size)
   return codepoint;
 }
 
-/* Read a UTF-8 sequence from PORT.  On success, return 0 and set
-   *CODEPOINT to the codepoint that was read, fill BUF with its UTF-8
-   representation, and set *LEN to the length in bytes.  Return
-   `EILSEQ' on error.  */
-static int
-get_utf8_codepoint (SCM port, scm_t_wchar *codepoint,
-		    scm_t_uint8 buf[SCM_MBCHAR_BUF_SIZE], size_t *len)
+/* Peek a UTF-8 sequence from PORT.  On success, return the codepoint
+   that was read, and set *LEN to the length in bytes.  If there was a
+   decoding error and the port conversion strategy was `substitute',
+   then return #\? and set *LEN to the length of the shortest prefix
+   that cannot begin a valid UTF-8 sequence.  Otherwise signal an
+   error.  */
+static scm_t_wchar
+peek_utf8_codepoint (SCM port, SCM *buf_out, size_t *cur_out, size_t *len_out)
 {
-#define ASSERT_NOT_EOF(b)			\
-  if (SCM_UNLIKELY ((b) == EOF))		\
-    goto invalid_seq
-#define CONSUME_PEEKED_BYTE()				\
-  pt->read_pos++
+#define DECODING_ERROR(bytes) \
+  do { *buf_out = buf; *cur_out = cur; *len_out = bytes; goto decoding_error; } while (0)
+#define RETURN(bytes, codepoint) \
+  do { *buf_out = buf; *cur_out = cur; *len_out = bytes; return codepoint; } while (0)
 
-  int byte;
-  scm_t_port *pt;
+  SCM buf;
+  size_t cur, avail;
+  int first_byte;
+  const scm_t_uint8 *ptr;
 
-  *len = 0;
-  pt = SCM_PTAB_ENTRY (port);
-
-  byte = scm_get_byte_or_eof_unlocked (port);
-  if (byte == EOF)
+  first_byte = peek_byte_or_eof (port, &buf, &cur);
+  if (first_byte == EOF)
+    RETURN (0, EOF);
+  else if (first_byte < 0x80)
+    RETURN (1, first_byte);
+  else if (first_byte >= 0xc2 && first_byte <= 0xdf)
     {
-      *codepoint = EOF;
-      return 0;
+      buf = scm_fill_input (port, 2, &cur, &avail);
+      ptr = scm_port_buffer_take_pointer (buf, cur);
+
+      if (avail < 2 || (ptr[1] & 0xc0) != 0x80)
+        DECODING_ERROR (1);
+
+      RETURN (2, (first_byte & 0x1f) << 6UL | (ptr[1] & 0x3f));
     }
-
-  buf[0] = (scm_t_uint8) byte;
-  *len = 1;
-
-  if (buf[0] <= 0x7f)
-    /* 1-byte form.  */
-    *codepoint = buf[0];
-  else if (buf[0] >= 0xc2 && buf[0] <= 0xdf)
+  else if ((first_byte & 0xf0) == 0xe0)
     {
-      /* 2-byte form.  */
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
+      buf = scm_fill_input (port, 3, &cur, &avail);
+      ptr = scm_port_buffer_take_pointer (buf, cur);
 
-      if (SCM_UNLIKELY ((byte & 0xc0) != 0x80))
-	goto invalid_seq;
+      if (avail < 2 || (ptr[1] & 0xc0) != 0x80
+          || (ptr[0] == 0xe0 && ptr[1] < 0xa0)
+          || (ptr[0] == 0xed && ptr[1] > 0x9f))
+        DECODING_ERROR (1);
 
-      CONSUME_PEEKED_BYTE ();
-      buf[1] = (scm_t_uint8) byte;
-      *len = 2;
+      if (avail < 3 || (ptr[2] & 0xc0) != 0x80)
+        DECODING_ERROR (2);
 
-      *codepoint = ((scm_t_wchar) buf[0] & 0x1f) << 6UL
-	| (buf[1] & 0x3f);
+      RETURN (3,
+              ((scm_t_wchar) ptr[0] & 0x0f) << 12UL
+              | ((scm_t_wchar) ptr[1] & 0x3f) << 6UL
+              | (ptr[2] & 0x3f));
     }
-  else if ((buf[0] & 0xf0) == 0xe0)
+  else if (first_byte >= 0xf0 && first_byte <= 0xf4)
     {
-      /* 3-byte form.  */
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
+      buf = scm_fill_input (port, 4, &cur, &avail);
+      ptr = scm_port_buffer_take_pointer (buf, cur);
 
-      if (SCM_UNLIKELY ((byte & 0xc0) != 0x80
-			|| (buf[0] == 0xe0 && byte < 0xa0)
-			|| (buf[0] == 0xed && byte > 0x9f)))
-	goto invalid_seq;
+      if (avail < 2 || (ptr[1] & 0xc0) != 0x80
+          || (ptr[0] == 0xf0 && ptr[1] < 0x90)
+          || (ptr[0] == 0xf4 && ptr[1] > 0x8f))
+        DECODING_ERROR (1);
 
-      CONSUME_PEEKED_BYTE ();
-      buf[1] = (scm_t_uint8) byte;
-      *len = 2;
+      if (avail < 3 || (ptr[2] & 0xc0) != 0x80)
+        DECODING_ERROR (2);
 
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
+      if (avail < 4 || (ptr[3] & 0xc0) != 0x80)
+        DECODING_ERROR (3);
 
-      if (SCM_UNLIKELY ((byte & 0xc0) != 0x80))
-	goto invalid_seq;
-
-      CONSUME_PEEKED_BYTE ();
-      buf[2] = (scm_t_uint8) byte;
-      *len = 3;
-
-      *codepoint = ((scm_t_wchar) buf[0] & 0x0f) << 12UL
-	| ((scm_t_wchar) buf[1] & 0x3f) << 6UL
-	| (buf[2] & 0x3f);
-    }
-  else if (buf[0] >= 0xf0 && buf[0] <= 0xf4)
-    {
-      /* 4-byte form.  */
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
-
-      if (SCM_UNLIKELY (((byte & 0xc0) != 0x80)
-			|| (buf[0] == 0xf0 && byte < 0x90)
-			|| (buf[0] == 0xf4 && byte > 0x8f)))
-	goto invalid_seq;
-
-      CONSUME_PEEKED_BYTE ();
-      buf[1] = (scm_t_uint8) byte;
-      *len = 2;
-
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
-
-      if (SCM_UNLIKELY ((byte & 0xc0) != 0x80))
-	goto invalid_seq;
-
-      CONSUME_PEEKED_BYTE ();
-      buf[2] = (scm_t_uint8) byte;
-      *len = 3;
-
-      byte = scm_peek_byte_or_eof_unlocked (port);
-      ASSERT_NOT_EOF (byte);
-
-      if (SCM_UNLIKELY ((byte & 0xc0) != 0x80))
-	goto invalid_seq;
-
-      CONSUME_PEEKED_BYTE ();
-      buf[3] = (scm_t_uint8) byte;
-      *len = 4;
-
-      *codepoint = ((scm_t_wchar) buf[0] & 0x07) << 18UL
-	| ((scm_t_wchar) buf[1] & 0x3f) << 12UL
-	| ((scm_t_wchar) buf[2] & 0x3f) << 6UL
-	| (buf[3] & 0x3f);
+      RETURN (4,
+              ((scm_t_wchar) ptr[0] & 0x07) << 18UL
+              | ((scm_t_wchar) ptr[1] & 0x3f) << 12UL
+              | ((scm_t_wchar) ptr[2] & 0x3f) << 6UL
+              | (ptr[3] & 0x3f));
     }
   else
-    goto invalid_seq;
+    DECODING_ERROR (1);
 
+ decoding_error:
+  if (scm_is_eq (SCM_PORT (port)->conversion_strategy, sym_substitute))
+    /* *len already set.  */
+    return UNICODE_REPLACEMENT_CHARACTER;
+
+  scm_decoding_error ("peek-char", EILSEQ, "input decoding error", port);
+  /* Not reached.  */
   return 0;
-
- invalid_seq:
-  /* Here we could choose the consume the faulty byte when it's not a
-     valid starting byte, but it's not a requirement.  What Section 3.9
-     of Unicode 6.0.0 mandates, though, is to not consume a byte that
-     would otherwise be a valid starting byte.  */
-
-  return EILSEQ;
-
-#undef CONSUME_PEEKED_BYTE
-#undef ASSERT_NOT_EOF
+#undef DECODING_ERROR
+#undef RETURN
 }
 
-/* Read an ISO-8859-1 codepoint (a byte) from PORT.  On success, return
-   0 and set *CODEPOINT to the codepoint that was read, fill BUF with
-   its UTF-8 representation, and set *LEN to the length in bytes.
-   Return `EILSEQ' on error.  */
-static int
-get_latin1_codepoint (SCM port, scm_t_wchar *codepoint,
-                      char buf[SCM_MBCHAR_BUF_SIZE], size_t *len)
+/* Peek an ISO-8859-1 codepoint (a byte) from PORT.  On success, return
+   the codepoint, and set *LEN to 1.  Otherwise on EOF set *LEN to 0.  */
+static scm_t_wchar
+peek_latin1_codepoint (SCM port, SCM *buf, size_t *cur, size_t *len)
 {
-  *codepoint = scm_get_byte_or_eof_unlocked (port);
+  scm_t_wchar ret = peek_byte_or_eof (port, buf, cur);
 
-  if (*codepoint == EOF)
-    *len = 0;
-  else
-    {
-      *len = 1;
-      buf[0] = *codepoint;
-    }
-  return 0;
+  *len = ret == EOF ? 0 : 1;
+
+  return ret;
 }
 
-/* Likewise, read a byte sequence from PORT, passing it through its
-   input conversion descriptor.  */
-static int
-get_iconv_codepoint (SCM port, scm_t_wchar *codepoint,
-		     char buf[SCM_MBCHAR_BUF_SIZE], size_t *len)
+SCM_INTERNAL SCM scm_port_decode_char (SCM, SCM, SCM, SCM);
+SCM_DEFINE (scm_port_decode_char, "port-decode-char", 4, 0, 0,
+            (SCM port, SCM bv, SCM start, SCM count),
+            "")
+#define FUNC_NAME s_scm_port_decode_char
 {
-  scm_t_iconv_descriptors *id;
-  scm_t_uint8 utf8_buf[SCM_MBCHAR_BUF_SIZE];
-  size_t input_size = 0;
+  char *input, *output;
+  scm_t_uint8 utf8_buf[UTF8_BUFFER_SIZE];
+  iconv_t input_cd;
+  size_t c_start, c_count;
+  size_t input_left, output_left, done;
 
-  id = scm_i_port_iconv_descriptors (port, SCM_PORT_READ);
+  SCM_VALIDATE_OPINPORT (1, port);
+  SCM_VALIDATE_BYTEVECTOR (2, bv);
+  c_start = scm_to_size_t (start);
+  c_count = scm_to_size_t (count);
+  SCM_ASSERT_RANGE (3, start, c_start <= SCM_BYTEVECTOR_LENGTH (bv));
+  SCM_ASSERT_RANGE (4, count, c_count <= SCM_BYTEVECTOR_LENGTH (bv) - c_start);
 
-  for (;;)
+  input = (char *) SCM_BYTEVECTOR_CONTENTS (bv) + c_start;
+  input_left = c_count;
+  output = (char *) utf8_buf;
+  output_left = sizeof (utf8_buf);
+
+  /* FIXME: locking!  */
+  scm_port_acquire_iconv_descriptors (port, &input_cd, NULL);
+  done = iconv (input_cd, &input, &input_left, &output, &output_left);
+  scm_port_release_iconv_descriptors (port);
+
+  if (done == (size_t) -1)
     {
-      int byte_read;
-      char *input, *output;
-      size_t input_left, output_left, done;
-
-      byte_read = scm_get_byte_or_eof_unlocked (port);
-      if (SCM_UNLIKELY (byte_read == EOF))
-	{
-          if (SCM_LIKELY (input_size == 0))
-            {
-              *codepoint = (scm_t_wchar) EOF;
-              *len = input_size;
-              return 0;
-            }
-          else
-            {
-              /* EOF found in the middle of a multibyte character. */
-              scm_i_set_pending_eof (port);
-              return EILSEQ;
-            }
-	}
-
-      buf[input_size++] = byte_read;
-
-      input = buf;
-      input_left = input_size;
-      output = (char *) utf8_buf;
-      output_left = sizeof (utf8_buf);
-
-      done = iconv (id->input_cd, &input, &input_left, &output, &output_left);
-
-      if (done == (size_t) -1)
-	{
-	  int err = errno;
-	  if (SCM_LIKELY (err == EINVAL))
-            /* The input byte sequence did not form a complete
-               character.  Read another byte and try again. */
-            continue;
-          else
-            return err;
-	}
+      int err = errno;
+      if (err == EINVAL)
+        /* The input byte sequence did not form a complete
+           character.  Read another byte and try again. */
+        return SCM_BOOL_F;
+      else if (scm_is_eq (SCM_PORT (port)->conversion_strategy,
+                          sym_substitute))
+        return SCM_MAKE_CHAR (UNICODE_REPLACEMENT_CHARACTER);
       else
-        {
-          size_t output_size = sizeof (utf8_buf) - output_left;
-          if (SCM_LIKELY (output_size > 0))
-            {
-              /* iconv generated output.  Convert the UTF8_BUF sequence
-                 to a Unicode code point.  */
-              *codepoint = utf8_to_codepoint (utf8_buf, output_size);
-              *len = input_size;
-              return 0;
-            }
-          else
-            {
-              /* iconv consumed some bytes without producing any output.
-                 Most likely this means that a Unicode byte-order mark
-                 (BOM) was consumed, which should not be included in the
-                 returned buf.  Shift any remaining bytes to the beginning
-                 of buf, and continue the loop. */
-              memmove (buf, input, input_left);
-              input_size = input_left;
-              continue;
-            }
-        }
+        scm_decoding_error ("decode-char", err, "input decoding error", port);
     }
+
+  {
+    size_t output_size = sizeof (utf8_buf) - output_left;
+    if (output_size == 0)
+      /* iconv consumed some bytes without producing any output.
+         Most likely this means that a Unicode byte-order mark
+         (BOM) was consumed.  In any case, keep going until we get
+         output.  */
+      return SCM_BOOL_F;
+
+    return SCM_MAKE_CHAR (utf8_to_codepoint (utf8_buf, output_size));
+  }
+}
+#undef FUNC_NAME
+
+/* Peek a codepoint from PORT, decoding it through iconv.  On success,
+   return the codepoint and set *LEN to the length in bytes.  If there
+   was a decoding error and the port conversion strategy was
+   `substitute', then return #\? and set *LEN to the length of the
+   shortest prefix that cannot begin a valid UTF-8 sequence.  Otherwise
+   signal an error.  */
+static scm_t_wchar
+peek_iconv_codepoint (SCM port, SCM *buf, size_t *cur, size_t *len)
+{
+  size_t input_size = 0;
+  SCM maybe_char = SCM_BOOL_F;
+
+  while (scm_is_false (maybe_char))
+    {
+      size_t avail;
+      *buf = scm_fill_input (port, input_size + 1, cur, &avail);
+
+      if (avail <= input_size)
+	{
+          *len = input_size;
+          if (input_size == 0)
+            /* Normal EOF.  */
+            {
+              /* Make sure iconv descriptors have been opened even if
+                 there were no bytes, to be sure that a decoding error
+                 is signalled if the encoding itself was invalid.  */
+              scm_port_acquire_iconv_descriptors (port, NULL, NULL);
+              scm_port_release_iconv_descriptors (port);
+              return EOF;
+            }
+
+          /* EOF found in the middle of a multibyte character. */
+          if (scm_is_eq (SCM_PORT (port)->conversion_strategy,
+                         sym_substitute))
+            return UNICODE_REPLACEMENT_CHARACTER;
+
+          scm_decoding_error ("peek-char", EILSEQ,
+                              "input decoding error", port);
+          /* Not reached.  */
+          return 0;
+	}
+
+      input_size++;
+      maybe_char = scm_port_decode_char (port,
+                                         scm_port_buffer_bytevector (*buf),
+                                         SCM_I_MAKINUM (*cur),
+                                         SCM_I_MAKINUM (input_size));
+    }
+
+  *len = input_size;
+  return SCM_CHAR (maybe_char);
 }
 
-/* Read a codepoint from PORT and return it in *CODEPOINT.  Fill BUF
-   with the byte representation of the codepoint in PORT's encoding, and
-   set *LEN to the length in bytes of that representation.  Return 0 on
-   success and an errno value on error.  */
-static SCM_C_INLINE int
-get_codepoint (SCM port, scm_t_wchar *codepoint,
-	       char buf[SCM_MBCHAR_BUF_SIZE], size_t *len)
+/* Peek a codepoint from PORT and return it in *CODEPOINT.  Set *LEN to
+   the length in bytes of that representation.  Return 0 on success and
+   an errno value on error.  */
+static SCM_C_INLINE scm_t_wchar
+peek_codepoint (SCM port, SCM *buf, size_t *cur, size_t *len)
 {
-  int err;
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
+  SCM encoding = SCM_PORT (port)->encoding;
 
-  if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_UTF8)
-    err = get_utf8_codepoint (port, codepoint, (scm_t_uint8 *) buf, len);
-  else if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1)
-    err = get_latin1_codepoint (port, codepoint, buf, len);
+  if (scm_is_eq (encoding, sym_UTF_8))
+    return peek_utf8_codepoint (port, buf, cur, len);
+  else if (scm_is_eq (encoding, sym_ISO_8859_1))
+    return peek_latin1_codepoint (port, buf, cur, len);
   else
-    err = get_iconv_codepoint (port, codepoint, buf, len);
-
-  if (SCM_LIKELY (err == 0))
-    {
-      if (SCM_UNLIKELY (pti->at_stream_start_for_bom_read))
-        {
-          /* Record that we're no longer at stream start. */
-          pti->at_stream_start_for_bom_read = 0;
-          if (pt->rw_random)
-            pti->at_stream_start_for_bom_write = 0;
-
-          /* If we just read a BOM in an encoding that recognizes them,
-             then silently consume it and read another code point. */
-          if (SCM_UNLIKELY
-              (*codepoint == SCM_UNICODE_BOM
-               && (pti->encoding_mode == SCM_PORT_ENCODING_MODE_UTF8
-                   || strcmp (pt->encoding, "UTF-16") == 0
-                   || strcmp (pt->encoding, "UTF-32") == 0)))
-            return get_codepoint (port, codepoint, buf, len);
-        }
-      update_port_lf (*codepoint, port);
-    }
-  else if (pt->ilseq_handler == SCM_ICONVEH_QUESTION_MARK)
-    {
-      *codepoint = '?';
-      err = 0;
-      update_port_lf (*codepoint, port);
-    }
-
-  return err;
+    return peek_iconv_codepoint (port, buf, cur, len);
 }
 
 /* Read a codepoint from PORT and return it.  */
 scm_t_wchar
-scm_getc_unlocked (SCM port)
+scm_getc (SCM port)
 #define FUNC_NAME "scm_getc"
 {
-  int err;
-  size_t len;
+  size_t len = 0;
+  size_t cur;
+  SCM buf;
   scm_t_wchar codepoint;
-  char buf[SCM_MBCHAR_BUF_SIZE];
 
-  err = get_codepoint (port, &codepoint, buf, &len);
-  if (SCM_UNLIKELY (err != 0))
-    /* At this point PORT should point past the invalid encoding, as per
-       R6RS-lib Section 8.2.4.  */
-    scm_decoding_error (FUNC_NAME, err, "input decoding error", port);
+  codepoint = peek_codepoint (port, &buf, &cur, &len);
+  scm_port_buffer_did_take (buf, cur, len);
+  if (codepoint == EOF)
+    scm_i_clear_pending_eof (port);
+  update_port_position (SCM_PORT (port)->position, codepoint);
 
   return codepoint;
 }
 #undef FUNC_NAME
-
-scm_t_wchar
-scm_getc (SCM port)
-{
-  scm_i_pthread_mutex_t *lock;
-  scm_t_wchar ret;
-
-  scm_c_lock_port (port, &lock);
-  ret = scm_getc_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
-
-  return ret;
-}
 
 SCM_DEFINE (scm_read_char, "read-char", 0, 1, 0,
            (SCM port),
@@ -1992,7 +2008,7 @@ SCM_DEFINE (scm_read_char, "read-char", 0, 1, 0,
   if (SCM_UNBNDP (port))
     port = scm_current_input_port ();
   SCM_VALIDATE_OPINPORT (1, port);
-  c = scm_getc_unlocked (port);
+  c = scm_getc (port);
   if (EOF == c)
     return SCM_EOF_VAL;
   return SCM_MAKE_CHAR (c);
@@ -2006,138 +2022,71 @@ SCM_DEFINE (scm_read_char, "read-char", 0, 1, 0,
 
 
 
-static void
-scm_i_unget_bytes_unlocked (const unsigned char *buf, size_t len, SCM port)
+void
+scm_unget_bytes (const scm_t_uint8 *buf, size_t len, SCM port)
 #define FUNC_NAME "scm_unget_bytes"
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  size_t old_len, new_len;
-
-  scm_i_clear_pending_eof (port);
-
-  if (pt->read_buf != pt->putback_buf)
-    /* switch to the put-back buffer.  */
-    {
-      if (pt->putback_buf == NULL)
-	{
-          pt->putback_buf_size = (len > SCM_INITIAL_PUTBACK_BUF_SIZE
-                                  ? len : SCM_INITIAL_PUTBACK_BUF_SIZE);
-	  pt->putback_buf
-	    = (unsigned char *) scm_gc_malloc_pointerless
-	    (pt->putback_buf_size, "putback buffer");
-	}
-
-      pt->saved_read_buf = pt->read_buf;
-      pt->saved_read_pos = pt->read_pos;
-      pt->saved_read_end = pt->read_end;
-      pt->saved_read_buf_size = pt->read_buf_size;
-
-      /* Put read_pos at the end of the buffer, so that ungets will not
-         have to shift the buffer contents each time.  */
-      pt->read_buf = pt->putback_buf;
-      pt->read_pos = pt->read_end = pt->putback_buf + pt->putback_buf_size;
-      pt->read_buf_size = pt->putback_buf_size;
-    }
-
-  old_len = pt->read_end - pt->read_pos;
-  new_len = old_len + len;
-
-  if (new_len > pt->read_buf_size)
-    /* The putback buffer needs to be enlarged.  */
-    {
-      size_t new_buf_size;
-      unsigned char *new_buf, *new_end, *new_pos;
-
-      new_buf_size = pt->read_buf_size * 2;
-      if (new_buf_size < new_len)
-        new_buf_size = new_len;
-
-      new_buf = (unsigned char *)
-        scm_gc_malloc_pointerless (new_buf_size, "putback buffer");
-
-      /* Put the bytes at the end of the buffer, so that future
-         ungets won't need to shift the buffer.  */
-      new_end = new_buf + new_buf_size;
-      new_pos = new_end - old_len;
-      memcpy (new_pos, pt->read_pos, old_len);
-
-      pt->read_buf = pt->putback_buf = new_buf;
-      pt->read_pos = new_pos;
-      pt->read_end = new_end;
-      pt->read_buf_size = pt->putback_buf_size = new_buf_size;
-    }
-  else if (pt->read_buf + len < pt->read_pos)
-    /* If needed, shift the existing buffer contents up.
-       This should not happen unless some external code
-       manipulates the putback buffer pointers.  */
-    {
-      unsigned char *new_end = pt->read_buf + pt->read_buf_size;
-      unsigned char *new_pos = new_end - old_len;
-
-      memmove (new_pos, pt->read_pos, old_len);
-      pt->read_pos = new_pos;
-      pt->read_end = new_end;
-    }
-
-  /* Move read_pos back and copy the bytes there.  */
-  pt->read_pos -= len;
-  memcpy (pt->read_buf + (pt->read_pos - pt->read_buf), buf, len);
-
-  if (pt->rw_active == SCM_PORT_WRITE)
-    scm_flush (port);
+  scm_t_port *pt = SCM_PORT (port);
+  SCM read_buf = pt->read_buf;
+  size_t cur;
 
   if (pt->rw_random)
-    pt->rw_active = SCM_PORT_READ;
+    scm_flush (port);
+
+  cur = scm_port_buffer_can_putback (read_buf);
+
+  if (cur < len)
+    {
+      /* The bytes don't fit directly in the read_buf.  */
+      size_t buffered, size;
+
+      buffered = scm_port_buffer_can_take (read_buf, &cur);
+      size = scm_port_buffer_size (read_buf);
+
+      if (len <= size - buffered)
+        {
+          /* But they would fit if we shift the not-yet-read bytes from
+             the read_buf right.  Let's do that.  */
+          const scm_t_uint8 *to_shift = scm_port_buffer_take_pointer (read_buf, cur);
+          scm_port_buffer_reset_end (read_buf);
+          scm_port_buffer_putback (read_buf, to_shift, buffered, size);
+        }
+      else
+        {
+          /* Bah, have to expand the read_buf for the putback.  */
+          while (size < len + buffered)
+            size *= 2;
+          read_buf = scm_expand_port_read_buffer_x (port,
+                                                    scm_from_size_t (size),
+                                                    SCM_BOOL_T);
+        }
+
+      cur = size - buffered;
+    }
+
+  scm_port_buffer_putback (read_buf, buf, len, cur);
 }
 #undef FUNC_NAME
 
 void
-scm_unget_bytes_unlocked (const unsigned char *buf, size_t len, SCM port)
-{
-  scm_i_unget_bytes_unlocked (buf, len, port);
-}
-
-void
-scm_unget_byte_unlocked (int c, SCM port)
-{
-  unsigned char byte = c;
-  scm_i_unget_bytes_unlocked (&byte, 1, port);
-}
-
-void
-scm_unget_bytes (const unsigned char *buf, size_t len, SCM port)
-{
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_i_unget_bytes_unlocked (buf, len, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-}
-
-void 
 scm_unget_byte (int c, SCM port)
 {
   unsigned char byte = c;
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_i_unget_bytes_unlocked (&byte, 1, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
+  scm_unget_bytes (&byte, 1, port);
 }
 
 void
-scm_ungetc_unlocked (scm_t_wchar c, SCM port)
+scm_ungetc (scm_t_wchar c, SCM port)
 #define FUNC_NAME "scm_ungetc"
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
+  scm_t_port *pt = SCM_PORT (port);
   char *result;
   char result_buf[10];
   size_t len;
 
   len = sizeof (result_buf);
 
-  if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_UTF8)
+  if (scm_is_eq (pt->encoding, sym_UTF_8))
     {
       if (c < 0x80)
         {
@@ -2149,47 +2098,50 @@ scm_ungetc_unlocked (scm_t_wchar c, SCM port)
         result =
           (char *) u32_to_u8 ((uint32_t *) &c, 1, (uint8_t *) result_buf, &len);
     }
-  else if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1 && c <= 0xff)
+  else if (scm_is_eq (pt->encoding, sym_ISO_8859_1) && c <= 0xff)
     {
       result_buf[0] = (char) c;
       result = result_buf;
       len = 1;
     }
   else
-    result = u32_conv_to_encoding (pt->encoding,
-                                   (enum iconv_ilseq_handler) pt->ilseq_handler,
-                                   (uint32_t *) &c, 1, NULL,
-                                   result_buf, &len);
+    {
+      scm_t_string_failed_conversion_handler handler =
+        scm_i_string_failed_conversion_handler (pt->conversion_strategy);
+
+      result = u32_conv_to_encoding (scm_i_symbol_chars (pt->encoding),
+                                     (enum iconv_ilseq_handler) handler,
+                                     (uint32_t *) &c, 1, NULL,
+                                     result_buf, &len);
+    }
 
   if (SCM_UNLIKELY (result == NULL || len == 0))
     scm_encoding_error (FUNC_NAME, errno,
 			"conversion to port encoding failed",
-			SCM_BOOL_F, SCM_MAKE_CHAR (c));
+			port, SCM_MAKE_CHAR (c));
 
-  scm_i_unget_bytes_unlocked ((unsigned char *) result, len, port);
+  scm_unget_bytes ((unsigned char *) result, len, port);
 
   if (SCM_UNLIKELY (result != result_buf))
     free (result);
 
-  if (c == '\n')
-    SCM_LINUM (port) -= 1;
-  SCM_DECCOL (port);
+  {
+    long line;
+    int column;
+
+    line = scm_to_long (scm_port_position_line (pt->position));
+    column = scm_to_int (scm_port_position_column (pt->position));
+
+    if (c == '\n')
+      scm_port_position_set_line (pt->position, scm_from_long (line - 1));
+    if (column > 0)
+      scm_port_position_set_column (pt->position, scm_from_int (column - 1));
+  }
 }
 #undef FUNC_NAME
 
 void 
-scm_ungetc (scm_t_wchar c, SCM port)
-{
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_ungetc_unlocked (c, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
-}
-
-void 
-scm_ungets_unlocked (const char *s, int n, SCM port)
+scm_ungets (const char *s, int n, SCM port)
 {
   /* This is simple minded and inefficient, but unreading strings is
    * probably not a common operation, and remember that line and
@@ -2198,18 +2150,7 @@ scm_ungets_unlocked (const char *s, int n, SCM port)
    * Please feel free to write an optimized version!
    */
   while (n--)
-    scm_ungetc_unlocked (s[n], port);
-}
-
-void
-scm_ungets (const char *s, int n, SCM port)
-{
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_ungets_unlocked (s, n, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+    scm_ungetc (s[n], port);
 }
 
 SCM_DEFINE (scm_peek_char, "peek-char", 0, 1, 0,
@@ -2235,43 +2176,17 @@ SCM_DEFINE (scm_peek_char, "peek-char", 0, 1, 0,
 	    "sequence when the error is raised.\n")
 #define FUNC_NAME s_scm_peek_char
 {
-  int err;
-  SCM result;
+  SCM buf;
   scm_t_wchar c;
-  char bytes[SCM_MBCHAR_BUF_SIZE];
-  long column, line;
-  size_t len = 0;
+  size_t cur, len = 0;
 
   if (SCM_UNBNDP (port))
     port = scm_current_input_port ();
   SCM_VALIDATE_OPINPORT (1, port);
 
-  column = SCM_COL (port);
-  line = SCM_LINUM (port);
+  c = peek_codepoint (port, &buf, &cur, &len);
 
-  err = get_codepoint (port, &c, bytes, &len);
-
-  scm_i_unget_bytes_unlocked ((unsigned char *) bytes, len, port);
-
-  SCM_COL (port) = column;
-  SCM_LINUM (port) = line;
-
-  if (SCM_UNLIKELY (err != 0))
-    {
-      scm_decoding_error (FUNC_NAME, err, "input decoding error", port);
-
-      /* Shouldn't happen since `catch' always aborts to prompt.  */
-      result = SCM_BOOL_F;
-    }
-  else if (c == EOF)
-    {
-      scm_i_set_pending_eof (port);
-      result = SCM_EOF_VAL;
-    }
-  else
-    result = SCM_MAKE_CHAR (c);
-
-  return result;
+  return c == EOF ? SCM_EOF_VAL : SCM_MAKE_CHAR (c);
 }
 #undef FUNC_NAME
 
@@ -2293,7 +2208,7 @@ SCM_DEFINE (scm_unread_char, "unread-char", 1, 1, 0,
 
   c = SCM_CHAR (cobj);
 
-  scm_ungetc_unlocked (c, port);
+  scm_ungetc (c, port);
   return cobj;
 }
 #undef FUNC_NAME
@@ -2315,7 +2230,7 @@ SCM_DEFINE (scm_unread_string, "unread-string", 2, 0, 0,
   n = scm_i_string_length (str);
 
   while (n--)
-    scm_ungetc_unlocked (scm_i_string_ref (str, n), port);
+    scm_ungetc (scm_i_string_ref (str, n), port);
   
   return str;
 }
@@ -2326,139 +2241,112 @@ SCM_DEFINE (scm_unread_string, "unread-string", 2, 0, 0,
 
 /* Manipulating the buffers.  */
 
-/* This routine does not take any locks, as it is usually called as part
-   of a port implementation.  */
-void
-scm_port_non_buffer (scm_t_port *pt)
+SCM_SYMBOL (sym_none, "none");
+SCM_SYMBOL (sym_line, "line");
+SCM_SYMBOL (sym_block, "block");
+
+SCM_DEFINE (scm_setvbuf, "setvbuf", 2, 1, 0,
+            (SCM port, SCM mode, SCM size),
+	    "Set the buffering mode for @var{port}.  @var{mode} can be one\n"
+            "of the following symbols:\n"
+	    "@table @code\n"
+	    "@item none\n"
+	    "no buffering\n"
+	    "@item line\n"
+	    "line buffering\n"
+	    "@item block\n"
+	    "block buffering, using a newly allocated buffer of @var{size} bytes.\n"
+	    "If @var{size} is omitted, a default size will be used.\n"
+	    "@end table\n\n"
+	    "Only certain types of ports are supported, most importantly\n"
+	    "file ports.")
+#define FUNC_NAME s_scm_setvbuf
 {
-  pt->read_pos = pt->read_buf = pt->read_end = &pt->shortbuf;
-  pt->write_buf = pt->write_pos = &pt->shortbuf;
-  pt->read_buf_size = pt->write_buf_size = 1;
-  pt->write_end = pt->write_buf + pt->write_buf_size;
-}
+  long csize;
+  scm_t_port *pt;
+  scm_t_port_type *ptob;
+  scm_t_bits tag_word;
+  size_t read_buf_size, write_buf_size, cur, avail;
+  SCM saved_read_buf;
 
-/* this should only be called when the read buffer is empty.  it
-   tries to refill the read buffer.  it returns the first char from
-   the port, which is either EOF or *(pt->read_pos).  */
-static int
-scm_i_fill_input_unlocked (SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
+  port = SCM_COERCE_OUTPORT (port);
 
-  assert (pt->read_pos == pt->read_end);
+  SCM_VALIDATE_OPENPORT (1, port);
+  pt = SCM_PORT (port);
+  ptob = SCM_PORT_TYPE (port);
+  tag_word = SCM_CELL_WORD_0 (port) & ~(SCM_BUF0 | SCM_BUFLINE);
 
-  if (pti->pending_eof)
+  if (scm_is_eq (mode, sym_none))
     {
-      pti->pending_eof = 0;
-      return EOF;
+      tag_word |= SCM_BUF0;
+      if (!SCM_UNBNDP (size) && !scm_is_eq (size, SCM_INUM0))
+	scm_out_of_range (FUNC_NAME, size);
+      csize = 0;
+    }
+  else if (scm_is_eq (mode, sym_line))
+    {
+      csize = SCM_UNBNDP (size) ? -1 : scm_to_int (size);
+      tag_word |= SCM_BUFLINE;
+    }
+  else if (scm_is_eq (mode, sym_block))
+    {
+      csize = SCM_UNBNDP (size) ? -1 : scm_to_int (size);
+    }
+  else
+    scm_out_of_range (FUNC_NAME, mode);
+
+  if (!SCM_UNBNDP (size) && csize < 0)
+    scm_out_of_range (FUNC_NAME, size);
+
+  if (csize >= 0)
+    read_buf_size = write_buf_size = csize;
+  else
+    {
+      read_buf_size = write_buf_size = default_buffer_size;
+      scm_dynwind_begin (0);
+      scm_dynwind_acquire_port (port);
+      if (ptob->get_natural_buffer_sizes)
+        ptob->get_natural_buffer_sizes (port, &read_buf_size, &write_buf_size);
+      scm_dynwind_end ();
     }
 
-  if (pt->read_buf == pt->putback_buf)
-    {
-      /* finished reading put-back chars.  */
-      pt->read_buf = pt->saved_read_buf;
-      pt->read_pos = pt->saved_read_pos;
-      pt->read_end = pt->saved_read_end;
-      pt->read_buf_size = pt->saved_read_buf_size;
-      if (pt->read_pos < pt->read_end)
-	return *(pt->read_pos);
-    }
-  return SCM_PORT_DESCRIPTOR (port)->fill_input (port);
+  /* Minimum buffer size is one byte.  */
+  if (read_buf_size == 0)
+    read_buf_size = 1;
+  if (write_buf_size == 0)
+    write_buf_size = 1;
+
+  if (SCM_OUTPUT_PORT_P (port))
+    scm_flush (port);
+
+  saved_read_buf = pt->read_buf;
+
+  SCM_SET_CELL_WORD_0 (port, tag_word);
+  pt->read_buffering = read_buf_size;
+  pt->read_buf = make_port_buffer (port, read_buf_size);
+  pt->write_buf = make_port_buffer (port, write_buf_size);
+
+  avail = scm_port_buffer_can_take (saved_read_buf, &cur);
+  scm_unget_bytes (scm_port_buffer_take_pointer (saved_read_buf, cur), avail,
+                   port);
+  scm_port_buffer_set_has_eof_p (pt->read_buf,
+                                 scm_port_buffer_has_eof_p (saved_read_buf));
+
+  return SCM_UNSPECIFIED;
 }
+#undef FUNC_NAME
 
-int
-scm_fill_input (SCM port)
-{
-  scm_i_pthread_mutex_t *lock;
-  int ret;
-  
-  scm_c_lock_port (port, &lock);
-  ret = scm_fill_input_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
-
-  return ret;
-}
-
-/* Slow-path fallback for 'scm_get_byte_or_eof_unlocked' */
-int
-scm_slow_get_byte_or_eof_unlocked (SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (pt->rw_active == SCM_PORT_WRITE)
-    scm_flush_unlocked (port);
-
-  if (pt->rw_random)
-    pt->rw_active = SCM_PORT_READ;
-
-  if (pt->read_pos >= pt->read_end)
-    {
-      if (SCM_UNLIKELY (scm_i_fill_input_unlocked (port) == EOF))
-	return EOF;
-    }
-
-  return *pt->read_pos++;
-}
-
-/* Slow-path fallback for 'scm_peek_byte_or_eof_unlocked' */
-int
-scm_slow_peek_byte_or_eof_unlocked (SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (pt->rw_active == SCM_PORT_WRITE)
-    scm_flush_unlocked (port);
-
-  if (pt->rw_random)
-    pt->rw_active = SCM_PORT_READ;
-
-  if (pt->read_pos >= pt->read_end)
-    {
-      if (SCM_UNLIKELY (scm_i_fill_input_unlocked (port) == EOF))
-        {
-          scm_i_set_pending_eof (port);
-          return EOF;
-        }
-    }
-
-  return *pt->read_pos;
-}
-
-/* Move up to READ_LEN bytes from PORT's putback and/or read buffers
-   into memory starting at DEST.  Return the number of bytes moved.
-   PORT's line/column numbers are left unchanged.  */
+/* Move up to READ_LEN bytes from PORT's read buffer into memory
+   starting at DEST.  Return the number of bytes moved.  PORT's
+   line/column numbers are left unchanged.  */
 size_t
 scm_take_from_input_buffers (SCM port, char *dest, size_t read_len)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  size_t bytes_read = 0;
-  size_t from_buf = min (pt->read_end - pt->read_pos, read_len);
-
-  if (from_buf > 0)
-    {
-      memcpy (dest, pt->read_pos, from_buf);
-      pt->read_pos += from_buf;
-      bytes_read += from_buf;
-      read_len -= from_buf;
-      dest += from_buf;
-    }
-
-  /* if putback was active, try the real input buffer too.  */
-  if (pt->read_buf == pt->putback_buf)
-    {
-      from_buf = min (pt->saved_read_end - pt->saved_read_pos, read_len);
-      if (from_buf > 0)
-	{
-	  memcpy (dest, pt->saved_read_pos, from_buf);
-	  pt->saved_read_pos += from_buf;
-	  bytes_read += from_buf;
-	}
-    }
-
-  return bytes_read;
+  SCM read_buf = SCM_PORT (port)->read_buf;
+  size_t cur, avail;
+  avail = scm_port_buffer_can_take (read_buf, &cur);
+  return scm_port_buffer_take (read_buf, (scm_t_uint8 *) dest, read_len,
+                               cur, avail);
 }
 
 /* Clear a port's read buffers, returning the contents.  */
@@ -2479,22 +2367,18 @@ SCM_DEFINE (scm_drain_input, "drain-input", 1, 0, 0,
 	    "for further input.")
 #define FUNC_NAME s_scm_drain_input
 {
-  SCM result;
-  char *data;
-  scm_t_port *pt;
-  long count;
+  SCM read_buf, result;
+  size_t avail, cur;
 
   SCM_VALIDATE_OPINPORT (1, port);
-  pt = SCM_PTAB_ENTRY (port);
+  read_buf = SCM_PORT (port)->read_buf;
+  avail = scm_port_buffer_can_take (read_buf, &cur);
 
-  count = pt->read_end - pt->read_pos;
-  if (pt->read_buf == pt->putback_buf)
-    count += pt->saved_read_end - pt->saved_read_pos;
-
-  if (count)
+  if (avail)
     {
-      result = scm_i_make_string (count, &data, 0);
-      scm_take_from_input_buffers (port, data, count);
+      const scm_t_uint8 *ptr = scm_port_buffer_take_pointer (read_buf, cur);
+      result = scm_from_port_stringn ((const char *) ptr, avail, port);
+      scm_port_buffer_did_take (read_buf, cur, avail);
     }
   else
     result = scm_nullstr;
@@ -2504,35 +2388,24 @@ SCM_DEFINE (scm_drain_input, "drain-input", 1, 0, 0,
 #undef FUNC_NAME
 
 void
-scm_end_input_unlocked (SCM port)
-{
-  long offset;
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  scm_i_clear_pending_eof (port);
-  if (pt->read_buf == pt->putback_buf)
-    {
-      offset = pt->read_end - pt->read_pos;
-      pt->read_buf = pt->saved_read_buf;
-      pt->read_pos = pt->saved_read_pos;
-      pt->read_end = pt->saved_read_end;
-      pt->read_buf_size = pt->saved_read_buf_size;
-    }
-  else
-    offset = 0;
-
-  SCM_PORT_DESCRIPTOR (port)->end_input (port, offset);
-}
-
-void
 scm_end_input (SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_end_input_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  SCM buf;
+  size_t cur, avail;
+  scm_t_off offset;
+
+  buf = SCM_PORT (port)->read_buf;
+  avail = scm_port_buffer_can_take (buf, &cur);
+  scm_port_buffer_did_take (buf, cur, avail);
+  offset = - (scm_t_off) avail;
+
+  if (offset != 0)
+    {
+      scm_dynwind_begin (0);
+      scm_dynwind_acquire_port (port);
+      SCM_PORT_TYPE (port)->seek (port, offset, SEEK_CUR);
+      scm_dynwind_end ();
+    }
 }
 
 SCM_DEFINE (scm_force_output, "force-output", 0, 1, 0,
@@ -2552,152 +2425,1202 @@ SCM_DEFINE (scm_force_output, "force-output", 0, 1, 0,
       port = SCM_COERCE_OUTPORT (port);
       SCM_VALIDATE_OPOUTPORT (1, port);
     }
-  scm_flush_unlocked (port);
+  scm_flush (port);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
 
-void
-scm_flush_unlocked (SCM port)
-{
-  SCM_PORT_DESCRIPTOR (port)->flush (port);
-}
+static void scm_i_write (SCM port, SCM buf);
 
 void
 scm_flush (SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_flush_unlocked (port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  SCM buf = SCM_PORT (port)->write_buf;
+  size_t cur;
+  if (scm_port_buffer_can_take (buf, &cur))
+    scm_i_write (port, buf);
 }
 
-int
-scm_fill_input_unlocked (SCM port)
+/* Return number of bytes consumed, or zero if no BOM was consumed.  */
+static size_t
+maybe_consume_bom (SCM port, const unsigned char *bom, size_t bom_len)
 {
-  return scm_i_fill_input_unlocked (port);
+  SCM read_buf;
+  const scm_t_uint8 *buf;
+  size_t cur, avail;
+
+  if (peek_byte_or_eof (port, &read_buf, &cur) != bom[0])
+    return 0;
+
+  /* Make sure there's enough space in the buffer for a BOM.  Now that
+     we matched the first byte, we know we're going to have to read this
+     many bytes anyway.  */
+  read_buf = scm_fill_input (port, bom_len, &cur, &avail);
+  buf = scm_port_buffer_take_pointer (read_buf, cur);
+
+  if (avail < bom_len)
+    return 0;
+
+  if (memcmp (buf, bom, bom_len) != 0)
+    return 0;
+
+  scm_port_buffer_did_take (read_buf, cur, bom_len);
+  return bom_len;
 }
+
+static size_t
+port_clear_stream_start_for_bom_read (SCM port, enum bom_io_mode io_mode)
+{
+  scm_t_port *pt = SCM_PORT (port);
+
+  if (!pt->at_stream_start_for_bom_read)
+    return 0;
+
+  /* Maybe slurp off a byte-order marker.  */
+  pt->at_stream_start_for_bom_read = 0;
+  if (pt->rw_random)
+    pt->at_stream_start_for_bom_write = 0;
+
+  if (io_mode == BOM_IO_BINARY)
+    return 0;
+
+  if (scm_is_eq (pt->encoding, sym_UTF_8))
+    return maybe_consume_bom (port, scm_utf8_bom, sizeof (scm_utf8_bom));
+
+  if (scm_is_eq (pt->encoding, sym_UTF_16))
+    {
+      if (maybe_consume_bom (port, scm_utf16le_bom, sizeof (scm_utf16le_bom)))
+        {
+          scm_specialize_port_encoding_x (port, sym_UTF_16LE);
+          return 2;
+        }
+      if (maybe_consume_bom (port, scm_utf16be_bom, sizeof (scm_utf16be_bom)))
+        {
+          scm_specialize_port_encoding_x (port, sym_UTF_16BE);
+          return 2;
+        }
+      /* Big-endian by default.  */
+      scm_specialize_port_encoding_x (port, sym_UTF_16BE);
+      return 0;
+    }
+
+  if (scm_is_eq (pt->encoding, sym_UTF_32))
+    {
+      if (maybe_consume_bom (port, scm_utf32le_bom, sizeof (scm_utf32le_bom)))
+        {
+          /* Big-endian by default.  */
+          scm_specialize_port_encoding_x (port, sym_UTF_32LE);
+          return 4;
+        }
+      if (maybe_consume_bom (port, scm_utf32be_bom, sizeof (scm_utf32be_bom)))
+        {
+          scm_specialize_port_encoding_x (port, sym_UTF_32BE);
+          return 4;
+        }
+      /* Big-endian by default.  */
+      scm_specialize_port_encoding_x (port, sym_UTF_32BE);
+      return 0;
+    }
+
+  return 0;
+}
+
+SCM_INTERNAL SCM scm_port_clear_stream_start_for_bom_read (SCM port);
+SCM_DEFINE (scm_port_clear_stream_start_for_bom_read,
+            "port-clear-stream-start-for-bom-read", 1, 0, 0,
+            (SCM port),
+            "")
+#define FUNC_NAME s_scm_port_clear_stream_start_for_bom_read
+{
+  scm_t_port *pt;
+
+  SCM_VALIDATE_PORT (1, port);
+
+  pt = SCM_PORT (port);
+  if (!pt->at_stream_start_for_bom_read)
+    return SCM_BOOL_F;
+
+  /* Maybe slurp off a byte-order marker.  */
+  pt->at_stream_start_for_bom_read = 0;
+  if (pt->rw_random)
+    pt->at_stream_start_for_bom_write = 0;
+
+  return SCM_BOOL_T;
+}
+#undef FUNC_NAME
+
+SCM_INTERNAL SCM scm_port_clear_stream_start_for_bom_write (SCM, SCM);
+SCM_DEFINE (scm_port_clear_stream_start_for_bom_write,
+            "port-clear-stream-start-for-bom-write", 1, 1, 0,
+            (SCM port, SCM buf),
+            "")
+#define FUNC_NAME s_scm_port_clear_stream_start_for_bom_write
+{
+  scm_t_port *pt;
+
+  SCM_VALIDATE_PORT (1, port);
+
+  pt = SCM_PORT (port);
+  if (!pt->at_stream_start_for_bom_write)
+    return SCM_INUM0;
+
+  pt->at_stream_start_for_bom_write = 0;
+  if (pt->rw_random)
+    pt->at_stream_start_for_bom_read = 0;
+
+  if (SCM_UNBNDP (buf))
+    return SCM_INUM0;
+
+  /* Write a BOM if appropriate.  */
+  if (scm_is_eq (pt->encoding, sym_UTF_16))
+    {
+      SCM precise_encoding;
+      size_t end, avail, ret;
+
+      scm_port_acquire_iconv_descriptors (port, NULL, NULL);
+      precise_encoding = pt->precise_encoding;
+      scm_port_release_iconv_descriptors (port);
+
+      avail = scm_port_buffer_can_put (buf, &end);
+      if (scm_is_eq (precise_encoding, sym_UTF_16LE))
+        ret = scm_port_buffer_put (buf, scm_utf16le_bom,
+                                   sizeof (scm_utf16le_bom), end, avail);
+      else
+        ret = scm_port_buffer_put (buf, scm_utf16be_bom,
+                                   sizeof (scm_utf16be_bom), end, avail);
+
+      return scm_from_size_t (ret);
+    }
+  else if (scm_is_eq (pt->encoding, sym_UTF_32))
+    {
+      SCM precise_encoding;
+      size_t end, avail, ret;
+
+      scm_port_acquire_iconv_descriptors (port, NULL, NULL);
+      precise_encoding = pt->precise_encoding;
+      scm_port_release_iconv_descriptors (port);
+
+      avail = scm_port_buffer_can_put (buf, &end);
+      if (scm_is_eq (precise_encoding, sym_UTF_32LE))
+        ret = scm_port_buffer_put (buf, scm_utf32le_bom,
+                                   sizeof (scm_utf32le_bom), end, avail);
+      else
+        ret = scm_port_buffer_put (buf, scm_utf32be_bom,
+                                   sizeof (scm_utf32be_bom), end, avail);
+
+      return scm_from_size_t (ret);
+    }
+
+  return SCM_INUM0;
+}
+#undef FUNC_NAME
+
+SCM
+scm_fill_input (SCM port, size_t minimum_size, size_t *cur_out,
+                size_t *avail_out)
+{
+  scm_t_port *pt = SCM_PORT (port);
+  SCM read_buf;
+  size_t cur, buffered;
+
+  if (minimum_size == 0)
+    minimum_size = 1;
+
+  /* The default is BOM_IO_TEXT.  Binary input procedures should
+     port_clear_stream_start_for_bom_read with BOM_IO_BINARY before
+     filling the input buffers.  */
+  port_clear_stream_start_for_bom_read (port, BOM_IO_TEXT);
+  read_buf = pt->read_buf;
+  buffered = scm_port_buffer_can_take (read_buf, &cur);
+
+  if (buffered >= minimum_size
+      || scm_is_true (scm_port_buffer_has_eof_p (read_buf)))
+    {
+      *cur_out = cur;
+      *avail_out = buffered;
+      return read_buf;
+    }
+
+  if (pt->rw_random)
+    scm_flush (port);
+
+  /* Prepare to read.  Make sure there is enough space in the buffer for
+     minimum_size, and ensure that cur is zero so that we fill towards
+     the end of the buffer.  */
+  if (minimum_size > scm_port_buffer_size (read_buf))
+    /* Grow the read buffer.  */
+    read_buf = scm_expand_port_read_buffer_x (port,
+                                              scm_from_size_t (minimum_size),
+                                              SCM_BOOL_F);
+  else if (buffered == 0)
+    scm_port_buffer_reset (read_buf);
+  else
+    {
+      const scm_t_uint8 *to_shift;
+      to_shift = scm_port_buffer_take_pointer (read_buf, cur);
+      scm_port_buffer_reset (read_buf);
+      memmove (scm_port_buffer_put_pointer (read_buf, 0), to_shift, buffered);
+      scm_port_buffer_did_put (read_buf, 0, buffered);
+    }
+
+  while (buffered < minimum_size
+         && !scm_is_true (scm_port_buffer_has_eof_p (read_buf)))
+    {
+      size_t count;
+      size_t buffering = pt->read_buffering;
+      size_t to_read;
+
+      if (pt->read_buffering < minimum_size)
+        buffering = minimum_size;
+      to_read = buffering - buffered;
+
+      count = scm_i_read_bytes (port, scm_port_buffer_bytevector (read_buf),
+                                buffered, to_read);
+      scm_port_buffer_did_put (read_buf, buffered, count);
+      buffered += count;
+      scm_port_buffer_set_has_eof_p (read_buf, scm_from_bool (count == 0));
+    }
+
+  /* We ensured cur was zero.  */
+  *cur_out = 0;
+  *avail_out = buffered;
+  return read_buf;
+}
+
+SCM_DEFINE (scm_port_random_access_p, "port-random-access?", 1, 0, 0,
+            (SCM port),
+	    "Return true if the port is random-access, or false otherwise.")
+#define FUNC_NAME s_scm_port_random_access_p
+{
+  SCM_VALIDATE_OPPORT (1, port);
+  return scm_from_bool (SCM_PORT (port)->rw_random);
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_read_buffering, "port-read-buffering", 1, 0, 0,
+            (SCM port),
+	    "Return the amount of read buffering on a port, in bytes.")
+#define FUNC_NAME s_scm_port_read_buffering
+{
+  SCM_VALIDATE_OPINPORT (1, port);
+  return scm_from_size_t (SCM_PORT (port)->read_buffering);
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_expand_port_read_buffer_x, "expand-port-read-buffer!", 2, 1, 0,
+            (SCM port, SCM size, SCM putback_p),
+	    "Expand the read buffer of @var{port} to @var{size}.  Copy the\n"
+            "old buffered data, if, any, to the beginning of the new\n"
+            "buffer, unless @var{putback_p} is true, in which case copy it\n"
+            "to the end instead.  Return the new buffer.")
+#define FUNC_NAME s_scm_expand_port_read_buffer_x
+{
+  scm_t_port *pt;
+  size_t c_size, cur, avail;
+  SCM new_buf;
+
+  SCM_VALIDATE_OPINPORT (1, port);
+  pt = SCM_PORT (port);
+  c_size = scm_to_size_t (size);
+  SCM_ASSERT_RANGE (2, size, c_size > scm_port_buffer_size (pt->read_buf));
+  if (SCM_UNBNDP (putback_p))
+    putback_p = SCM_BOOL_F;
+
+  new_buf = make_port_buffer (port, c_size);
+  scm_port_buffer_set_has_eof_p (new_buf,
+                                 scm_port_buffer_has_eof_p (pt->read_buf));
+  avail = scm_port_buffer_can_take (pt->read_buf, &cur);
+
+  if (scm_is_true (putback_p))
+    {
+      scm_port_buffer_reset_end (new_buf);
+      scm_port_buffer_putback (new_buf,
+                               scm_port_buffer_take_pointer (pt->read_buf, cur),
+                               avail, c_size);
+    }
+  else
+    {
+      scm_port_buffer_reset (new_buf);
+      scm_port_buffer_put (new_buf,
+                           scm_port_buffer_take_pointer (pt->read_buf, cur),
+                           avail, 0, c_size);
+    }
+  pt->read_buf = new_buf;
+
+  return new_buf;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_read, "port-read", 1, 0, 0, (SCM port),
+	    "Return the read function for an input port.")
+#define FUNC_NAME s_scm_port_read
+{
+  SCM_VALIDATE_OPINPORT (1, port);
+  return SCM_PORT_TYPE (port)->scm_read;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_write, "port-write", 1, 0, 0,
+            (SCM port),
+	    "Return the write function for an output port.")
+#define FUNC_NAME s_scm_port_write
+{
+  SCM_VALIDATE_OPOUTPORT (1, port);
+  return SCM_PORT_TYPE (port)->scm_write;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_read_buffer, "port-read-buffer", 1, 0, 0,
+            (SCM port),
+	    "Return the read buffer for a port.")
+#define FUNC_NAME s_scm_port_read_buffer
+{
+  SCM_VALIDATE_OPPORT (1, port);
+  return SCM_PORT (port)->read_buf;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_write_buffer, "port-write-buffer", 1, 0, 0,
+            (SCM port),
+	    "Return the write buffer for a port.")
+#define FUNC_NAME s_scm_port_write_buffer
+{
+  SCM_VALIDATE_OPPORT (1, port);
+  return SCM_PORT (port)->write_buf;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_port_auxiliary_write_buffer, "port-auxiliary-write-buffer",
+            1, 0, 0, (SCM port),
+	    "Return the auxiliary write buffer for a port.")
+#define FUNC_NAME s_scm_port_auxiliary_write_buffer
+{
+  scm_t_port *pt;
+
+  SCM_VALIDATE_OPPORT (1, port);
+
+  pt = SCM_PORT (port);
+  if (scm_is_false (pt->write_buf_aux))
+    pt->write_buf_aux = make_port_buffer (port, AUXILIARY_WRITE_BUFFER_SIZE);
+
+  return pt->write_buf_aux;
+}
+#undef FUNC_NAME
+
+SCM_INTERNAL SCM scm_port_line_buffered_p (SCM);
+SCM_DEFINE (scm_port_line_buffered_p, "port-line-buffered?", 1, 0, 0,
+            (SCM port),
+	    "Return true if the port is line buffered.")
+#define FUNC_NAME s_scm_port_line_buffered_p
+{
+  SCM_VALIDATE_OPPORT (1, port);
+  return scm_from_bool (SCM_CELL_WORD_0 (port) & SCM_BUFLINE);
+}
+#undef FUNC_NAME
 
 
 
 
 /* Output.  */
 
+static void
+scm_i_write_bytes (SCM port, SCM src, size_t start, size_t count)
+{
+  size_t written = 0;
+  scm_t_port_type *ptob = SCM_PORT_TYPE (port);
+
+  if (count > SCM_BYTEVECTOR_LENGTH (src))
+    fprintf (stderr, "count: %zu %zu\n", count, scm_c_bytevector_length (src));
+  assert (count <= SCM_BYTEVECTOR_LENGTH (src));
+  assert (start + count <= SCM_BYTEVECTOR_LENGTH (src));
+
+  scm_dynwind_begin (0);
+  scm_dynwind_acquire_port (port);
+
+  do
+    {
+      size_t ret = ptob->c_write (port, src, start + written, count - written);
+
+      if (ret == (size_t) -1)
+        {
+          if (SCM_PORT_FINALIZING_P (port))
+            {
+              /* This port is being closed because it became unreachable
+                 and was finalized, but it has buffered output, and the
+                 resource is not currently writable.  Instead of
+                 blocking, discard buffered output and warn.  To avoid
+                 this situation, force-output on the port before letting
+                 it go!  */
+              scm_puts
+                ("Warning: Discarding buffered output on non-blocking port\n"
+                 "         ",
+                 scm_current_warning_port ());
+              scm_display (port, scm_current_warning_port());
+              scm_puts
+                ("\n"
+                 "         closed by the garbage collector.  To avoid this\n"
+                 "         behavior and this warning, call `force-output' or\n"
+                 "         `close-port' on the port before letting go of it.\n",
+                 scm_current_warning_port ());
+              break;
+            }
+          else
+            port_poll (port, POLLOUT, -1);
+        }
+      else
+        written += ret;
+    }
+  while (written < count);
+
+  scm_dynwind_end ();
+
+  assert (written == count);
+}
+
+static void
+scm_i_write (SCM port, SCM buf)
+{
+  size_t start, count;
+
+  scm_port_clear_stream_start_for_bom_write (port, SCM_UNDEFINED);
+
+  /* Update cursors before attempting to write, assuming that I/O errors
+     are sticky.  That way if the write throws an error, causing the
+     computation to abort, and possibly causing the port to be collected
+     by GC when it's open, any subsequent close-port / force-output
+     won't signal *another* error.  */
+
+  count = scm_port_buffer_can_take (buf, &start);
+  scm_port_buffer_reset (buf);
+  scm_i_write_bytes (port, scm_port_buffer_bytevector (buf), start,
+                     count);
+}
+
+/* Used by an application to write arbitrary number of bytes to an SCM
+   port.  Similar semantics as libc write.  However, unlike libc write,
+   scm_c_write writes the requested number of bytes.
+
+   Warning: Doesn't update port line and column counts!  */
+void
+scm_c_write_bytes (SCM port, SCM src, size_t start, size_t count)
+#define FUNC_NAME "scm_c_write_bytes"
+{
+  scm_t_port *pt;
+  SCM write_buf;
+
+  SCM_VALIDATE_OPOUTPORT (1, port);
+
+  pt = SCM_PORT (port);
+  write_buf = pt->write_buf;
+
+  if (pt->rw_random)
+    scm_end_input (port);
+
+  if (count < scm_port_buffer_size (write_buf))
+    {
+      size_t cur, end;
+
+      /* Make it so that the write_buf "end" cursor is only nonzero if
+         there are buffered bytes already.  */
+      if (scm_port_buffer_can_take (write_buf, &cur) == 0)
+        {
+          scm_port_buffer_reset (write_buf);
+          cur = 0;
+        }
+
+      /* We buffer writes that are smaller in size than the write
+         buffer.  If the buffer is too full to hold the new data, we
+         flush it beforehand.  Otherwise it could be that the buffer is
+         full after filling it with the new data; if that's the case, we
+         flush then instead.  */
+      if (scm_port_buffer_can_put (write_buf, &end) < count)
+        {
+          scm_i_write (port, write_buf);
+          end = 0;
+        }
+
+      {
+        signed char *src_ptr = SCM_BYTEVECTOR_CONTENTS (src) + start;
+        scm_port_buffer_put (write_buf, (scm_t_uint8 *) src_ptr, count,
+                             end, count);
+      }
+
+      if (scm_port_buffer_can_put (write_buf, &end) == 0)
+        scm_i_write (port, write_buf);
+    }
+  else
+    {
+      size_t tmp;
+
+      /* Our write would overflow the buffer.  Flush buffered bytes (if
+         needed), then write our bytes with just one syscall.  */
+      if (scm_port_buffer_can_take (write_buf, &tmp))
+        scm_i_write (port, write_buf);
+
+      scm_i_write_bytes (port, src, start, count);
+    }
+}
+#undef FUNC_NAME
+
+/* Like scm_c_write_bytes, but always writes through the write buffer.
+   Used when an application wants to write bytes stored in an area not
+   managed by GC.  */
+void
+scm_c_write (SCM port, const void *ptr, size_t size)
+#define FUNC_NAME "scm_c_write"
+{
+  scm_t_port *pt;
+  SCM write_buf;
+  size_t end, avail, written = 0;
+  int using_aux_buffer = 0;
+  const scm_t_uint8 *src = ptr;
+
+  SCM_VALIDATE_OPOUTPORT (1, port);
+
+  pt = SCM_PORT (port);
+
+  if (pt->rw_random)
+    scm_end_input (port);
+
+  /* Imagine we are writing 40 bytes on an unbuffered port.  If we were
+     writing from a bytevector we could pass that write directly to the
+     port.  But since we aren't, we need to go through a bytevector, and
+     if we went through the port buffer we'd have to make 40 individual
+     calls to the write function.  That would be terrible.  Really we
+     need an intermediate bytevector.  But, we shouldn't use a trick
+     analogous to what we do with expand-port-read-buffer!, because the
+     way we use the cur and end cursors doesn't seem to facilitate that.
+     So instead we buffer through an auxiliary write buffer if needed.
+     To avoid re-allocating this buffer all the time, we store it on the
+     port.  It should never be left with buffered data.
+
+     Use of an auxiliary write buffer is triggered if the buffer is
+     smaller than the size we would make for an auxiliary write buffer,
+     and the write is bigger than the buffer.  */
+  write_buf = pt->write_buf;
+  if (scm_port_buffer_size (write_buf) < size &&
+      scm_port_buffer_size (write_buf) < AUXILIARY_WRITE_BUFFER_SIZE)
+    {
+      using_aux_buffer = 1;
+      write_buf = scm_port_auxiliary_write_buffer (port);
+    }
+
+  if (using_aux_buffer)
+    {
+      end = 0;
+      avail = AUXILIARY_WRITE_BUFFER_SIZE;
+    }
+  else
+    avail = scm_port_buffer_can_put (write_buf, &end);
+
+  while (written < size)
+    {
+      size_t did_put = scm_port_buffer_put (write_buf, src, size - written,
+                                            end, avail);
+      written += did_put;
+      src += did_put;
+      if (using_aux_buffer || did_put == avail)
+        {
+          scm_i_write (port, write_buf);
+          end = 0;
+          avail = scm_port_buffer_size (write_buf);
+        }
+    }
+}
+#undef FUNC_NAME
+
+/* The encoded escape sequence will be written to BUF, and will be valid
+   ASCII (so also valid ISO-8859-1 and UTF-8).  Return the number of
+   bytes written.  */
+static size_t
+encode_escape_sequence (scm_t_wchar ch, scm_t_uint8 buf[ESCAPE_BUFFER_SIZE])
+{
+  /* Represent CH using the in-string escape syntax.  */
+  static const char hex[] = "0123456789abcdef";
+  static const char escapes[7] = "abtnvfr";
+  size_t i = 0;
+
+  buf[i++] = '\\';
+
+  if (ch >= 0x07 && ch <= 0x0D && ch != 0x0A)
+    /* Use special escapes for some C0 controls.  */
+    buf[i++] = escapes[ch - 0x07];
+  else if (!SCM_R6RS_ESCAPES_P)
+    {
+      if (ch <= 0xFF)
+        {
+          buf[i++] = 'x';
+          buf[i++] = hex[ch / 16];
+          buf[i++] = hex[ch % 16];
+        }
+      else if (ch <= 0xFFFF)
+        {
+          buf[i++] = 'u';
+          buf[i++] = hex[(ch & 0xF000) >> 12];
+          buf[i++] = hex[(ch & 0xF00) >> 8];
+          buf[i++] = hex[(ch & 0xF0) >> 4];
+          buf[i++] = hex[(ch & 0xF)];
+        }
+      else if (ch > 0xFFFF)
+        {
+          buf[i++] = 'U';
+          buf[i++] = hex[(ch & 0xF00000) >> 20];
+          buf[i++] = hex[(ch & 0xF0000) >> 16];
+          buf[i++] = hex[(ch & 0xF000) >> 12];
+          buf[i++] = hex[(ch & 0xF00) >> 8];
+          buf[i++] = hex[(ch & 0xF0) >> 4];
+          buf[i++] = hex[(ch & 0xF)];
+        }
+    }
+  else
+    {
+      buf[i++] = 'x';
+      if (ch > 0xfffff) buf[i++] = hex[(ch >> 20) & 0xf];
+      if (ch > 0x0ffff) buf[i++] = hex[(ch >> 16) & 0xf];
+      if (ch > 0x00fff) buf[i++] = hex[(ch >> 12) & 0xf];
+      if (ch > 0x000ff) buf[i++] = hex[(ch >> 8) & 0xf];
+      if (ch > 0x0000f) buf[i++] = hex[(ch >> 4) & 0xf];
+      buf[i++] = hex[ch & 0xf];
+      buf[i++] = ';';
+    }
+
+  return i;
+}
+
+void
+scm_c_put_escaped_char (SCM port, scm_t_wchar ch)
+{
+  scm_t_uint8 escape[ESCAPE_BUFFER_SIZE];
+  size_t len = encode_escape_sequence (ch, escape);
+  scm_c_put_latin1_chars (port, escape, len);
+}
+
+/* Convert CODEPOINT to UTF-8 and store the result in UTF8.  Return the
+   number of bytes of the UTF-8-encoded string.  */
+static size_t
+codepoint_to_utf8 (scm_t_uint32 codepoint, scm_t_uint8 utf8[UTF8_BUFFER_SIZE])
+{
+  size_t len;
+
+  if (codepoint <= 0x7f)
+    {
+      len = 1;
+      utf8[0] = codepoint;
+    }
+  else if (codepoint <= 0x7ffUL)
+    {
+      len = 2;
+      utf8[0] = 0xc0 | (codepoint >> 6);
+      utf8[1] = 0x80 | (codepoint & 0x3f);
+    }
+  else if (codepoint <= 0xffffUL)
+    {
+      len = 3;
+      utf8[0] = 0xe0 | (codepoint >> 12);
+      utf8[1] = 0x80 | ((codepoint >> 6) & 0x3f);
+      utf8[2] = 0x80 | (codepoint & 0x3f);
+    }
+  else
+    {
+      len = 4;
+      utf8[0] = 0xf0 | (codepoint >> 18);
+      utf8[1] = 0x80 | ((codepoint >> 12) & 0x3f);
+      utf8[2] = 0x80 | ((codepoint >> 6) & 0x3f);
+      utf8[3] = 0x80 | (codepoint & 0x3f);
+    }
+
+  return len;
+}
+
+static size_t
+try_encode_char_to_iconv_buf (SCM port, SCM buf, scm_t_uint32 ch)
+{
+  scm_t_uint8 utf8[UTF8_BUFFER_SIZE];
+  size_t utf8_len = codepoint_to_utf8 (ch, utf8);
+  size_t end;
+  size_t can_put = scm_port_buffer_can_put (buf, &end);
+  scm_t_uint8 *aux = scm_port_buffer_put_pointer (buf, end);
+  iconv_t output_cd;
+  int saved_errno;
+
+  char *input = (char *) utf8;
+  size_t input_left = utf8_len;
+  char *output = (char *) aux;
+  size_t output_left = can_put;
+  size_t res;
+
+  scm_port_acquire_iconv_descriptors (port, NULL, &output_cd);
+  res = iconv (output_cd, &input, &input_left, &output, &output_left);
+  saved_errno = errno;
+  /* Emit bytes needed to get back to initial state, if needed.  */
+  iconv (output_cd, NULL, NULL, &output, &output_left);
+  scm_port_release_iconv_descriptors (port);
+
+  if (res != (size_t) -1)
+    {
+      /* Success.  */
+      scm_port_buffer_did_put (buf, end, can_put - output_left);
+      return 1;
+    }
+
+  if (saved_errno == E2BIG)
+    /* No space to encode the character; try again next time.  */
+    return 0;
+
+  /* Otherwise, re-set the output buffer and try to escape or substitute
+     the character, as appropriate.  */
+  output = (char *) aux;
+  output_left = can_put;
+
+  /* The source buffer is valid UTF-8, so we shouldn't get EILSEQ
+     because of the input encoding; if we get EILSEQ, that means the
+     codepoint is not accessible in the target encoding.  We have whole
+     codepoints in the source buffer, so we shouldn't get EINVAL.  We
+     already handled E2BIG.  The descriptor should be valid so we
+     shouldn't get EBADF.  In summary, we only need to handle EILSEQ.  */
+
+  if (scm_is_eq (SCM_PORT (port)->conversion_strategy, sym_escape))
+    {
+      scm_t_uint8 escape[ESCAPE_BUFFER_SIZE];
+      input = (char *) escape;
+      input_left = encode_escape_sequence (ch, escape);
+      scm_port_acquire_iconv_descriptors (port, NULL, &output_cd);
+      res = iconv (output_cd, &input, &input_left, &output, &output_left);
+      saved_errno = errno;
+      iconv (output_cd, NULL, NULL, &output, &output_left);
+      scm_port_release_iconv_descriptors (port);
+    }
+  else if (scm_is_eq (SCM_PORT (port)->conversion_strategy, sym_substitute))
+    {
+      scm_t_uint8 substitute[2] = "?";
+      input = (char *) substitute;
+      input_left = 1;
+      scm_port_acquire_iconv_descriptors (port, NULL, &output_cd);
+      res = iconv (output_cd, &input, &input_left, &output, &output_left);
+      saved_errno = errno;
+      iconv (output_cd, NULL, NULL, &output, &output_left);
+      scm_port_release_iconv_descriptors (port);
+    }
+
+  if (res != (size_t) -1)
+    {
+      scm_port_buffer_did_put (buf, end, can_put - output_left);
+      return 1;
+    }
+
+  /* No space to write the substitution or escape, or maybe there was an
+     error.  If there are buffered bytes, the caller should flush and
+     try again; otherwise the caller should raise an error.  */
+  return 0;
+}
+
+static size_t
+encode_latin1_chars_to_latin1_buf (SCM port, SCM buf,
+                                   const scm_t_uint8 *chars, size_t count)
+{
+  size_t end;
+  size_t avail = scm_port_buffer_can_put (buf, &end);
+  return scm_port_buffer_put (buf, chars, count, end, avail);
+}
+
+static size_t
+encode_latin1_chars_to_utf8_buf (SCM port, SCM buf,
+                                 const scm_t_uint8 *chars, size_t count)
+{
+  size_t end;
+  size_t buf_size = scm_port_buffer_can_put (buf, &end);
+  scm_t_uint8 *dst = scm_port_buffer_put_pointer (buf, end);
+  size_t read, written;
+  for (read = 0, written = 0;
+       read < count && written + UTF8_BUFFER_SIZE < buf_size;
+       read++)
+    written += codepoint_to_utf8 (chars[read], dst + written);
+  scm_port_buffer_did_put (buf, end, written);
+  return read;
+}
+
+static size_t
+encode_latin1_chars_to_iconv_buf (SCM port, SCM buf,
+                                  const scm_t_uint8 *chars, size_t count)
+{
+  size_t read;
+  for (read = 0; read < count; read++)
+    if (!try_encode_char_to_iconv_buf (port, buf, chars[read]))
+      break;
+  return read;
+}
+
+static size_t
+encode_latin1_chars (SCM port, SCM buf, const scm_t_uint8 *chars, size_t count)
+{
+  scm_t_port *pt = SCM_PORT (port);
+  SCM position;
+  size_t ret, i;
+
+  if (scm_is_eq (pt->encoding, sym_ISO_8859_1))
+    ret = encode_latin1_chars_to_latin1_buf (port, buf, chars, count);
+  else if (scm_is_eq (pt->encoding, sym_UTF_8))
+    ret = encode_latin1_chars_to_utf8_buf (port, buf, chars, count);
+  else
+    ret = encode_latin1_chars_to_iconv_buf (port, buf, chars, count);
+
+  if (ret == 0 && count > 0)
+    scm_encoding_error ("put-char", EILSEQ,
+                        "conversion to port encoding failed",
+                        port, SCM_MAKE_CHAR (chars[0]));
+
+  position = pt->position;
+  for (i = 0; i < ret; i++)
+    update_port_position (position, chars[i]);
+
+  return ret;
+}
+
+static size_t
+encode_utf32_chars_to_latin1_buf (SCM port, SCM buf,
+                                  const scm_t_uint32 *chars, size_t count)
+{
+  scm_t_port *pt = SCM_PORT (port);
+  size_t end;
+  size_t buf_size = scm_port_buffer_can_put (buf, &end);
+  scm_t_uint8 *dst = scm_port_buffer_put_pointer (buf, end);
+  size_t read, written;
+  for (read = 0, written = 0; read < count && written < buf_size; read++)
+    {
+      scm_t_uint32 ch = chars[read];
+      if (ch <= 0xff)
+        dst[written++] = ch;
+      else if (scm_is_eq (pt->conversion_strategy, sym_substitute))
+        dst[written++] = '?';
+      else if (scm_is_eq (pt->conversion_strategy, sym_escape))
+        {
+          scm_t_uint8 escape[ESCAPE_BUFFER_SIZE];
+          size_t escape_len = encode_escape_sequence (ch, escape);
+          if (escape_len > buf_size - written)
+            break;
+          memcpy (dst + written, escape, escape_len);
+          written += escape_len;
+        }
+      else
+        break;
+    }
+  scm_port_buffer_did_put (buf, end, written);
+  return read;
+}
+
+static size_t
+encode_utf32_chars_to_utf8_buf (SCM port, SCM buf, const scm_t_uint32 *chars,
+                                size_t count)
+{
+  size_t end;
+  size_t buf_size = scm_port_buffer_can_put (buf, &end);
+  scm_t_uint8 *dst = scm_port_buffer_put_pointer (buf, end);
+  size_t read, written;
+  for (read = 0, written = 0;
+       read < count && written + UTF8_BUFFER_SIZE < buf_size;
+       read++)
+    written += codepoint_to_utf8 (chars[read], dst + written);
+  scm_port_buffer_did_put (buf, end, written);
+  return read;
+}
+
+static size_t
+encode_utf32_chars_to_iconv_buf (SCM port, SCM buf, const scm_t_uint32 *chars,
+                                 size_t count)
+{
+  size_t read;
+  for (read = 0; read < count; read++)
+    if (!try_encode_char_to_iconv_buf (port, buf, chars[read]))
+      break;
+  return read;
+}
+
+static size_t
+encode_utf32_chars (SCM port, SCM buf, const scm_t_uint32 *chars, size_t count)
+{
+  scm_t_port *pt = SCM_PORT (port);
+  SCM position;
+  size_t ret, i;
+
+  if (scm_is_eq (pt->encoding, sym_ISO_8859_1))
+    ret = encode_utf32_chars_to_latin1_buf (port, buf, chars, count);
+  else if (scm_is_eq (pt->encoding, sym_UTF_8))
+    ret = encode_utf32_chars_to_utf8_buf (port, buf, chars, count);
+  else
+    ret = encode_utf32_chars_to_iconv_buf (port, buf, chars, count);
+
+  if (ret == 0 && count > 0)
+    scm_encoding_error ("put-char", EILSEQ,
+                        "conversion to port encoding failed",
+                        port, SCM_MAKE_CHAR (chars[0]));
+
+  position = pt->position;
+  for (i = 0; i < ret; i++)
+    update_port_position (position, chars[i]);
+
+  return ret;
+}
+
+static size_t
+port_encode_chars (SCM port, SCM buf, SCM str, size_t start, size_t count)
+{
+  if (count == 0)
+    return 0;
+
+  if (scm_i_is_narrow_string (str))
+    {
+      const char *chars = scm_i_string_chars (str);
+      return encode_latin1_chars (port, buf,
+                                  ((const scm_t_uint8 *) chars) + start,
+                                  count);
+    }
+  else
+    {
+      const scm_t_wchar *chars = scm_i_string_wide_chars (str);
+      return encode_utf32_chars (port, buf,
+                                 ((const scm_t_uint32 *) chars) + start,
+                                 count);
+    }
+}
+
+SCM scm_port_encode_chars (SCM, SCM, SCM, SCM, SCM);
+SCM_DEFINE (scm_port_encode_chars, "port-encode-chars", 5, 0, 0,
+            (SCM port, SCM buf, SCM str, SCM start, SCM count),
+            "")
+#define FUNC_NAME s_scm_port_encode_chars
+{
+  size_t c_start, c_count, c_len, encoded;
+
+  SCM_VALIDATE_OPOUTPORT (1, port);
+  SCM_VALIDATE_VECTOR (2, buf);
+  SCM_VALIDATE_STRING (3, str);
+  c_len = scm_i_string_length (str);
+  SCM_VALIDATE_SIZE_COPY (4, start, c_start);
+  SCM_ASSERT_RANGE (4, start, c_start <= c_len);
+  SCM_VALIDATE_SIZE_COPY (5, count, c_count);
+  SCM_ASSERT_RANGE (5, count, c_count <= c_len - c_start);
+
+  encoded = port_encode_chars (port, buf, str, c_start, c_count);
+
+  return scm_from_size_t (encoded);
+}
+#undef FUNC_NAME
+
+SCM scm_port_encode_char (SCM, SCM, SCM);
+SCM_DEFINE (scm_port_encode_char, "port-encode-char", 3, 0, 0,
+            (SCM port, SCM buf, SCM ch),
+            "")
+#define FUNC_NAME s_scm_port_encode_char
+{
+  scm_t_uint32 codepoint;
+
+  SCM_VALIDATE_OPOUTPORT (1, port);
+  SCM_VALIDATE_VECTOR (2, buf);
+  SCM_VALIDATE_CHAR (3, ch);
+
+  codepoint = SCM_CHAR (ch);
+  encode_utf32_chars (port, buf, &codepoint, 1);
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+void
+scm_c_put_latin1_chars (SCM port, const scm_t_uint8 *chars, size_t len)
+{
+  SCM aux_buf = scm_port_auxiliary_write_buffer (port);
+  SCM aux_bv = scm_port_buffer_bytevector (aux_buf);
+  SCM position = SCM_PORT (port)->position;
+  SCM saved_line = scm_port_position_line (position);
+
+  scm_port_clear_stream_start_for_bom_write (port, aux_buf);
+
+  while (len)
+    {
+      size_t encoded = encode_latin1_chars (port, aux_buf, chars, len);
+      assert(encoded <= len);
+      scm_c_write_bytes (port, aux_bv, 0,
+                         scm_to_size_t (scm_port_buffer_end (aux_buf)));
+      scm_port_buffer_reset (aux_buf);
+      chars += encoded;
+      len -= encoded;
+    }
+
+  /* Handle line buffering.  */
+  if ((SCM_CELL_WORD_0 (port) & SCM_BUFLINE) &&
+      !scm_is_eq (saved_line, scm_port_position_line (position)))
+    scm_flush (port);
+}
+
+void
+scm_c_put_utf32_chars (SCM port, const scm_t_uint32 *chars, size_t len)
+{
+  SCM aux_buf = scm_port_auxiliary_write_buffer (port);
+  SCM aux_bv = scm_port_buffer_bytevector (aux_buf);
+  SCM position = SCM_PORT (port)->position;
+  SCM saved_line = scm_port_position_line (position);
+
+  scm_port_clear_stream_start_for_bom_write (port, aux_buf);
+
+  while (len)
+    {
+      size_t encoded = encode_utf32_chars (port, aux_buf, chars, len);
+      assert(encoded <= len);
+      scm_c_write_bytes (port, aux_bv, 0,
+                         scm_to_size_t (scm_port_buffer_end (aux_buf)));
+      scm_port_buffer_reset (aux_buf);
+      chars += encoded;
+      len -= encoded;
+    }
+
+  /* Handle line buffering.  */
+  if ((SCM_CELL_WORD_0 (port) & SCM_BUFLINE) &&
+      !scm_is_eq (saved_line, scm_port_position_line (position)))
+    scm_flush (port);
+}
+
+void
+scm_c_put_char (SCM port, scm_t_wchar ch)
+{
+  if (ch <= 0xff)
+    {
+      scm_t_uint8 narrow_ch = ch;
+      scm_c_put_latin1_chars (port, &narrow_ch, 1);
+    }
+  else
+    {
+      scm_t_uint32 wide_ch = ch;
+      scm_c_put_utf32_chars (port, &wide_ch, 1);
+    }
+}
+
+/* Return 0 unless the port can be written out to the port's encoding
+   without errors, substitutions, or escapes.  */
+int
+scm_c_can_put_char (SCM port, scm_t_wchar ch)
+{
+  SCM encoding = SCM_PORT (port)->encoding;
+
+  if (scm_is_eq (encoding, sym_UTF_8)
+      || (scm_is_eq (encoding, sym_ISO_8859_1) && ch <= 0xff)
+      || scm_is_eq (encoding, sym_UTF_16)
+      || scm_is_eq (encoding, sym_UTF_16LE)
+      || scm_is_eq (encoding, sym_UTF_16BE)
+      || scm_is_eq (encoding, sym_UTF_32)
+      || scm_is_eq (encoding, sym_UTF_32LE)
+      || scm_is_eq (encoding, sym_UTF_32BE))
+    return 1;
+
+  {
+    SCM bv = scm_port_buffer_bytevector (scm_port_auxiliary_write_buffer (port));
+    scm_t_uint8 buf[UTF8_BUFFER_SIZE];
+    char *input = (char *) buf;
+    size_t input_len;
+    char *output = (char *) SCM_BYTEVECTOR_CONTENTS (bv);
+    size_t output_len = SCM_BYTEVECTOR_LENGTH (bv);
+    size_t result;
+    iconv_t output_cd;
+
+    input_len = codepoint_to_utf8 (ch, buf);
+
+    scm_port_acquire_iconv_descriptors (port, NULL, &output_cd);
+    iconv (output_cd, NULL, NULL, &output, &output_len);
+    result = iconv (output_cd, &input, &input_len, &output, &output_len);
+    iconv (output_cd, NULL, NULL, &output, &output_len);
+    scm_port_release_iconv_descriptors (port);
+
+    return result != (size_t) -1;
+  }
+}
+
+void
+scm_c_put_string (SCM port, SCM string, size_t start, size_t count)
+{
+  if (scm_i_is_narrow_string (string))
+    {
+      const char *ptr = scm_i_string_chars (string);
+      scm_c_put_latin1_chars (port, ((const scm_t_uint8 *) ptr) + start, count);
+    }
+  else
+    {
+      const scm_t_wchar *ptr = scm_i_string_wide_chars (string);
+      scm_c_put_utf32_chars (port, ((const scm_t_uint32 *) ptr) + start, count);
+    }
+}
+
+SCM_DEFINE (scm_put_char, "put-char", 2, 0, 0, (SCM port, SCM ch),
+            "Encode @var{ch} to bytes, and send those bytes to @var{port}.")
+#define FUNC_NAME s_scm_put_char
+{
+  SCM_VALIDATE_OPOUTPORT (1, port);
+  SCM_VALIDATE_CHAR (2, ch);
+
+  scm_c_put_char (port, SCM_CHAR (ch));
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_put_string, "put-string", 2, 2, 0,
+            (SCM port, SCM string, SCM start, SCM count),
+            "Display the @var{count} characters from @var{string} to\n"
+            "@var{port}, starting with the character at index @var{start}.\n"
+            "@var{start} defaults to 0, and @var{count} defaults to\n"
+            "displaying all characters until the end of the string.\n\n"
+            "Calling @code{put-string} is equivalent in all respects to\n"
+            "calling @code{put-char} on the relevant sequence of characters,\n"
+            "except that it will attempt to write multiple characters to\n"
+            "the port at a time, even if the port is unbuffered.")
+#define FUNC_NAME s_scm_put_string
+{
+  size_t c_start, c_count, c_len;
+
+  SCM_VALIDATE_OPOUTPORT (1, port);
+  SCM_VALIDATE_STRING (2, string);
+  c_len = scm_i_string_length (string);
+  c_start = SCM_UNBNDP (start) ? 0 : scm_to_size_t (start);
+  SCM_ASSERT_RANGE (3, start, c_start <= c_len);
+  c_count = SCM_UNBNDP (count) ? c_len - c_start : scm_to_size_t (count);
+  SCM_ASSERT_RANGE (4, count, c_count <= c_len - c_start);
+
+  scm_c_put_string (port, string, c_start, c_count);
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
 void
 scm_putc (char c, SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_putc_unlocked (c, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  SCM_ASSERT_TYPE (SCM_OPOUTPORTP (port), port, 0, NULL, "output port");
+  scm_c_put_char (port, (scm_t_uint8) c);
 }
 
 void
 scm_puts (const char *s, SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_puts_unlocked (s, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
-}
-  
-/* scm_c_write
- *
- * Used by an application to write arbitrary number of bytes to an SCM
- * port.  Similar semantics as libc write.  However, unlike libc
- * write, scm_c_write writes the requested number of bytes and has no
- * return value.
- *
- * Warning: Doesn't update port line and column counts!
- */
-void
-scm_c_write_unlocked (SCM port, const void *ptr, size_t size)
-#define FUNC_NAME "scm_c_write"
-{
-  scm_t_port *pt;
-  scm_t_ptob_descriptor *ptob;
-
-  SCM_VALIDATE_OPOUTPORT (1, port);
-
-  pt = SCM_PTAB_ENTRY (port);
-  ptob = SCM_PORT_DESCRIPTOR (port);
-
-  if (pt->rw_active == SCM_PORT_READ)
-    scm_end_input_unlocked (port);
-
-  ptob->write (port, ptr, size);
-
-  if (pt->rw_random)
-    pt->rw_active = SCM_PORT_WRITE;
-}
-#undef FUNC_NAME
-
-void
-scm_c_write (SCM port, const void *ptr, size_t size)
-{
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_c_write_unlocked (port, ptr, size);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  SCM_ASSERT_TYPE (SCM_OPOUTPORTP (port), port, 0, NULL, "output port");
+  scm_c_put_latin1_chars (port, (const scm_t_uint8 *) s, strlen (s));
 }
 
 /* scm_lfwrite
  *
  * This function differs from scm_c_write; it updates port line and
- * column. */
-void
-scm_lfwrite_unlocked (const char *ptr, size_t size, SCM port)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_ptob_descriptor *ptob = SCM_PORT_DESCRIPTOR (port);
-
-  if (pt->rw_active == SCM_PORT_READ)
-    scm_end_input_unlocked (port);
-
-  ptob->write (port, ptr, size);
-
-  for (; size; ptr++, size--)
-    update_port_lf ((scm_t_wchar) (unsigned char) *ptr, port);
-
-  if (pt->rw_random)
-    pt->rw_active = SCM_PORT_WRITE;
-}
-
+ * column, flushing line-buffered ports when appropriate. */
 void
 scm_lfwrite (const char *ptr, size_t size, SCM port)
 {
-  scm_i_pthread_mutex_t *lock;
-  scm_c_lock_port (port, &lock);
-  scm_lfwrite_unlocked (ptr, size, port);
-  if (lock)
-    scm_i_pthread_mutex_unlock (lock);
-  
+  scm_c_put_latin1_chars (port, (const scm_t_uint8 *) ptr, size);
 }
 
 /* Write STR to PORT from START inclusive to END exclusive.  */
 void
 scm_lfwrite_substr (SCM str, size_t start, size_t end, SCM port)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (pt->rw_active == SCM_PORT_READ)
-    scm_end_input_unlocked (port);
-
   if (end == (size_t) -1)
     end = scm_i_string_length (str);
 
-  scm_i_display_substring (str, start, end, port);
-
-  if (pt->rw_random)
-    pt->rw_active = SCM_PORT_WRITE;
+  scm_c_put_string (port, str, start, end - start);
 }
 
 
@@ -2723,7 +3646,8 @@ SCM_DEFINE (scm_char_ready_p, "char-ready?", 0, 1, 0,
 	    "interactive port that has no ready characters.")
 #define FUNC_NAME s_scm_char_ready_p
 {
-  scm_t_port *pt;
+  SCM read_buf;
+  size_t tmp;
 
   if (SCM_UNBNDP (port))
     port = scm_current_input_port ();
@@ -2731,21 +3655,25 @@ SCM_DEFINE (scm_char_ready_p, "char-ready?", 0, 1, 0,
      this case. */
   SCM_VALIDATE_OPINPORT (1, port);
 
-  pt = SCM_PTAB_ENTRY (port);
+  read_buf = SCM_PORT (port)->read_buf;
 
-  /* if the current read buffer is filled, or the
-     last pushed-back char has been read and the saved buffer is
-     filled, result is true.  */
-  if (pt->read_pos < pt->read_end 
-      || (pt->read_buf == pt->putback_buf
-	  && pt->saved_read_pos < pt->saved_read_end))
+  if (scm_port_buffer_can_take (read_buf, &tmp) ||
+      scm_is_true (scm_port_buffer_has_eof_p (read_buf)))
+    /* FIXME: Verify that a whole character is available?  */
     return SCM_BOOL_T;
   else
     {
-      scm_t_ptob_descriptor *ptob = SCM_PORT_DESCRIPTOR (port);
+      scm_t_port_type *ptob = SCM_PORT_TYPE (port);
       
       if (ptob->input_waiting)
-	return scm_from_bool(ptob->input_waiting (port));
+        {
+          SCM ret;
+          scm_dynwind_begin (0);
+          scm_dynwind_acquire_port (port);
+          ret = scm_from_bool (ptob->input_waiting (port));
+          scm_dynwind_end ();
+          return ret;
+        }
       else
 	return SCM_BOOL_T;
     }
@@ -2789,20 +3717,41 @@ SCM_DEFINE (scm_seek, "seek", 3, 0, 0,
 
   if (SCM_OPPORTP (fd_port))
     {
-      scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (fd_port);
-      scm_t_ptob_descriptor *ptob = SCM_PORT_DESCRIPTOR (fd_port);
+      scm_t_port *pt = SCM_PORT (fd_port);
+      scm_t_port_type *ptob = SCM_PORT_TYPE (fd_port);
       off_t_or_off64_t off = scm_to_off_t_or_off64_t (offset);
       off_t_or_off64_t rv;
 
-      if (!ptob->seek)
+      if (ptob->seek && how == SEEK_CUR && off == 0)
+        {
+          size_t tmp;
+          /* If we are just querying the current position, avoid
+             flushing buffers.  We don't even need to require that the
+             port supports random access.  */
+          scm_dynwind_begin (0);
+          scm_dynwind_acquire_port (fd_port);
+          rv = ptob->seek (fd_port, off, how);
+          scm_dynwind_end ();
+          rv -= scm_port_buffer_can_take (pt->read_buf, &tmp);
+          rv += scm_port_buffer_can_take (pt->write_buf, &tmp);
+          return scm_from_off_t_or_off64_t (rv);
+        }
+
+      if (!ptob->seek || !pt->rw_random)
 	SCM_MISC_ERROR ("port is not seekable", 
                         scm_cons (fd_port, SCM_EOL));
-      else
-        rv = ptob->seek (fd_port, off, how);
+
+      scm_end_input (fd_port);
+      scm_flush (fd_port);
+
+      scm_dynwind_begin (0);
+      scm_dynwind_acquire_port (fd_port);
+      rv = ptob->seek (fd_port, off, how);
+      scm_dynwind_end ();
 
       /* Set stream-start flags according to new position. */
-      pti->at_stream_start_for_bom_read  = (rv == 0);
-      pti->at_stream_start_for_bom_write = (rv == 0);
+      pt->at_stream_start_for_bom_read  = (rv == 0);
+      pt->at_stream_start_for_bom_write = (rv == 0);
 
       scm_i_clear_pending_eof (fd_port);
 
@@ -2892,19 +3841,22 @@ SCM_DEFINE (scm_truncate_file, "truncate-file", 1, 1, 0,
   else if (SCM_OPOUTPORTP (object))
     {
       off_t_or_off64_t c_length = scm_to_off_t_or_off64_t (length);
-      scm_t_port *pt = SCM_PTAB_ENTRY (object);
-      scm_t_ptob_descriptor *ptob = SCM_PORT_DESCRIPTOR (object);
+      scm_t_port_type *ptob = SCM_PORT_TYPE (object);
 
       if (!ptob->truncate)
 	SCM_MISC_ERROR ("port is not truncatable", SCM_EOL);
 
       scm_i_clear_pending_eof (object);
-      if (pt->rw_active == SCM_PORT_READ)
-	scm_end_input_unlocked (object);
-      else if (pt->rw_active == SCM_PORT_WRITE)
-	ptob->flush (object);
 
+      if (SCM_INPUT_PORT_P (object)
+          && SCM_PORT (object)->rw_random)
+        scm_end_input (object);
+      scm_flush (object);
+
+      scm_dynwind_begin (0);
+      scm_dynwind_acquire_port (object);
       ptob->truncate (object, c_length);
+      scm_dynwind_end ();
       rv = 0;
     }
   else
@@ -2935,7 +3887,7 @@ SCM_DEFINE (scm_port_line, "port-line", 1, 0, 0,
 {
   port = SCM_COERCE_OUTPORT (port);
   SCM_VALIDATE_OPENPORT (1, port);
-  return scm_from_long (SCM_LINUM (port));
+  return scm_port_position_line (SCM_PORT (port)->position);
 }
 #undef FUNC_NAME
 
@@ -2947,7 +3899,8 @@ SCM_DEFINE (scm_set_port_line_x, "set-port-line!", 2, 0, 0,
 {
   port = SCM_COERCE_OUTPORT (port);
   SCM_VALIDATE_OPENPORT (1, port);
-  SCM_PTAB_ENTRY (port)->line_number = scm_to_long (line);
+  scm_to_long (line);
+  scm_port_position_set_line (SCM_PORT (port)->position, line);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -2966,7 +3919,7 @@ SCM_DEFINE (scm_port_column, "port-column", 1, 0, 0,
 {
   port = SCM_COERCE_OUTPORT (port);
   SCM_VALIDATE_OPENPORT (1, port);
-  return scm_from_int (SCM_COL (port));
+  return scm_port_position_column (SCM_PORT (port)->position);
 }
 #undef FUNC_NAME
 
@@ -2978,7 +3931,8 @@ SCM_DEFINE (scm_set_port_column_x, "set-port-column!", 2, 0, 0,
 {
   port = SCM_COERCE_OUTPORT (port);
   SCM_VALIDATE_OPENPORT (1, port);
-  SCM_PTAB_ENTRY (port)->column_number = scm_to_int (column);
+  scm_to_int (column);
+  scm_port_position_set_column (SCM_PORT (port)->position, column);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -3019,7 +3973,7 @@ SCM_DEFINE (scm_set_port_filename_x, "set-port-filename!", 2, 0, 0,
 void
 scm_print_port_mode (SCM exp, SCM port)
 {
-  scm_puts_unlocked (SCM_CLOSEDP (exp)
+  scm_puts (SCM_CLOSEDP (exp)
 	    ? "closed: "
 	    : (SCM_RDNG & SCM_CELL_WORD_0 (exp)
 	       ? (SCM_WRTNG & SCM_CELL_WORD_0 (exp)
@@ -3034,15 +3988,15 @@ scm_print_port_mode (SCM exp, SCM port)
 int
 scm_port_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED)
 {
-  char *type = SCM_PTOBNAME (SCM_PTOBNUM (exp));
+  char *type = SCM_PORT_TYPE (port)->name;
   if (!type)
     type = "port";
-  scm_puts_unlocked ("#<", port);
+  scm_puts ("#<", port);
   scm_print_port_mode (exp, port);
-  scm_puts_unlocked (type, port);
-  scm_putc_unlocked (' ', port);
-  scm_uintprint (SCM_CELL_WORD_1 (exp), 16, port);
-  scm_putc_unlocked ('>', port);
+  scm_puts (type, port);
+  scm_putc (' ', port);
+  scm_uintprint ((scm_t_bits) SCM_PORT (exp), 16, port);
+  scm_putc ('>', port);
   return 1;
 }
 
@@ -3107,7 +4061,7 @@ static void
 flush_output_port (void *closure, SCM port)
 {
   if (SCM_OPOUTPORTP (port))
-    scm_flush_unlocked (port);
+    scm_flush (port);
 }
 
 SCM_DEFINE (scm_flush_all_ports, "flush-all-ports", 0, 0, 0,
@@ -3126,30 +4080,24 @@ SCM_DEFINE (scm_flush_all_ports, "flush-all-ports", 0, 0, 0,
 
 /* Void ports.   */
 
-scm_t_bits scm_tc16_void_port = 0;
+scm_t_port_type *scm_void_port_type = 0;
 
-static int fill_input_void_port (SCM port SCM_UNUSED)
+static size_t
+void_port_read (SCM port, SCM dst, size_t start, size_t count)
 {
-  return EOF;
+  return 0;
 }
 
-static void
-write_void_port (SCM port SCM_UNUSED,
-		 const void *data SCM_UNUSED,
-		 size_t size SCM_UNUSED)
+static size_t
+void_port_write (SCM port, SCM src, size_t start, size_t count)
 {
+  return count;
 }
 
 static SCM
 scm_i_void_port (long mode_bits)
 {
-  SCM ret;
-
-  ret = scm_c_make_port (scm_tc16_void_port, mode_bits, 0);
-
-  scm_port_non_buffer (SCM_PTAB_ENTRY (ret));
-  
-  return ret;
+  return scm_c_make_port (scm_void_port_type, mode_bits, 0);
 }
 
 SCM
@@ -3175,16 +4123,51 @@ SCM_DEFINE (scm_sys_make_void_port, "%make-void-port", 1, 0, 0,
 
 /* Initialization.  */
 
-void
-scm_init_ports ()
+static void
+scm_init_ice_9_ports (void)
 {
+#include "libguile/ports.x"
+
+  scm_c_define ("the-eof-object", SCM_EOF_VAL);
+
   /* lseek() symbols.  */
   scm_c_define ("SEEK_SET", scm_from_int (SEEK_SET));
   scm_c_define ("SEEK_CUR", scm_from_int (SEEK_CUR));
   scm_c_define ("SEEK_END", scm_from_int (SEEK_END));
 
-  scm_tc16_void_port = scm_make_port_type ("void", fill_input_void_port, 
-					   write_void_port);
+  scm_c_define ("%current-input-port-fluid", cur_inport_fluid);
+  scm_c_define ("%current-output-port-fluid", cur_outport_fluid);
+  scm_c_define ("%current-error-port-fluid", cur_errport_fluid);
+  scm_c_define ("%current-warning-port-fluid", cur_warnport_fluid);
+}
+
+void
+scm_init_ports (void)
+{
+  sym_UTF_8 = scm_from_latin1_symbol ("UTF-8");
+  sym_ISO_8859_1 = scm_from_latin1_symbol ("ISO-8859-1");
+  sym_UTF_16 = scm_from_latin1_symbol ("UTF-16");
+  sym_UTF_16LE = scm_from_latin1_symbol ("UTF-16LE");
+  sym_UTF_16BE = scm_from_latin1_symbol ("UTF-16BE");
+  sym_UTF_32 = scm_from_latin1_symbol ("UTF-32");
+  sym_UTF_32LE = scm_from_latin1_symbol ("UTF-32LE");
+  sym_UTF_32BE = scm_from_latin1_symbol ("UTF-32BE");
+
+  sym_substitute = scm_from_latin1_symbol ("substitute");
+  sym_escape = scm_from_latin1_symbol ("escape");
+  sym_error = scm_from_latin1_symbol ("error");
+
+  trampoline_to_c_read_subr =
+    scm_c_make_gsubr ("port-read", 4, 0, 0,
+                      (scm_t_subr) trampoline_to_c_read);
+  trampoline_to_c_write_subr =
+    scm_c_make_gsubr ("port-write", 4, 0, 0,
+                      (scm_t_subr) trampoline_to_c_write);
+
+  scm_void_port_type = scm_make_port_type ("void", void_port_read,
+					   void_port_write);
+
+  scm_i_port_weak_set = scm_c_make_weak_set (31);
 
   cur_inport_fluid = scm_make_fluid ();
   cur_outport_fluid = scm_make_fluid ();
@@ -3192,25 +4175,42 @@ scm_init_ports ()
   cur_warnport_fluid = scm_make_fluid ();
   cur_loadport_fluid = scm_make_fluid ();
 
-  scm_i_port_weak_set = scm_c_make_weak_set (31);
+  default_port_encoding_var =
+    scm_c_define ("%default-port-encoding",
+                  scm_make_fluid_with_default (SCM_BOOL_F));
+  default_conversion_strategy_var =
+    scm_c_define ("%default-port-conversion-strategy",
+                  scm_make_fluid_with_default (sym_substitute));
+  /* Use the locale as the default port encoding.  */
+  scm_i_set_default_port_encoding (locale_charset ());
 
-#include "libguile/ports.x"
+  scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
+                            "scm_init_ice_9_ports",
+			    (scm_t_extension_init_func) scm_init_ice_9_ports,
+			    NULL);
 
-  /* Use Latin-1 as the default port encoding.  */
-  SCM_VARIABLE_SET (default_port_encoding_var,
-                    scm_make_fluid_with_default (SCM_BOOL_F));
-  scm_port_encoding_init = 1;
+  /* The following bindings are used early in boot-9.scm.  */
 
-  SCM_VARIABLE_SET (default_conversion_strategy_var,
-                    scm_make_fluid_with_default (sym_substitute));
-  scm_conversion_strategy_init = 1;
+  /* Used by `include'.  */
+  scm_c_define_gsubr ("set-port-encoding!", 2, 0, 0,
+                      (scm_t_subr) scm_set_port_encoding_x);
+  scm_c_define_gsubr (s_scm_eof_object_p, 1, 0, 0,
+                      (scm_t_subr) scm_eof_object_p);
 
-  /* These bindings are used when boot-9 turns `current-input-port' et
-     al into parameters.  They are then removed from the guile module.  */
-  scm_c_define ("%current-input-port-fluid", cur_inport_fluid);
-  scm_c_define ("%current-output-port-fluid", cur_outport_fluid);
-  scm_c_define ("%current-error-port-fluid", cur_errport_fluid);
-  scm_c_define ("%current-warning-port-fluid", cur_warnport_fluid);
+  /* Used by a number of error/warning-printing routines.  */
+  scm_c_define_gsubr (s_scm_force_output, 0, 1, 0,
+                      (scm_t_subr) scm_force_output);
+
+  /* Used by `file-exists?' and related functions if `stat' is
+     unavailable.  */
+  scm_c_define_gsubr (s_scm_close_port, 1, 0, 0,
+                      (scm_t_subr) scm_close_port);
+
+  /* Used by error routines.  */
+  scm_c_define_gsubr (s_scm_current_error_port, 0, 0, 0,
+                      (scm_t_subr) scm_current_error_port);
+  scm_c_define_gsubr (s_scm_current_warning_port, 0, 0, 0,
+                      (scm_t_subr) scm_current_warning_port);
 }
 
 /*

@@ -1,12 +1,149 @@
 Guile NEWS --- history of user-visible changes.
-Copyright (C) 1996-2015 Free Software Foundation, Inc.
+Copyright (C) 1996-2017 Free Software Foundation, Inc.
 See the end for copying conditions.
 
 Please send Guile bug reports to bug-guile@gnu.org.
 
 
 
-Changes in 2.1.1 (changes since the 2.0.x series):
+Changes in 2.2.3 (since 2.2.2):
+
+* New interfaces
+
+** (web uri) module has better support for RFC 3986
+
+The URI standard, RFC 3986, defines additional "relative-ref" and
+"URI-reference" data types.  Thanks to Daniel Hartwig, Guile's support
+for these URI subtypes has been improved.  See "Universal Resource
+Identifiers" in the manual, for more.
+
+* New deprecations
+
+** Using `uri?' as a predicate on relative-refs deprecated
+
+If you don't care whether the URI is a relative-ref or not, use
+`uri-reference?'.  If you do, use `uri-reference?' and `relative-ref?'.
+In the future `uri?' will return a true value only for URIs that specify
+a scheme.
+
+* Bug fixes
+
+** Enable GNU Readline 7.0's support for "bracketed paste".
+
+Before, when pasting an expression that contained TAB characters into
+Guile's REPL with GNU Readline support enabled, the pasted TAB
+characters would trigger autocompletion in Readline.  This was never
+what you wanted.  Guile now sets the new "bracketed-paste" option in GNU
+Readline 7.0 to on by default, making readline treat pastes into the
+terminal as atomic units without control characters.  See "Readline
+Options" in the manual for full details.
+
+** Fix time-monotonic from SRFI-19; broken in 2.2.1.
+
+
+Changes in 2.2.2 (since 2.2.1):
+
+* Bug fixes
+
+** Syntax objects are once more comparable with 'equal?'
+
+The syntax object change in 2.2.1 had the unintended effect of making
+syntax objects no longer comparable with equal?.  This release restores
+the previous behavior.
+
+** Restore libgc dependency
+
+The change to throw exceptions when mutating literal constants partly
+relied on an interface that was added to our garbage collector (BDW-GC)
+after its 7.2 release.  Guile 2.2.2 adds a workaround to allow Guile to
+continue be used with libgc as old as 7.2.
+
+** SRFI-37 bug fix to not error on empty-string arguments.
+
+Thanks to Thomas Danckaert for fixing this long-standing bug.
+
+
+
+Changes in 2.2.1 (since 2.2.0):
+
+* Notable changes
+
+** New sandboxed evaluation facility
+
+Guile now has a way to execute untrusted code in a safe way.  See
+"Sandboxed Evaluation" in the manual for full details, including some
+important notes on limitations on the sandbox's ability to prevent
+resource exhaustion.
+
+** All literal constants are read-only
+
+According to the Scheme language definition, it is an error to attempt
+to mutate a "constant literal".  A constant literal is data that is a
+literal quoted part of a program.  For example, all of these are errors:
+
+  (set-car! '(1 . 2) 42)
+  (append! '(1 2 3) '(4 5 6))
+  (vector-set! '#(a b c) 1 'B)
+
+Guile takes advantage of this provision of Scheme to deduplicate shared
+structure in constant literals within a compilation unit, and to
+allocate constant data directly in the compiled object file.  If the
+data needs no relocation at run-time, as is the case for pairs or
+vectors that only contain immediate values, then the data can actually
+be shared between different Guile processes, using the operating
+system's virtual memory facilities.
+
+However, in Guile 2.2.0, constants that needed relocation were actually
+mutable -- though (vector-set! '#(a b c) 1 'B) was an error, Guile
+wouldn't actually cause an exception to be raised, silently allowing the
+mutation.  This could affect future users of this constant, or indeed of
+any constant in the compilation unit that shared structure with the
+original vector.
+
+Additionally, attempting to mutate constant literals mapped in the
+read-only section of files would actually cause a segmentation fault, as
+the operating system prohibits writes to read-only memory.  "Don't do
+that" isn't a very nice solution :)
+
+Both of these problems have been fixed.  Any attempt to mutate a
+constant literal will now raise an exception, whether the constant needs
+relocation or not.
+
+** Syntax objects are now a distinct type
+
+It used to be that syntax objects were represented as a tagged vector.
+These values could be forged by users to break scoping abstractions,
+preventing the implementation of sandboxing facilities in Guile.  We are
+as embarrassed about the previous situation as we pleased are about the
+fact that we've fixed it.
+
+Unfortunately, during the 2.2 stable series (or at least during part of
+it), we need to support files compiled with Guile 2.2.0.  These files
+may contain macros that contain legacy syntax object constants.  See the
+discussion of "allow-legacy-syntax-objects?" in "Syntax Transformer
+Helpers" in the manual for full details.
+
+* Bug fixes
+
+*** Fix snarfing with -ggdb3 (#25803)
+*** Fix spurious snarf warnings for net_db.c
+*** Output statprof flat display to correct port
+*** Document guile-2.2 cond-expand feature
+*** Add --with-bdw-gc for BSDs that use bdw-gc-threaded (see README)
+*** Documentation typo fixes (#26188)
+*** Fix SRFI-9 date->string bugs with ~N and ~F (#26261, #26260, #26259)
+*** SRFI-19 current-time-monotonic returns time of right type (#26329)
+*** Avoid causing GC when looking up exception handler
+*** Increment objcode version, in a compatible way
+*** Fix compile warning in (system base types)
+*** Only run tests that require fork if it is provided
+*** Speed up procedure-minimum-arity for fixed arity
+*** REPL server tests catch ECONNABORTED
+*** Avoid deprecated argument to setvbuf in (web client)
+*** Remove non-existent 'open-connection-for-uri' export from (web client)
+
+
+Changes in 2.2.0 (changes since the 2.0.x stable release series):
 
 * Notable changes
 
@@ -21,9 +158,9 @@ better memory usage, and faster execution of user code.  See the
 
 This new release series takes the ABI-break opportunity to fix some
 interfaces that were difficult to use correctly from multiple threads.
-Notably, weak hash tables are now transparently thread-safe.  Ports are
-also thread-safe; see "New interfaces" below for details on the changes
-to the C interface.
+Notably, weak hash tables and ports are now transparently thread-safe.
+See "Scheduling" in the manual, for updated documentation on threads and
+communications primitives.
 
 ** Better space-safety
 
@@ -55,14 +192,14 @@ hash-bang line (e.g. "#!/usr/bin/guile"), it now installs the current
 locale via a call to `(setlocale LC_ALL "")'.  For users with a unicode
 locale, this makes all ports unicode-capable by default, without the
 need to call `setlocale' in your program.  This behavior may be
-controlled via the GUILE_INSTALL_LOCALE environment variable; see the
-manual for more.
+controlled via the GUILE_INSTALL_LOCALE environment variable; see
+"Environment Variables" in the manual, for more.
 
 ** Complete Emacs-compatible Elisp implementation
 
-Thanks to the work of BT Templeton, Guile's Elisp implementation is now
-fully Emacs-compatible, implementing all of Elisp's features and quirks
-in the same way as the editor we know and love.
+Thanks to the work of Robin Templeton, Guile's Elisp implementation is
+now fully Emacs-compatible, implementing all of Elisp's features and
+quirks in the same way as the editor we know and love.
 
 ** Dynamically expandable stacks
 
@@ -101,6 +238,40 @@ in Scheme.  This decreases its maintenance burden on the rest of Guile,
 while also makes it possible to implement new features in the future,
 such as method combinations or `eqv?' specializers.
 
+** Better handling of GUILE_LOAD_COMPILED_PATH
+
+It used to be that Guile would stop at the first .go file it found in
+the GUILE_LOAD_COMPILED_PATH.  If that file turned out to be out of
+date, then no .go file would be loaded.  Now Guile will continue to
+search the path for a file which is both present and up-to-date, with
+respect to the .scm file.
+
+** C99 required
+
+Following Emacs, you must use a C99-capable compiler when building
+Guile.  In the future we also expect require C99 to use Guile's C
+interface, at least for `stdint' support.
+
+** Lightweight pre-emptive threading primitives
+
+The compiler now inserts special "handle-interrupts" opcodes before each
+call, return, and backwards jump target.  This allows the user to
+interrupt any computation and to accurately profile code using
+interrupts.  It used to be that interrupts were run by calling a C
+function from the VM; now interrupt thunks are run directly from the VM.
+This allows interrupts to save a delimited continuation and, if the
+continuation was established from the same VM invocation (the usual
+restriction), that continuation can then be resumed.  In this way users
+can implement lightweight pre-emptive threading facilities.
+
+** with-dynamic-state in VM
+
+Similarly, `with-dynamic-state' no longer recurses out of the VM,
+allowing captured delimited continuations that include a
+`with-dynamic-state' invocation to be resumed.  This is a precondition
+to allow lightweight threading libraries to establish a dynamic state
+per lightweight fiber.
+
 * Performance improvements
 
 ** Faster programs via new virtual machine
@@ -132,10 +303,11 @@ Guile's compiler now uses a Continuation-Passing Style (CPS)
 intermediate language, allowing it to reason easily about temporary
 values and control flow.  Examples of optimizations that this permits
 are optimal contification, optimal common subexpression elimination,
-dead code elimination, parallel moves with at most one temporary,
-allocation of stack slots using precise liveness information, and
-closure optimization.  For more, see "Continuation-Passing Style" in the
-manual.
+dead code elimination, loop-invariant code motion, loop peeling, loop
+inversion, parallel moves with at most one temporary, allocation of
+stack slots using precise liveness information, unboxing of 64-bit
+integers and floating point values, and closure optimization.  For more,
+see "Continuation-Passing Style" in the manual.
 
 ** Faster interpreter
 
@@ -169,6 +341,20 @@ Thanks to work by Daniel Llorens, the generic array facility is much
 faster now, as it is internally better able to dispatch on the type of
 the underlying backing store.
 
+** All ports are now buffered, can be targets of `setvbuf'
+
+See "Buffering" in the manual, for more.  A port with a buffer size of 1
+is equivalent to an unbuffered port.  Ports may set their default buffer
+sizes, and some ports (for example soft ports) are unbuffered by default
+for historical reasons.
+
+** Mutexes are now faster under contention
+
+Guile implements its own mutexes, so that threads that are trying to
+acquire a mutex can be interrupted.  These mutexes used to be quite
+inefficient when many threads were trying to acquire them, causing many
+spurious wakeups and contention.  This has been fixed.
+
 * New interfaces
 
 ** New `cond-expand' feature: `guile-2.2'
@@ -185,29 +371,55 @@ Since the compiler was rewritten, there are new modules for the back-end
 of the compiler and the low-level loader and introspection interfaces.
 See the "Guile Implementation" chapter in the manual for all details.
 
-** New functions: `scm_to_intptr_t', `scm_from_intptr_t'
-** New functions: `scm_to_uintptr_t', `scm_from_uintptr_t'
+** Add "tree" display mode for statprof.
 
-See "Integers" in the manual, for more.
+See the newly updated "Statprof" section of the manual, for more.
 
-** New thread-safe port API
+** Support for non-blocking I/O
 
-For details on `scm_c_make_port', `scm_c_make_port_with_encoding',
-`scm_c_lock_port', `scm_c_try_lock_port', `scm_c_unlock_port',
-`scm_c_port_type_ref', `scm_c_port_type_add_x', `SCM_PORT_DESCRIPTOR',
-and `scm_dynwind_lock_port', see XXX.
+See "Non-Blocking I/O" in the manual, for more.
 
-There is now a routine to atomically adjust port "revealed counts".  See
-XXX for more on `scm_adjust_port_revealed_x' and
-`adjust-port-revealed!',
+** Implement R6RS custom binary input/output ports
 
-All other port API now takes the lock on the port if needed.  There are
-some C interfaces if you know that you don't need to take a lock; see
-XXX for details on `scm_get_byte_or_eof_unlocked',
-`scm_peek_byte_or_eof_unlocked' `scm_c_read_unlocked',
-`scm_getc_unlocked' `scm_unget_byte_unlocked', `scm_ungetc_unlocked',
-`scm_ungets_unlocked', `scm_fill_input_unlocked' `scm_putc_unlocked',
-`scm_puts_unlocked', and `scm_lfwrite_unlocked'.
+See "Custom Ports" in the manual.
+
+** Implement R6RS output-buffer-mode
+** Implement R6RS bytevector->string, string->bytevector
+
+See "R6RS Transcoders" in the manual.
+
+** `accept' now takes optional flags argument
+
+These flags can include `SOCK_NONBLOCK' and `SOCK_CLOEXEC', indicating
+options to apply to the returned socket, potentially removing the need
+for additional system calls to set these options.  See "Network Sockets
+and Communication" in the manual, for more.
+
+** Thread-safe atomic boxes (references)
+
+See "Atomics" in the manual.
+
+** Thread-local fluids
+
+Guile now has support for fluids whose values are not captured by
+`current-dynamic-state' and not inheritied by child threads, and thus
+are local to the kernel thread they run on.  See "Thread-Local
+Variables" in the manual, for more.
+
+** suspendable-continuation?
+
+This predicate returns true if the delimited continuation captured by
+aborting to a prompt would be able to be resumed.  See "Prompt
+Primitives" in the manual for more.
+
+** scm_c_prepare_to_wait_on_fd, scm_c_prepare_to_wait_on_cond,
+** scm_c_wait_finished
+
+See "Asyncs" in the manual for more.
+
+** File descriptor finalizers
+
+See "Ports and File Descriptors" in the manual.
 
 ** New inline functions: `scm_new_smob', `scm_new_double_smob'
 
@@ -224,14 +436,22 @@ For more on `SCM_HAS_TYP7', `SCM_HAS_TYP7S', `SCM_HAS_TYP16', see XXX.
 the old `SCM2PTR' and `PTR2SCM'.  Also, `SCM_UNPACK_POINTER' yields a
 void*.
 
+** `TCP_NODELAY' and `TCP_CORK' socket options, if provided by the system
+
+** `scm_c_put_latin1_chars', `scm_c_put_utf32_chars'
+
+Use these instead of `scm_lfwrite'.  See the new "Using Ports from C"
+section of the manual, for more.
+
 ** <standard-vtable>, standard-vtable-fields
 
-See "Structures" in the manual for more on these
+See "Structures" in the manual for more on these.
 
 ** Convenience utilities for ports and strings.
 
-See XXX for more on `scm_from_port_string', `scm_from_port_stringn',
-`scm_to_port_string', and `scm_to_port_stringn'.
+See "Conversion to/from C" for more on `scm_from_port_string',
+`scm_from_port_stringn', `scm_to_port_string', and
+`scm_to_port_stringn'.
 
 ** New expressive PEG parser
 
@@ -264,6 +484,97 @@ ASCII as ISO-8859-1.  This is likely to be a problem only if the user's
 locale is set to ASCII, and the user or a program writes non-ASCII
 codepoints to a port.
 
+** Decoding errors do not advance the read pointer before erroring
+
+When the user sets a port's conversion strategy to "error", indicating
+that Guile should throw an error if it tries to read from a port whose
+incoming bytes are not valid for the port's encoding, it used to be that
+Guile would advance the read pointer past the bad bytes, and then throw
+an error.  This would allow the following `read-char' invocation to
+proceed after the bad bytes.  This behavior is incompatible with the
+final R6RS standard, and besides contravenes the user's intention to
+raise an error on bad input.  Guile now raises an error without
+advancing the read pointer.  To skip over a bad encoding, set the port
+conversion strategy to "substitute" and read a substitute character.
+
+** Decoding errors with `substitute' strategy return U+FFFD
+
+It used to be that decoding errors with the `substitute' conversion
+strategy would replace the bad bytes with a `?' character.  This has
+been changed to use the standard U+FFFD REPLACEMENT CHARACTER, in
+accordance with the Unicode recommendations.
+
+** API to define new port types from C has changed
+
+Guile's ports have been completely overhauled to allow Guile developers
+and eventually Guile users to write low-level input and output routines
+in Scheme.  The new internals will eventually allow for user-space
+tasklets or green threads that suspend to a scheduler when they would
+cause blocking I/O, allowing users to write straightforward network
+services that parse their input and send their output as if it were
+blocking, while under the hood Guile can multiplex many active
+connections at once.
+
+At the same time, this change makes Guile's ports implementation much
+more maintainable, rationalizing the many legacy port internals and
+making sure that the abstractions between the user, Guile's core ports
+facility, and the port implementations result in a system that is as
+performant and expressive as possible.
+
+The interface to the user has no significant change, neither on the C
+side nor on the Scheme side.  However this refactoring has changed the
+interface to the port implementor in an incompatible way.  See the newly
+expanded "I/O Extensions" in the manual, for full details.
+
+*** Remove `scm_set_port_mark'
+
+Port mark functions have not been called since the switch to the BDW
+garbage collector.
+
+*** Remove `scm_set_port_equalp'
+
+Likewise port equal functions weren't being called.  Given that ports
+have their own internal buffers, it doesn't make sense to hook them into
+equal? anyway.
+
+*** Remove `scm_set_port_free'
+
+It used to be that if an open port became unreachable, a special "free"
+function would be called instead of the "close" function.  Now that the
+BDW-GC collector allows us to run arbitrary code in finalizers, we can
+simplify to just call "close" on the port and remove the separate free
+functions.  Note that hooking into the garbage collector has some
+overhead.  For that reason Guile exposes a new interface,
+`scm_set_port_needs_close_on_gc', allowing port implementations to
+indicate to Guile whether they need closing on GC or not.
+
+*** Remove `scm_set_port_end_input', `scm_set_port_flush'
+
+As buffering is handled by Guile itself, these functions which were to
+manage an implementation-side buffer are no longer needed.
+
+*** Change prototype of `scm_make_port_type'
+
+The `read' (renamed from `fill_input') and `write' functions now operate
+on bytevectors.  Also the `mode_bits' argument now inplicitly includes
+SCM_OPN, so you don't need to include these.
+
+*** Change prototype of port `close' function
+
+The port close function now returns void.
+
+*** Port and port type data structures are now opaque
+
+Port type implementations should now use API to access port state.
+However, since the change to handle port buffering centrally, port type
+implementations rarely need to access unrelated port state.
+
+*** Port types are now `scm_t_port_type*', not a tc16 value
+
+`scm_make_port_type' now returns an opaque pointer, not a tc16.
+Relatedly, the limitation that there only be 256 port types has been
+lifted.
+
 ** String ports default to UTF-8
 
 Guile 2.0 would use the `%default-port-encoding' when creating string
@@ -284,6 +595,122 @@ Because R6RS ports are a thin layer on top of Guile's ports, and Guile's
 ports are both textual and binary, Guile's R6RS ports are also both
 textual and binary, and thus both kinds have port transcoders.  This is
 an incompatibility with respect to R6RS.
+
+** Threading facilities moved to (ice-9 threads)
+
+It used to be that call-with-new-thread and other threading primitives
+were available in the default environment.  This is no longer the case;
+they have been moved to (ice-9 threads) instead.  Existing code will not
+break, however; we used the deprecation facility to signal a warning
+message while also providing these bindings in the root environment for
+the duration of the 2.2 series.
+
+** cancel-thread uses asynchronous interrupts, not pthread_cancel
+
+See "Asyncs" in the manual, for more on asynchronous interrupts.
+
+** SRFI-18 threads, mutexes, cond vars disjoint from Guile
+
+When we added support for the SRFI-18 threading library in Guile 2.0, we
+did so in a way that made SRFI-18 mutexes the same as Guile mutexes.
+This was a mistake.  In Guile our goal is to provide basic,
+well-thought-out, well-implemented, minimal primitives, on top of which
+we can build a variety of opinionated frameworks.  Incorporating SRFI-18
+functionality into core Guile caused us to bloat and slow down our core
+threading primitives.  Worse, they became very hard to describe; they
+did many things, did them poorly, and all that they did was never
+adequately specified.
+
+For all of these reasons we have returned to a situation where SRFI-18
+concepts are implemented only in the `(srfi srfi-18)' module.  This
+means that SRFI-18 threads are built on Guile threads, but aren't the
+same as Guile threads; calling Guile `thread?' on a thread no longer
+returns true.
+
+We realize this causes inconvenience to users who use both Guile
+threading interfaces and SRFI-18 interfaces, and we lament the change --
+but we are better off now.  We hope the newly revised "Scheduling"
+section in the manual compensates for the headache.
+
+** Remove `lock-mutex' "owner" argument
+
+Mutex owners are a SRFI-18 concept; use SRFI-18 mutexes instead.
+Relatedly, `scm_lock_mutex_timed' taking the owner argument is now
+deprecated; use `scm_timed_lock_mutex' instead.
+
+** Remove `unlock-mutex' cond var and timeout arguments
+
+It used to be that `unlock-mutex' included `wait-condition-variable'
+functionality.  This has been deprecated; use SRFI-18 if you want this
+behavior from `mutex-unlock!'.  Relatedly, `scm_unlock_mutex_timed' is
+deprecated; use `scm_unlock_mutex' instead.
+
+** Removed `unchecked-unlock' mutex flag
+
+This flag was introduced for internal use by SRFI-18; use SRFI-18
+mutexes if you need this behaviour.
+
+** SRFI-18 mutexes no longer recursive
+
+Contrary to specification, SRFI-18 mutexes in Guile were recursive.
+This is no longer the case.
+
+** Thread cleanup handlers removed
+
+The `set-thread-cleanup!' and `thread-cleanup' functions that were added
+in Guile 2.0 to support cleanup after thread cancellation are no longer
+needed, since threads can declare cleanup handlers via `dynamic-wind'.
+
+** Only threads created by Guile are joinable
+
+`join-thread' used to work on "foreign" threads that were not created by
+Guile itself, though their join value was always `#f'.  This is no
+longer the case; attempting to join a foreign thread will throw an
+error.
+
+** Dynamic states capture values, not locations
+
+Dynamic states used to capture the locations of fluid-value
+associations.  Capturing the current dynamic state then setting a fluid
+would result in a mutation of that captured state.  Now capturing a
+dynamic state simply captures the current values, and calling
+`with-dynamic-state' copies those values into the Guile virtual machine
+instead of aliasing them in a way that could allow them to be mutated in
+place.  This change allows Guile's fluid variables to be thread-safe.
+To capture the locations of a dynamic state, capture a
+`with-dynamic-state' invocation using partial continuations instead.
+
+** Remove `frame-procedure'
+
+Several optimizations in Guile make `frame-procedure' an interface that
+we can no longer support.  For background, `frame-procedure' used to
+return the value at slot 0 in a frame, which usually corresponds to the
+SCM value of the procedure being applied.  However it could be that this
+slot is re-used for some other value, because the closure was not needed
+in the function.  Such a re-use might even be for an untagged value, in
+which case treating slot 0 as a SCM value is quite dangerous.  It's also
+possible that so-called "well-known" closures (closures whose callers
+are all known) are optimized in such a way that slot 0 is not a
+procedure but some optimized representation of the procedure's free
+variables.  Instead, developers building debugging tools that would like
+access to `frame-procedure' are invited to look at the source for the
+`(system vm frame)' module for alternate interfaces, including the new
+`frame-procedure-name'.
+
+** Remove `,procedure' REPL command
+
+Not all procedures have values, so it doesn't make sense to expose this
+interface to the user.  Instead, the `,locals' REPL command will include
+the callee, if it is live.
+
+** Remove `frame-local-ref', `frame-local-set!', `frame-num-locals'
+
+These procedures reference values in a frame on the stack.  Since we now
+have unboxed values of different kinds, it is now necessary to specify
+the type when reference locals, and once this incompatible change needs
+to be made, we might as well make these interfaces private.  See
+"Frames' in the manual, for more information on the replacements for
+these low-level interfaces.
 
 ** Vtable hierarchy changes
 
@@ -350,6 +777,37 @@ Before, literals were always matched symbolically (by name).  Now they
 are matched by binding.  This allows literals to be reliably bound to
 values, renamed by imports or exports, et cetera.  See "Syntax-rules
 Macros" in the manual for more on literals.
+
+** Fix bug importing specific bindings with #:select
+
+It used to be that if #:select didn't find a binding in the public
+interface of a module, it would actually grovel in the module's
+unexported private bindings.  This was not intended and is now fixed.
+
+** Statically scoped module duplicate handlers
+
+It used to be that if a module did not specify a #:duplicates handler,
+when a name was first referenced in that module and multiple imported
+modules provide that name, the value of the
+`default-duplicate-binding-handlers' parameter would be used to resolve
+the duplicate bindings.  We have changed so that instead a module
+defaults to the set of handlers described in the manual.  If the module
+specifies #:duplicates, of course we use that.  The
+`default-duplicate-binding-handlers' parameter now simply accesses the
+handlers of the current module, instead of some global value.
+
+** Fix too-broad capture of dynamic stack by delimited continuations
+
+Guile was using explicit stacks to represent, for example, the chain of
+current exception handlers.  This means that a delimited continuation
+that captured a "catch" expression would capture the whole stack of
+exception handlers, not just the exception handler added by the "catch".
+This led to strangeness when resuming the continuation in some other
+context like other threads; "throw" could see an invalid stack of
+exception handlers.  This has been fixed by the addition of the new
+"fluid-ref*" procedure that can access older values of fluids; in this
+way the exception handler stack is now implicit.  See "Fluids and
+Dynamic States" in the manual, for more on fluid-ref*.
 
 ** `dynamic-wind' doesn't check that guards are thunks
 
@@ -472,6 +930,62 @@ scm_t_debug_info', `scm_pure_generic_p', `SCM_PUREGENERICP',
 
 * New deprecations
 
+** `SCM_FDES_RANDOM_P'
+
+Instead, use `lseek (fd, 0, SEEK_CUR)' directly.
+
+** `_IONBF', `_IOLBF', and `_IOFBF'
+
+Instead, use the symbol values `none', `line', or `block', respectively,
+as arguments to the `setvbuf' function.
+
+** `SCM_FDES_RANDOM_P'
+
+Instead, use `lseek (fd, 0, SEEK_CUR)' directly.
+
+** Arbiters
+
+Arbiters were an experimental mutual exclusion facility from 20 years
+ago that didn't survive the test of time.  Use mutexes or atomic boxes
+instead.
+
+** User asyncs
+
+Guile had (and still has) "system asyncs", which are asynchronous
+interrupts, and also had this thing called "user asyncs", which was a
+trivial unused data structure.  Now that we have deprecated the old
+`async', `async-mark', and `run-asyncs' procedures that comprised the
+"user async" facility, we have been able to clarify our documentation to
+only refer to "asyncs".
+
+** Critical sections
+
+Critical sections have long been just a fancy way to lock a mutex and
+defer asynchronous interrupts.  Instead of SCM_CRITICAL_SECTION_START,
+make sure you're in a "scm_dynwind_begin (0)" and use
+scm_dynwind_pthread_mutex_lock instead, possibly also with
+scm_dynwind_block_asyncs.
+
+** `scm_make_mutex_with_flags'
+
+Use `scm_make_mutex_with_kind' instead.  See "Mutexes and Condition
+Variables" in the manual, for more.
+
+** Dynamic roots
+
+This was a facility that predated threads, was unused as far as we can
+tell, and was never documented.  Still, a grep of your code for
+dynamic-root or dynamic_root would not be amiss.
+
+** `make-dynamic-state'
+
+Use `current-dynamic-state' to get an immutable copy of the current
+fluid-value associations.
+
+** `with-statprof' macro
+
+Use the `statprof' procedure instead.
+
 ** SCM_WTA_DISPATCH_0, SCM_WTA_DISPATCH_1, SCM_WTA_DISPATCH_2, SCM_WTA_DISPATCH_N
 ** SCM_GASSERT0, SCM_GASSERT1, SCM_GASSERT2, SCM_GASSERTn
 ** SCM_WTA_DISPATCH_1_SUBR
@@ -524,6 +1038,19 @@ Instead use the normal `scm_slot_ref' and similar procedures.
 
 * Changes to the distribution
 
+** Pre-built binary files in the tarball
+
+Building Guile from a tarball can now take advantage of a "prebuilt/"
+tree of prebuilt .go files.  These compiled files are created when a
+tarball is made, and are used to speed up the build for users of
+official releases.
+
+These pre-built binaries are not necessary, however: they are not stored
+in revision control and can always be re-created from the source, given
+that Guile can bootstrap itself from its minimal bootstrap C
+interpreter.  If you do not want to depend on these pre-built binaries,
+you can "make -C prebuilt clean" before building.
+
 ** New minor version
 
 The "effective version" of Guile is now 2.2, which allows parallel
@@ -533,12 +1060,292 @@ Notably, the `pkg-config' file is now `guile-2.2'.
 
 ** Bump required libgc version to 7.2, released March 2012.
 
+** GUILE_PROGS searches for versioned Guile
+
+The GUILE_PROGS autoconf macro can take a required version argument.  As
+a new change, that version argument is additionally searched for as a
+suffix.  For example, GUILE_PROGS(2.2) would look for guile-2.2,
+guile2.2, guile-2, guile2, and then guile.  The found prefix is also
+applied to guild, guile-config, and the like.  Thanks to Freja Nordsiek
+for this work.
+
 ** The readline extension is now installed in the extensionsdir
 
 The shared library that implements Guile's readline extension is no
 longer installed to the libdir.  This change should be transparent to
 users, but packagers may be interested.
 
+
+
+Changes in 2.0.14 (since 2.0.13):
+
+* Bug fixes
+
+** Builds of .go files and of Guile itself are now bit-reproducible
+   (<http://bugs.gnu.org/20272>)
+
+** 'number->locale-string' and 'monetary-amount->locale-string' fixes
+   (<http://bugs.gnu.org/24990>)
+
+** (system base target) now recognizes "sh3" as a cross-compilation target
+
+** Fix race condition in '00-repl-server.test'
+   (<http://bugs.gnu.org/24769>)
+
+** 'scandir' from (ice-9 ftw) no longer calls 'stat' for each entry
+
+** Several documentation improvements
+
+
+Changes in 2.0.13 (since 2.0.12):
+
+* Security fixes
+
+** CVE-2016-8606: REPL server now protects against HTTP inter-protocol
+   attacks
+
+Guile 2.x provides a "REPL server" started by the '--listen'
+command-line option or equivalent API (see "REPL Servers" in the
+manual).
+
+The REPL server is vulnerable to the HTTP inter-protocol attack as
+described at
+<https://en.wikipedia.org/wiki/Inter-protocol_exploitation>, notably the
+HTML form protocol attack described at
+<https://www.jochentopf.com/hfpa/hfpa.pdf>.  A "DNS rebinding attack"
+can be combined with this attack and allow an attacker to send arbitrary
+Guile code to the REPL server through web pages accessed by the
+developer, even though the REPL server is listening to a loopback device
+("localhost").  This was demonstrated in an article entitled "How to
+steal any developer's local database" available at
+<http://bouk.co/blog/hacking-developers/>.
+
+The REPL server in Guile 2.0.13 now detects attempts to exploit this
+vulnerability.  It immediately closes the connection when it receives a
+line that looks like an HTTP request.
+
+Nevertheless, we recommend binding the REPL server to a Unix-domain
+socket, for instance by running:
+
+  guile --listen=/tmp/guile-socket
+
+** CVE-2016-8605: 'mkdir' procedure no longer calls umask(2)
+   (<http://bugs.gnu.org/24659>)
+
+When the second argument to the 'mkdir' procedure was omitted, it would
+call umask(0) followed by umask(previous_umask) and apply the umask to
+mode #o777.
+
+This was unnecessary and a security issue for multi-threaded
+applications: during a small window the process' umask was set to zero,
+so other threads calling mkdir(2) or open(2) could end up creating
+world-readable/writable/executable directories or files.
+
+* New interfaces
+
+** mkstemp! takes optional "mode" argument
+
+See "File System" in the manual, for more.
+
+** New 'scm_to_uintptr_t' and 'scm_from_uintptr_t' C functions
+
+* Bug fixes
+
+** Fix optimizer bug when compiling fixpoint operator
+** Fix build error on MinGW
+** Update 'uname' implementation on MinGW
+** 'port-encoding' and 'set-port-encoding!' ensure they are passed an
+   open port
+** (system base target) now recognizes Alpha as a cross-compilation target
+
+
+Changes in 2.0.12 (since 2.0.11):
+
+* Notable changes
+
+** FFI: Add support for functions that set 'errno'
+
+When accessing POSIX functions from a system's libc via Guile's dynamic
+FFI, you commonly want to access the 'errno' variable to be able to
+produce useful diagnostic messages.
+
+This is now possible using 'pointer->procedure' or
+'scm_pointer_to_procedure_with_errno'.  See "Dynamic FFI" in the manual.
+
+** The #!r6rs directive now influences read syntax
+
+The #!r6rs directive now changes the per-port reader options to make
+Guile's reader conform more closely to the R6RS syntax.  In particular:
+
+  - It makes the reader case sensitive.
+  - It disables the recognition of keyword syntax in conflict with the
+    R6RS (and R5RS).
+  - It enables the `square-brackets', `hungry-eol-escapes' and
+    `r6rs-hex-escapes' reader options.
+
+** 'read' now accepts "\(" as equivalent to "("
+
+This is indented for use at the beginning of lines in multi-line strings
+to avoid confusing Emacs' lisp modes.  Previously "\(" was an error.
+
+** SRFI-14 character data set upgraded to Unicode 8.0.0
+
+** SRFI-19 table of leap seconds updated
+
+** 'string-hash', 'read-string', and 'write' have been optimized
+
+** GOOPS bug fix for inherited accessor methods
+
+In the port of GOOPS to Guile 2.0, we introduced a bug related to
+accessor methods.  The bug resulted in GOOPS assuming that a slot S in
+an object whose class is C would always be present in instances of all
+subclasses C, and allocated to the same struct index.  This is not the
+case for multiple inheritance.  This behavior has been fixed to be as it
+was in 1.8.
+
+One aspect of this change may cause confusion among users.  Previously
+if you defined a class C:
+
+  (use-modules (oop goops))
+  (define-class C ()
+    (a #:getter get-a))
+
+And now you define a subclass, intending to provide an #:init-value for
+the slot A:
+
+  (define-class D (A)
+    (a #:init-value 42))
+
+Really what you have done is define in D a new slot with the same name,
+overriding the existing slot.  The problem comes in that before fixing
+this bug (but not in 1.8), the getter 'get-a' would succeed for
+instances of D, even though 'get-a' should only work for the slot 'a'
+that is defined on class C, not any other slot that happens to have the
+same name and be in a class with C as a superclass.
+
+It would be possible to "merge" the slot definitions on C and D, but
+that part of the meta-object protocol (`compute-slots' et al) is not
+fully implemented.
+
+Somewhat relatedly, GOOPS also had a fix around #:init-value on
+class-allocated slots.  GOOPS was re-initializing the value of slots
+with #:class or #:each-subclass allocation every time instances of that
+class was allocated.  This has been fixed.
+
+* New interfaces
+
+** New SRFI-28 string formatting implementation
+
+See "SRFI-28" in the manual.
+
+** New (ice-9 unicode) module
+
+See "Characters" in the manual.
+
+** Web server
+
+The (web server) module now exports 'make-server-impl', 'server-impl?',
+and related procedures.  Likewise, (web server http) exports 'http'.
+
+** New procedures: 'string-utf8-length' and 'scm_c_string_utf8_length'
+
+See "Bytevectors as Strings" in the manual, for more.
+
+** New 'EXIT_SUCCESS' and 'EXIT_FAILURE' Scheme variables
+
+See "Processes" in the manual.
+
+** New C functions to disable automatic SMOB finalization
+
+The new 'scm_set_automatic_finalization_enabled' C function allows you
+to choose whether automatic object finalization should be enabled (as
+was the case until now, and still is by default.)  This is meant for
+applications that are not thread-safe nor async-safe; such applications
+can disable automatic finalization and call the new 'scm_run_finalizers'
+function when appropriate.
+
+See the "Garbage Collecting Smobs" and "Smobs" sections in the manual.
+
+** Cross-compilation to ARM
+
+More ARM cross-compilation targets are supported: "arm.*eb",
+"^aarch64.*be", and "aarch64".
+
+* New deprecation
+
+** The undocumented and unused C function 'scm_string_hash' is now deprecated
+
+* Bugs fixed
+
+** Compiler
+*** 'call-with-prompt' does not truncate multiple-value returns
+    (<http://bugs.gnu.org/14347>)
+*** Use permissions of source file for compiled file
+    (<http://bugs.gnu.org/18477>)
+*** Fix bug when inlining some functions with optional arguments
+    (<http://bugs.gnu.org/17634>)
+*** Avoid quadratic expansion time in 'and' and 'or' macros
+    (<http://bugs.gnu.org/17147>)
+*** Fix expander bug introduced when adding support for tail patterns
+    (<http://lists.gnu.org/archive/html/guile-user/2015-09/msg00017.html>)
+*** Handle ~p in 'format' warnings (<http://bugs.gnu.org/18299>)
+*** Fix bug that exposed `list' invocations to CSE
+    (<http://bugs.gnu.org/21899>)
+*** Reduce eq? and eqv? over constants using equal?
+    (<http://bugs.gnu.org/21855>)
+*** Skip invalid .go files found in GUILE_LOAD_COMPILED_PATH
+
+** Threads
+*** Fix data races leading to corruption (<http://bugs.gnu.org/22152>)
+
+** Memory management
+*** Fix race between SMOB marking and finalization
+    (<http://bugs.gnu.org/19883>)
+
+** Ports
+*** Fix port position handling on binary input ports
+    (<http://bugs.gnu.org/20302>)
+*** Bytevector and custom binary ports to use ISO-8859-1
+    (<http://bugs.gnu.org/20200>)
+*** Fix buffer overrun with unbuffered custom binary input ports
+    (<http://bugs.gnu.org/19621>)
+*** Fix memory corruption that arose when using 'get-bytevector-n'
+    (<http://bugs.gnu.org/17466>)
+
+** System
+*** {get,set}sockopt now expect type 'int' for SO_SNDBUF/SO_RCVBUF
+*** 'system*' now available on MS-Windows
+*** 'open-pipe' now available on MS-Windows
+*** Better support for file names containing backslashes on Windows
+
+** Web
+*** 'split-and-decode-uri-path' no longer decodes "+" to space
+*** HTTP: Support date strings with a leading space for hours
+    (<http://bugs.gnu.org/23421>)
+*** HTTP: Accept empty reason phrases (<http://bugs.gnu.org/22273>)
+*** HTTP: 'Location' header can now contain URI references, not just
+    absolute URIs
+*** HTTP: Improve chunked-mode support (<http://bugs.gnu.org/19939>)
+*** HTTP: 'open-socket-for-uri' now sets better OS buffering parameters
+    (<http://bugs.gnu.org/15368>)
+
+** Miscellaneous
+*** Fix 'atan' procedure when applied to complex numbers
+*** Fix Texinfo to HTML conversion for @itemize and @acronym
+    (<http://bugs.gnu.org/21772>)
+*** 'bytevector-fill!' accepts fill arguments greater than 127
+    (<http://bugs.gnu.org/19027>)
+*** 'bytevector-copy' correctly copies SRFI-4 homogeneous vectors
+   (<http://bugs.gnu.org/18866>)
+*** 'strerror' no longer hangs when passed a non-integer argument
+    (<http://bugs.gnu.org/18065>)
+*** 'scm_boot_guile' now gracefully handles argc == 0
+    (<http://bugs.gnu.org/18680>)
+*** Fix 'SCM_SMOB_OBJECT_LOC' definition (<http://bugs.gnu.org/18495>)
+*** Fix bug where 'bit-count*' was not using its second argument
+*** SRFI-1 'length+' raises an error for non-lists and dotted lists
+    (<http://bugs.gnu.org/17296>)
+*** Add documentation for SXPath (<http://bugs.gnu.org/19478>)
 
 
 Changes in 2.0.11 (since 2.0.10):

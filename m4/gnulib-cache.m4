@@ -1,4 +1,4 @@
-# Copyright (C) 2002-2014 Free Software Foundation, Inc.
+# Copyright (C) 2002-2017 Free Software Foundation, Inc.
 #
 # This file is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -27,12 +27,12 @@
 
 
 # Specification in the form of a command-line invocation:
-#   gnulib-tool --import --dir=. --local-dir=gnulib-local --lib=libgnu --source-base=lib --m4-base=m4 --doc-base=doc --tests-base=tests --aux-dir=build-aux --avoid=lock --lgpl=3 --no-conditional-dependencies --libtool --macro-prefix=gl --no-vc-files accept alignof alloca-opt announce-gen autobuild bind byteswap c-strcase canonicalize-lgpl ceil clock-time close connect copysign dirfd duplocale environ extensions flock floor fpieee frexp fstat fsync full-read full-write func gendocs getaddrinfo getlogin getpeername getsockname getsockopt git-version-gen gitlog-to-changelog gnu-web-doc-update gnupload havelib iconv_open-utf inet_ntop inet_pton isfinite isinf isnan ldexp lib-symbol-versions lib-symbol-visibility libunistring link listen localcharset locale log1p lstat maintainer-makefile malloc-gnu malloca mkdir mkstemp nl_langinfo nproc open pipe-posix pipe2 poll putenv readlink recv recvfrom regex rename rmdir select send sendto setenv setsockopt shutdown socket stat-time stdlib strftime striconveh string sys_stat time times trunc unistd verify vsnprintf warnings wchar
+#   gnulib-tool --import --local-dir=gnulib-local --lib=libgnu --source-base=lib --m4-base=m4 --doc-base=doc --tests-base=tests --aux-dir=build-aux --avoid=lock --avoid=unistr/base --avoid=unistr/u8-mbtouc --avoid=unistr/u8-mbtouc-unsafe --avoid=unistr/u8-mbtoucr --avoid=unistr/u8-prev --avoid=unistr/u8-uctomb --avoid=unitypes --lgpl=3 --conditional-dependencies --libtool --macro-prefix=gl --no-vc-files accept4 alignof alloca-opt announce-gen autobuild bind byteswap c-strcase canonicalize-lgpl ceil clock-time close connect copysign dirfd dirname-lgpl duplocale environ extensions flock floor fpieee frexp fstat fsync full-read full-write func gendocs getaddrinfo getlogin getpeername getsockname getsockopt git-version-gen gitlog-to-changelog gnu-web-doc-update gnupload havelib iconv_open-utf inet_ntop inet_pton isfinite isinf isnan ldexp lib-symbol-versions lib-symbol-visibility libunistring link listen localcharset locale log1p lstat maintainer-makefile malloc-gnu malloca mkdir mkostemp nl_langinfo nproc open pipe-posix pipe2 poll putenv readlink recv recvfrom regex rename rmdir select send sendto setenv setsockopt shutdown socket stat-time stdlib strftime striconveh string sys_stat time times trunc unistd verify vsnprintf warnings wchar
 
 # Specification in the form of a few gnulib-tool.m4 macro invocations:
 gl_LOCAL_DIR([gnulib-local])
 gl_MODULES([
-  accept
+  accept4
   alignof
   alloca-opt
   announce-gen
@@ -47,6 +47,7 @@ gl_MODULES([
   connect
   copysign
   dirfd
+  dirname-lgpl
   duplocale
   environ
   extensions
@@ -76,7 +77,6 @@ gl_MODULES([
   isfinite
   isinf
   isnan
-  largefile
   ldexp
   lib-symbol-versions
   lib-symbol-visibility
@@ -91,7 +91,7 @@ gl_MODULES([
   malloc-gnu
   malloca
   mkdir
-  mkstemp
+  mkostemp
   nl_langinfo
   nproc
   open
@@ -127,7 +127,7 @@ gl_MODULES([
   warnings
   wchar
 ])
-gl_AVOID([lock])
+gl_AVOID([ lock unistr/base unistr/u8-mbtouc unistr/u8-mbtouc-unsafe unistr/u8-mbtoucr unistr/u8-prev unistr/u8-uctomb unitypes])
 gl_SOURCE_BASE([lib])
 gl_M4_BASE([m4])
 gl_PO_BASE([])
@@ -136,6 +136,7 @@ gl_TESTS_BASE([tests])
 gl_LIB([libgnu])
 gl_LGPL([3])
 gl_MAKEFILE_NAME([])
+gl_CONDITIONAL_DEPENDENCIES
 gl_LIBTOOL
 gl_MACRO_PREFIX([gl])
 gl_PO_DOMAIN([])

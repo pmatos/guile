@@ -24,9 +24,9 @@
 #endif
 
 #include "libguile/_scm.h"
+#include "libguile/atomics-internal.h"
 #include "libguile/eval.h"
 #include "libguile/throw.h"
-#include "libguile/root.h"
 #include "libguile/smob.h"
 #include "libguile/dynwind.h"
 #include "libguile/deprecation.h"
@@ -44,222 +44,189 @@
 
 /* {Asynchronous Events}
  *
- * There are two kinds of asyncs: system asyncs and user asyncs.  The
- * two kinds have some concepts in commen but work slightly
- * differently and are not interchangeable.
- *
- * System asyncs are used to run arbitrary code at the next safe point
- * in a specified thread.  You can use them to trigger execution of
- * Scheme code from signal handlers or to interrupt a thread, for
- * example.
+ * Asyncs are used to run arbitrary code at the next safe point in a
+ * specified thread.  You can use them to trigger execution of Scheme
+ * code from signal handlers or to interrupt a thread, for example.
  *
  * Each thread has a list of 'activated asyncs', which is a normal
  * Scheme list of procedures with zero arguments.  When a thread
- * executes a SCM_ASYNC_TICK statement (which is included in
- * SCM_TICK), it will call all procedures on this list.
- *
- * Also, a thread will wake up when a procedure is added to its list
- * of active asyncs and call them.  After that, it will go to sleep
- * again.  (Not implemented yet.)
- *
- *
- * User asyncs are a little data structure that consists of a
- * procedure of zero arguments and a mark.  There are functions for
- * setting the mark of a user async and for calling all procedures of
- * marked asyncs in a given list.  Nothing you couldn't quickly
- * implement yourself.
+ * executes an scm_async_tick (), it will call all procedures on this
+ * list in the order they were added to the list.
  */
 
-
-
-
-/* User asyncs. */
-
-static scm_t_bits tc16_async;
-
-/* cmm: this has SCM_ prefix because SCM_MAKE_VALIDATE expects it.
-   this is ugly.  */
-#define SCM_ASYNCP(X)		SCM_TYP16_PREDICATE (tc16_async, X)
-#define VALIDATE_ASYNC(pos, a)	SCM_MAKE_VALIDATE_MSG(pos, a, ASYNCP, "user async")
-
-#define ASYNC_GOT_IT(X)        (SCM_SMOB_FLAGS (X))
-#define SET_ASYNC_GOT_IT(X, V) (SCM_SET_SMOB_FLAGS ((X), ((V))))
-#define ASYNC_THUNK(X)         SCM_SMOB_OBJECT_1 (X)
-
-
-SCM_DEFINE (scm_async, "async", 1, 0, 0,
-	    (SCM thunk),
-	    "Create a new async for the procedure @var{thunk}.")
-#define FUNC_NAME s_scm_async
+void
+scm_i_async_push (scm_i_thread *t, SCM proc)
 {
-  SCM_RETURN_NEWSMOB (tc16_async, SCM_UNPACK (thunk));
-}
-#undef FUNC_NAME
+  SCM asyncs;
 
-SCM_DEFINE (scm_async_mark, "async-mark", 1, 0, 0,
-            (SCM a),
-	    "Mark the async @var{a} for future execution.")
-#define FUNC_NAME s_scm_async_mark
-{
-  VALIDATE_ASYNC (1, a);
-  SET_ASYNC_GOT_IT (a, 1);
-  return SCM_UNSPECIFIED;
-}
-#undef FUNC_NAME
+  /* The usual algorithm you'd use for atomics with GC would be
+     something like:
 
-SCM_DEFINE (scm_run_asyncs, "run-asyncs", 1, 0, 0,
-	    (SCM list_of_a),
-	    "Execute all thunks from the asyncs of the list @var{list_of_a}.")
-#define FUNC_NAME s_scm_run_asyncs
-{
-  while (! SCM_NULL_OR_NIL_P (list_of_a))
+     repeat
+       l = get(asyncs);
+     until swap(l, cons(proc, l))
+
+     But this is a LIFO list of asyncs, and that's not so great.  To
+     make it FIFO, you'd do:
+
+     repeat
+       l = get(asyncs);
+     until swap(l, append(l, list(proc)))
+
+     However, some parts of Guile need to add entries to the async list
+     from a context in which allocation is unsafe, for example right
+     before GC or from a signal handler.  They do that by pre-allocating
+     a pair, then when the interrupt fires the code does a setcdr of
+     that pair to the t->pending_asyncs and atomically updates
+     t->pending_asyncs.  So the append strategy doesn't work.
+
+     Instead to preserve the FIFO behavior we atomically cut off the
+     tail of the asyncs every time we want to run an interrupt, then
+     disable that newly-severed tail by setting its cdr to #f.  Not so
+     nice, but oh well.  */
+  asyncs = scm_atomic_ref_scm (&t->pending_asyncs);
+  do
     {
-      SCM a;
-      SCM_VALIDATE_CONS (1, list_of_a);
-      a = SCM_CAR (list_of_a);
-      VALIDATE_ASYNC (SCM_ARG1, a);
-      if (ASYNC_GOT_IT (a))
-	{
-	  SET_ASYNC_GOT_IT (a, 0);
-	  scm_call_0 (ASYNC_THUNK (a));
-	}
-      list_of_a = SCM_CDR (list_of_a);
+      /* Traverse the asyncs list atomically.  */
+      SCM walk;
+      for (walk = asyncs;
+           scm_is_pair (walk);
+           walk = scm_atomic_ref_scm (SCM_CDRLOC (walk)))
+        if (scm_is_eq (SCM_CAR (walk), proc))
+          return;
     }
-  return SCM_BOOL_T;
+  while (!scm_atomic_compare_and_swap_scm (&t->pending_asyncs, &asyncs,
+                                           scm_cons (proc, asyncs)));
 }
-#undef FUNC_NAME
 
-
+/* Precondition: there are pending asyncs.  */
+SCM
+scm_i_async_pop (scm_i_thread *t)
+{
+  while (1)
+    {
+      SCM asyncs, last_pair, penultimate_pair;
 
-static scm_i_pthread_mutex_t async_mutex = SCM_I_PTHREAD_MUTEX_INITIALIZER;
+      last_pair = asyncs = scm_atomic_ref_scm (&t->pending_asyncs);
+      penultimate_pair = SCM_BOOL_F;
 
-/* System asyncs. */
+      /* Since we are the only writer to cdrs of pairs in ASYNCS, and these
+         pairs were given to us after an atomic update to t->pending_asyncs,
+         no need to use atomic ops to traverse the list.  */
+      while (scm_is_pair (SCM_CDR (last_pair)))
+        {
+          penultimate_pair = last_pair;
+          last_pair = SCM_CDR (last_pair);
+        }
+
+      /* Sever the tail.  */
+      if (scm_is_false (penultimate_pair))
+        {
+          if (!scm_atomic_compare_and_swap_scm (&t->pending_asyncs, &asyncs,
+                                                SCM_EOL))
+            continue;
+        }
+      else
+        scm_atomic_set_scm (SCM_CDRLOC (penultimate_pair), SCM_EOL);
+
+      /* Disable it.  */
+      scm_atomic_set_scm (SCM_CDRLOC (last_pair), SCM_BOOL_F);
+
+      return SCM_CAR (last_pair);
+    }
+}
 
 void
 scm_async_tick (void)
 {
   scm_i_thread *t = SCM_I_CURRENT_THREAD;
-  SCM asyncs;
 
-  /* Reset pending_asyncs even when asyncs are blocked and not really
-     executed since this will avoid future futile calls to this
-     function.  When asyncs are unblocked again, this function is
-     invoked even when pending_asyncs is zero.
-  */
+  if (t->block_asyncs)
+    return;
 
-  scm_i_scm_pthread_mutex_lock (&async_mutex);
-  t->pending_asyncs = 0;
-  if (t->block_asyncs == 0)
-    {
-      asyncs = t->active_asyncs;
-      t->active_asyncs = SCM_EOL;
-    }
-  else
-    asyncs = SCM_EOL;
-  scm_i_pthread_mutex_unlock (&async_mutex);
+  while (!scm_is_null (scm_atomic_ref_scm (&t->pending_asyncs)))
+    scm_call_0 (scm_i_async_pop (t));
+}
 
-  while (scm_is_pair (asyncs))
-    {
-      SCM next = SCM_CDR (asyncs);
-      SCM_SETCDR (asyncs, SCM_BOOL_F);
-      scm_call_0 (SCM_CAR (asyncs));
-      asyncs = next;
-    }
+struct scm_thread_wake_data {
+  enum { WAIT_FD, WAIT_COND } kind;
+  union {
+    struct {
+      int fd;
+    } wait_fd;
+    struct {
+      scm_i_pthread_mutex_t *mutex;
+      scm_i_pthread_cond_t *cond;
+    } wait_cond;
+  } data;
+};
+
+int
+scm_i_prepare_to_wait (scm_i_thread *t,
+                       struct scm_thread_wake_data *wake)
+{
+  if (t->block_asyncs)
+    return 0;
+
+  scm_atomic_set_pointer ((void **)&t->wake, wake);
+
+  /* If no interrupt was registered in the meantime, then any future
+     wakeup will signal the FD or cond var.  */
+  if (scm_is_null (scm_atomic_ref_scm (&t->pending_asyncs)))
+    return 0;
+
+  /* Otherwise clear the wake pointer and indicate that the caller
+     should handle interrupts directly.  */
+  scm_i_wait_finished (t);
+  return 1;
 }
 
 void
-scm_i_queue_async_cell (SCM c, scm_i_thread *t)
+scm_i_wait_finished (scm_i_thread *t)
 {
-  SCM sleep_object;
-  scm_i_pthread_mutex_t *sleep_mutex;
-  int sleep_fd;
-  SCM p;
-  
-  scm_i_scm_pthread_mutex_lock (&async_mutex);
-  p = t->active_asyncs;
-  SCM_SETCDR (c, SCM_EOL);
-  if (!scm_is_pair (p))
-    t->active_asyncs = c;
-  else
-    {
-      SCM pp;
-      while (scm_is_pair (pp = SCM_CDR (p)))
-	{
-	  if (scm_is_eq (SCM_CAR (p), SCM_CAR (c)))
-	    {
-	      scm_i_pthread_mutex_unlock (&async_mutex);
-	      return;
-	    }
-	  p = pp;
-	}
-      SCM_SETCDR (p, c);
-    }
-  t->pending_asyncs = 1;
-  sleep_object = t->sleep_object;
-  sleep_mutex = t->sleep_mutex;
-  sleep_fd = t->sleep_fd;
-  scm_i_pthread_mutex_unlock (&async_mutex);
-
-  if (sleep_mutex)
-    {
-      /* By now, the thread T might be out of its sleep already, or
-	 might even be in the next, unrelated sleep.  Interrupting it
-	 anyway does no harm, however.
-
-	 The important thing to prevent here is to signal sleep_cond
-	 before T waits on it.  This can not happen since T has
-	 sleep_mutex locked while setting t->sleep_mutex and will only
-	 unlock it again while waiting on sleep_cond.
-      */
-      scm_i_scm_pthread_mutex_lock (sleep_mutex);
-      scm_i_pthread_cond_signal (&t->sleep_cond);
-      scm_i_pthread_mutex_unlock (sleep_mutex);
-    }
-
-  if (sleep_fd >= 0)
-    {
-      char dummy = 0;
-
-      /* Likewise, T might already been done with sleeping here, but
-	 interrupting it once too often does no harm.  T might also
-	 not yet have started sleeping, but this is no problem either
-	 since the data written to a pipe will not be lost, unlike a
-	 condition variable signal.  */
-      full_write (sleep_fd, &dummy, 1);
-    }
-
-  /* This is needed to protect sleep_mutex.
-   */
-  scm_remember_upto_here_1 (sleep_object);
+  scm_atomic_set_pointer ((void **)&t->wake, NULL);
 }
 
 int
-scm_i_setup_sleep (scm_i_thread *t,
-		   SCM sleep_object, scm_i_pthread_mutex_t *sleep_mutex,
-		   int sleep_fd)
+scm_i_prepare_to_wait_on_fd (scm_i_thread *t, int fd)
 {
-  int pending;
+  struct scm_thread_wake_data *wake;
+  wake = scm_gc_typed_calloc (struct scm_thread_wake_data);
+  wake->kind = WAIT_FD;
+  wake->data.wait_fd.fd = fd;
+  return scm_i_prepare_to_wait (t, wake);
+}
 
-  scm_i_scm_pthread_mutex_lock (&async_mutex);
-  pending = t->pending_asyncs;
-  if (!pending)
-    {
-      t->sleep_object = sleep_object;
-      t->sleep_mutex = sleep_mutex;
-      t->sleep_fd = sleep_fd;
-    }
-  scm_i_pthread_mutex_unlock (&async_mutex);
-  return pending;
+int
+scm_c_prepare_to_wait_on_fd (int fd)
+{
+  return scm_i_prepare_to_wait_on_fd (SCM_I_CURRENT_THREAD, fd);
+}
+
+int
+scm_i_prepare_to_wait_on_cond (scm_i_thread *t,
+                               scm_i_pthread_mutex_t *m,
+                               scm_i_pthread_cond_t *c)
+{
+  struct scm_thread_wake_data *wake;
+  wake = scm_gc_typed_calloc (struct scm_thread_wake_data);
+  wake->kind = WAIT_COND;
+  wake->data.wait_cond.mutex = m;
+  wake->data.wait_cond.cond = c;
+  return scm_i_prepare_to_wait (t, wake);
+}
+
+int
+scm_c_prepare_to_wait_on_cond (scm_i_pthread_mutex_t *m,
+                               scm_i_pthread_cond_t *c)
+{
+  return scm_i_prepare_to_wait_on_cond (SCM_I_CURRENT_THREAD, m, c);
 }
 
 void
-scm_i_reset_sleep (scm_i_thread *t)
+scm_c_wait_finished (void)
 {
-  scm_i_scm_pthread_mutex_lock (&async_mutex);
-  t->sleep_object = SCM_BOOL_F;
-  t->sleep_mutex = NULL;
-  t->sleep_fd = -1;
-  scm_i_pthread_mutex_unlock (&async_mutex);  
+  scm_i_wait_finished (SCM_I_CURRENT_THREAD);
 }
 
 SCM_DEFINE (scm_system_async_mark_for_thread, "system-async-mark", 1, 1, 0,
@@ -274,24 +241,53 @@ SCM_DEFINE (scm_system_async_mark_for_thread, "system-async-mark", 1, 1, 0,
 	    "signal handlers.")
 #define FUNC_NAME s_scm_system_async_mark_for_thread
 {
-  /* The current thread might not have a handle yet.  This can happen
-     when the GC runs immediately before allocating the handle.  At
-     the end of that GC, a system async might be marked.  Thus, we can
-     not use scm_current_thread here.
-  */
-
   scm_i_thread *t;
+  struct scm_thread_wake_data *wake;
 
   if (SCM_UNBNDP (thread))
     t = SCM_I_CURRENT_THREAD;
   else
     {
       SCM_VALIDATE_THREAD (2, thread);
-      if (scm_c_thread_exited_p (thread))
-	SCM_MISC_ERROR ("thread has already exited", SCM_EOL);
       t = SCM_I_THREAD_DATA (thread);
     }
-  scm_i_queue_async_cell (scm_cons (proc, SCM_BOOL_F), t);
+
+  scm_i_async_push (t, proc);
+
+  /* At this point the async is enqueued.  However if the thread is
+     sleeping, we have to wake it up.  */
+  if ((wake = scm_atomic_ref_pointer ((void **) &t->wake)))
+    {
+      /* By now, the thread T might be out of its sleep already, or
+	 might even be in the next, unrelated sleep.  Interrupting it
+	 anyway does no harm, however.
+
+	 The important thing to prevent here is to signal the cond
+	 before T waits on it.  This can not happen since T has its
+	 mutex locked while preparing the wait and will only unlock it
+	 again while waiting on the cond.
+      */
+      if (wake->kind == WAIT_COND)
+        {
+          scm_i_scm_pthread_mutex_lock (wake->data.wait_cond.mutex);
+          scm_i_pthread_cond_signal (wake->data.wait_cond.cond);
+          scm_i_pthread_mutex_unlock (wake->data.wait_cond.mutex);
+        }
+      else if (wake->kind == WAIT_FD)
+        {
+          char dummy = 0;
+
+          /* Likewise, T might already been done with sleeping here, but
+             interrupting it once too often does no harm.  T might also
+             not yet have started sleeping, but this is no problem
+             either since the data written to a pipe will not be lost,
+             unlike a condition variable signal.  */
+          full_write (wake->data.wait_fd.fd, &dummy, 1);
+        }
+      else
+        abort ();
+    }
+
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -426,30 +422,10 @@ scm_c_call_with_unblocked_asyncs (void *(*proc) (void *data), void *data)
 }
 
 
-/* These are function variants of the same-named macros (uppercase) for use
-   outside of libguile.  This is so that `SCM_I_CURRENT_THREAD', which may
-   reside in TLS, is not accessed from outside of libguile.  It thus allows
-   libguile to be built with the "local-dynamic" TLS model.  */
-
-void
-scm_critical_section_start (void)
-{
-  SCM_CRITICAL_SECTION_START;
-}
-
-void
-scm_critical_section_end (void)
-{
-  SCM_CRITICAL_SECTION_END;
-}
-
-
 
 void
 scm_init_async ()
 {
-  tc16_async = scm_make_smob_type ("async", 0);
-
 #include "libguile/async.x"
 }
 

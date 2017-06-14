@@ -138,7 +138,7 @@ only one bit, and so a test for, for example, @code{#f}-or-@code{nil}
 may be made very efficiently. See @code{libguile/boolean.h}, for more
 information.
 
-@subsubsection Equality
+@subsubheading Equality
 
 Since Scheme's @code{equal?} must be transitive, and @code{'()}
 is not @code{equal?} to @code{#f}, to Scheme @code{nil} is not
@@ -229,7 +229,7 @@ Here are correct versions of the above examples:
 This problem has a mirror-image case in Elisp:
 
 @example
-(deffn my-falsep (x)
+(defun my-falsep (x)
   (if (eq x nil)
       t
       nil))

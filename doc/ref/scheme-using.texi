@@ -294,8 +294,12 @@ Disassemble a file.
 Time execution.
 @end deffn
 
-@deffn {REPL Command} profile exp
-Profile execution.
+@deffn {REPL Command} profile exp [#:hz hz=100] @
+  [#:count-calls? count-calls?=#f] [#:display-style display-style=list]
+Profile execution of an expression.  This command compiled @var{exp} and
+then runs it within the statprof profiler, passing all keyword options
+to the @code{statprof} procedure.  For more on statprof and on the the
+options available to this command, @xref{Statprof}.
 @end deffn
 
 @deffn {REPL Command} trace exp [#:width w] [#:max-indent i]
@@ -339,10 +343,6 @@ Show a frame.
 
 Show the selected frame.  With an argument, select a frame by index,
 then show it.
-@end deffn
-
-@deffn {REPL Command} procedure
-Print the procedure for the selected frame.
 @end deffn
 
 @deffn {REPL Command} locals
@@ -793,7 +793,7 @@ packages will be
 
 Note that a @code{.go} file will only be loaded in preference to a
 @code{.scm} file if it is newer.  For that reason, you should install
-your Scheme files first, and your compiled files second.  @code{Load
+your Scheme files first, and your compiled files second.  @xref{Load
 Paths}, for more on the loading process.
 
 Finally, although this section is only about Scheme, sometimes you need

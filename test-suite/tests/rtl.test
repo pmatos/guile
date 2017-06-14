@@ -1,6 +1,6 @@
 ;;;; Low-level tests of the bytecode assembler -*- mode: scheme; coding: utf-8; -*-
 ;;;;
-;;;; 	Copyright (C) 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+;;;; 	Copyright (C) 2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -40,8 +40,8 @@ a procedure."
   (assemble-program `((begin-program foo
                                      ((name . foo)))
                       (begin-standard-arity () 2 #f)
-                      (load-constant 1 ,val)
-                      (return 1)
+                      (load-constant 0 ,val)
+                      (return-values 2)
                       (end-arity)
                       (end-program))))
 
@@ -77,20 +77,30 @@ a procedure."
    ;; FIXME: Add more tests for arrays (uniform and otherwise)
    ))
 
+(define-syntax-rule (assert-bad-constants val ...)
+  (begin
+    (pass-if-exception (object->string val) exception:miscellaneous-error
+      (return-constant val))
+    ...))
+
+(with-test-prefix "bad constants"
+  (assert-bad-constants (make-symbol "foo")
+                        (lambda () 100)))
+
 (with-test-prefix "static procedure"
   (assert-equal 42
                 (((assemble-program `((begin-program foo
                                                      ((name . foo)))
                                       (begin-standard-arity () 2 #f)
-                                      (load-static-procedure 1 bar)
-                                      (return 1)
+                                      (load-static-procedure 0 bar)
+                                      (return-values 2)
                                       (end-arity)
                                       (end-program)
                                       (begin-program bar
                                                      ((name . bar)))
                                       (begin-standard-arity () 2 #f)
-                                      (load-constant 1 42)
-                                      (return 1)
+                                      (load-constant 0 42)
+                                      (return-values 2)
                                       (end-arity)
                                       (end-program)))))))
 
@@ -104,19 +114,21 @@ a procedure."
                         '((begin-program countdown
                                          ((name . countdown)))
                           (begin-standard-arity (x) 4 #f)
-                          (definition x 1)
+                          (definition closure 0 scm)
+                          (definition x 1 scm)
                           (br fix-body)
                           (label loop-head)
-                          (br-if-= 2 1 #f out)
-                          (add 3 2 3)
-                          (add1 2 2)
+                          (br-if-= 1 2 #f out)
+                          (add 0 1 0)
+                          (add/immediate 1 1 1)
                           (br loop-head)
                           (label fix-body)
-                          (load-constant 2 0)
-                          (load-constant 3 0)
+                          (load-constant 1 0)
+                          (load-constant 0 0)
                           (br loop-head)
                           (label out)
-                          (return 3)
+                          (mov 2 0)
+                          (return-values 2)
                           (end-arity)
                           (end-program)))))
                   (sumto 1000))))
@@ -133,20 +145,23 @@ a procedure."
                           (begin-standard-arity () 3 #f)
                           (load-constant 1 0)
                           (box 1 1)
-                          (make-closure 2 accum 1)
-                          (free-set! 2 1 0)
-                          (return 2)
+                          (make-closure 0 accum 1)
+                          (free-set! 0 1 0)
+                          (mov 1 0)
+                          (return-values 2)
                           (end-arity)
                           (end-program)
                           (begin-program accum
                                          ((name . accum)))
                           (begin-standard-arity (x) 4 #f)
-                          (definition x 1)
-                          (free-ref 2 0 0)
-                          (box-ref 3 2)
-                          (add 3 3 1)
-                          (box-set! 2 3)
-                          (return 3)
+                          (definition closure 0 scm)
+                          (definition x 1 scm)
+                          (free-ref 1 3 0)
+                          (box-ref 0 1)
+                          (add 0 0 2)
+                          (box-set! 1 0)
+                          (mov 2 0)
+                          (return-values 2)
                           (end-arity)
                           (end-program)))))
                   (let ((accum (make-accum)))
@@ -161,11 +176,12 @@ a procedure."
                         '((begin-program call
                                          ((name . call)))
                           (begin-standard-arity (f) 7 #f)
-                          (definition f 1)
-                          (mov 5 1)
+                          (definition closure 0 scm)
+                          (definition f 1 scm)
+                          (mov 1 5)
                           (call 5 1)
-                          (receive 2 5 7)
-                          (return 2)
+                          (receive 1 5 7)
+                          (return-values 2)
                           (end-arity)
                           (end-program)))))
                   (call (lambda () 42))))
@@ -176,12 +192,13 @@ a procedure."
                         '((begin-program call-with-3
                                          ((name . call-with-3)))
                           (begin-standard-arity (f) 7 #f)
-                          (definition f 1)
-                          (mov 5 1)
-                          (load-constant 6 3)
+                          (definition closure 0 scm)
+                          (definition f 1 scm)
+                          (mov 1 5)
+                          (load-constant 0 3)
                           (call 5 2)
-                          (receive 2 5 7)
-                          (return 2)
+                          (receive 1 5 7)
+                          (return-values 2)
                           (end-arity)
                           (end-program)))))
                   (call-with-3 (lambda (x) (* x 2))))))
@@ -193,8 +210,9 @@ a procedure."
                         '((begin-program call
                                          ((name . call)))
                           (begin-standard-arity (f) 2 #f)
-                          (definition f 1)
-                          (mov 0 1)
+                          (definition closure 0 scm)
+                          (definition f 1 scm)
+                          (mov 1 0)
                           (tail-call 1)
                           (end-arity)
                           (end-program)))))
@@ -206,9 +224,10 @@ a procedure."
                         '((begin-program call-with-3
                                          ((name . call-with-3)))
                           (begin-standard-arity (f) 2 #f)
-                          (definition f 1)
-                          (mov 0 1) ;; R0 <- R1
-                          (load-constant 1 3) ;; R1 <- 3
+                          (definition closure 0 scm)
+                          (definition f 1 scm)
+                          (mov 1 0) ;; R0 <- R1
+                          (load-constant 0 3) ;; R1 <- 3
                           (tail-call 2)
                           (end-arity)
                           (end-program)))))
@@ -221,19 +240,20 @@ a procedure."
                         '((begin-program get-sqrt-trampoline
                                          ((name . get-sqrt-trampoline)))
                           (begin-standard-arity () 2 #f)
-                          (current-module 1)
-                          (cache-current-module! 1 sqrt-scope)
-                          (load-static-procedure 1 sqrt-trampoline)
-                          (return 1)
+                          (current-module 0)
+                          (cache-current-module! 0 sqrt-scope)
+                          (load-static-procedure 0 sqrt-trampoline)
+                          (return-values 2)
                           (end-arity)
                           (end-program)
 
                           (begin-program sqrt-trampoline
                                          ((name . sqrt-trampoline)))
                           (begin-standard-arity (x) 3 #f)
-                          (definition x 1)
-                          (cached-toplevel-box 2 sqrt-scope sqrt #t)
-                          (box-ref 0 2)
+                          (definition closure 0 scm)
+                          (definition x 1 scm)
+                          (cached-toplevel-box 0 sqrt-scope sqrt #t)
+                          (box-ref 2 0)
                           (tail-call 2)
                           (end-arity)
                           (end-program)))))
@@ -249,10 +269,10 @@ a procedure."
                           '((begin-program make-top-incrementor
                                            ((name . make-top-incrementor)))
                             (begin-standard-arity () 2 #f)
-                            (current-module 1)
-                            (cache-current-module! 1 top-incrementor)
-                            (load-static-procedure 1 top-incrementor)
-                            (return 1)
+                            (current-module 0)
+                            (cache-current-module! 0 top-incrementor)
+                            (load-static-procedure 0 top-incrementor)
+                            (return-values 2)
                             (end-arity)
                             (end-program)
 
@@ -260,11 +280,10 @@ a procedure."
                                            ((name . top-incrementor)))
                             (begin-standard-arity () 3 #f)
                             (cached-toplevel-box 1 top-incrementor *top-val* #t)
-                            (box-ref 2 1)
-                            (add1 2 2)
-                            (box-set! 1 2)
-                            (reset-frame 1)
-                            (return-values)
+                            (box-ref 0 1)
+                            (add/immediate 0 0 1)
+                            (box-set! 1 0)
+                            (return-values 1)
                             (end-arity)
                             (end-program)))))
                     ((make-top-incrementor))
@@ -277,17 +296,18 @@ a procedure."
                         '((begin-program get-sqrt-trampoline
                                          ((name . get-sqrt-trampoline)))
                           (begin-standard-arity () 2 #f)
-                          (load-static-procedure 1 sqrt-trampoline)
-                          (return 1)
+                          (load-static-procedure 0 sqrt-trampoline)
+                          (return-values 2)
                           (end-arity)
                           (end-program)
 
                           (begin-program sqrt-trampoline
                                          ((name . sqrt-trampoline)))
                           (begin-standard-arity (x) 3 #f)
-                          (definition x 1)
-                          (cached-module-box 2 (guile) sqrt #t #t)
-                          (box-ref 0 2)
+                          (definition closure 0 scm)
+                          (definition x 1 scm)
+                          (cached-module-box 0 (guile) sqrt #t #t)
+                          (box-ref 2 0)
                           (tail-call 2)
                           (end-arity)
                           (end-program)))))
@@ -301,8 +321,8 @@ a procedure."
                           '((begin-program make-top-incrementor
                                            ((name . make-top-incrementor)))
                             (begin-standard-arity () 2 #f)
-                            (load-static-procedure 1 top-incrementor)
-                            (return 1)
+                            (load-static-procedure 0 top-incrementor)
+                            (return-values 2)
                             (end-arity)
                             (end-program)
 
@@ -310,10 +330,11 @@ a procedure."
                                            ((name . top-incrementor)))
                             (begin-standard-arity () 3 #f)
                             (cached-module-box 1 (tests bytecode) *top-val* #f #t)
-                            (box-ref 2 1)
-                            (add1 2 2)
-                            (box-set! 1 2)
-                            (return 2)
+                            (box-ref 0 1)
+                            (add/immediate 0 0 1)
+                            (box-set! 1 0)
+                            (mov 1 0)
+                            (return-values 2)
                             (end-arity)
                             (end-program)))))
                     ((make-top-incrementor))
@@ -323,8 +344,8 @@ a procedure."
   (let ((return-3 (assemble-program
                    '((begin-program return-3 ((name . return-3)))
                      (begin-standard-arity () 2 #f)
-                     (load-constant 1 3)
-                     (return 1)
+                     (load-constant 0 3)
+                     (return-values 2)
                      (end-arity)
                      (end-program)))))
     (pass-if "program name"
@@ -345,8 +366,8 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo)))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program))))))
 
@@ -356,8 +377,9 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo)))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (definition closure 0 scm)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program)))))
   (pass-if-equal "#<procedure foo (x y)>"
@@ -365,10 +387,11 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo)))
           (begin-standard-arity (x y) 3 #f)
-          (definition x 1)
-          (definition y 2)
+          (definition closure 0 scm)
+          (definition x 1 scm)
+          (definition y 2 scm)
           (load-constant 1 42)
-          (return 1)
+          (return-values 2)
           (end-arity)
           (end-program)))))
 
@@ -377,11 +400,12 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo)))
           (begin-opt-arity (x) (y) z 4 #f)
-          (definition x 1)
-          (definition y 2)
-          (definition z 3)
-          (load-constant 1 42)
-          (return 1)
+          (definition closure 0 scm)
+          (definition x 1 scm)
+          (definition y 2 scm)
+          (definition z 3 scm)
+          (load-constant 2 42)
+          (return-values 2)
           (end-arity)
           (end-program))))))
 
@@ -391,8 +415,8 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo) (documentation . "qux qux")))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program))))))
 
@@ -403,8 +427,8 @@ a procedure."
        (assemble-program
         '((begin-program foo ())
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program)))))
 
@@ -415,8 +439,8 @@ a procedure."
        (assemble-program
         '((begin-program foo ((name . foo) (documentation . "qux qux")))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program)))))
 
@@ -430,8 +454,8 @@ a procedure."
                               (documentation . "qux qux")
                               (moo . "mooooooooooooo")))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program)))))
 
@@ -443,7 +467,7 @@ a procedure."
                               (documentation . "qux qux")
                               (moo . "mooooooooooooo")))
           (begin-standard-arity () 2 #f)
-          (load-constant 1 42)
-          (return 1)
+          (load-constant 0 42)
+          (return-values 2)
           (end-arity)
           (end-program))))))

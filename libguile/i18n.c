@@ -1,4 +1,4 @@
-/* Copyright (C) 2006-2014 Free Software Foundation, Inc.
+/* Copyright (C) 2006-2014, 2017 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -834,44 +834,6 @@ compare_u32_strings_ci (SCM s1, SCM s2, SCM locale, const char *func_name)
 }
 #undef FUNC_NAME
 
-/* Store into DST an upper-case version of SRC.  */
-static inline void
-str_upcase (register char *dst, register const char *src)
-{
-  for (; *src != '\0'; src++, dst++)
-    *dst = toupper ((int) *src);
-  *dst = '\0';
-}
-
-static inline void
-str_downcase (register char *dst, register const char *src)
-{
-  for (; *src != '\0'; src++, dst++)
-    *dst = tolower ((int) *src);
-  *dst = '\0';
-}
-
-#ifdef USE_GNU_LOCALE_API
-static inline void
-str_upcase_l (register char *dst, register const char *src,
-	      scm_t_locale locale)
-{
-  for (; *src != '\0'; src++, dst++)
-    *dst = toupper_l (*src, locale);
-  *dst = '\0';
-}
-
-static inline void
-str_downcase_l (register char *dst, register const char *src,
-		scm_t_locale locale)
-{
-  for (; *src != '\0'; src++, dst++)
-    *dst = tolower_l (*src, locale);
-  *dst = '\0';
-}
-#endif
-
-
 SCM_DEFINE (scm_string_locale_lt, "string-locale<?", 2, 1, 0,
 	    (SCM s1, SCM s2, SCM locale),
 	    "Compare strings @var{s1} and @var{s2} in a locale-dependent way."
@@ -1373,7 +1335,7 @@ SCM_DEFINE (scm_locale_string_to_integer, "locale-string->integer",
 
   if (c_locale != NULL)
     {
-#ifdef USE_GNU_LOCALE_API
+#if defined USE_GNU_LOCALE_API && defined HAVE_STRTOL_L
       c_result = strtol_l (c_str, &c_endptr, c_base, c_locale);
 #else
       RUN_IN_LOCALE_SECTION (c_locale,
@@ -1417,7 +1379,7 @@ SCM_DEFINE (scm_locale_string_to_inexact, "locale-string->inexact",
 
   if (c_locale != NULL)
     {
-#ifdef USE_GNU_LOCALE_API
+#if defined USE_GNU_LOCALE_API && defined HAVE_STRTOD_L
       c_result = strtod_l (c_str, &c_endptr, c_locale);
 #else
       RUN_IN_LOCALE_SECTION (c_locale,
@@ -1605,7 +1567,8 @@ SCM_DEFINE (scm_nl_langinfo, "nl-langinfo", 1, 1, 0,
 
 #if defined P_CS_PRECEDES || defined N_CS_PRECEDES ||	\
   defined INT_P_CS_PRECEDES || defined INT_N_CS_PRECEDES || \
-  defined P_SEP_BY_SPACE || defined N_SEP_BY_SPACE
+  defined P_SEP_BY_SPACE || defined N_SEP_BY_SPACE || \
+  defined INT_P_SEP_BY_SPACE || defined INT_N_SEP_BY_SPACE
 #ifdef P_CS_PRECEDES
 	case P_CS_PRECEDES:
 	case N_CS_PRECEDES:
@@ -1618,8 +1581,12 @@ SCM_DEFINE (scm_nl_langinfo, "nl-langinfo", 1, 1, 0,
 	case P_SEP_BY_SPACE:
 	case N_SEP_BY_SPACE:
 #endif
-	  /* This is to be interpreted as a boolean.  */
-	  result = scm_from_bool (*c_result);
+#ifdef INT_P_SEP_BY_SPACE
+        case INT_P_SEP_BY_SPACE:
+        case INT_N_SEP_BY_SPACE:
+#endif
+          /* This is to be interpreted as a boolean.  */
+          result = scm_from_bool (*c_result);
 
 	  free (c_result);
 	  break;

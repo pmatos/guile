@@ -33,7 +33,6 @@
 #include "libguile/eval.h"
 #include "libguile/ports.h"
 #include "libguile/read.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/modules.h"
 #include "libguile/validate.h"
@@ -52,192 +51,103 @@
  *
  */
 
-/* NOTES:
+SCM_SYMBOL (sym_UTF_8, "UTF-8");
 
-   write_buf/write_end point to the ends of the allocated bytevector.
-   read_buf/read_end point to the part of the bytevector which has been
-   written to.  read_pos and write_pos are always equal.
+scm_t_port_type *scm_string_port_type;
 
-   ENHANCE-ME - output blocks:
+struct string_port {
+  SCM bytevector;
+  size_t pos;
+  size_t len;
+};
 
-   The current code keeps an output string as a single block.  That means
-   when the size is increased the entire old contents must be copied.  It'd
-   be more efficient to begin a new block when the old one is full, so
-   there's no re-copying of previous data.
-
-   To make seeking efficient, keeping the pieces in a vector might be best,
-   though appending is probably the most common operation.  The size of each
-   block could be progressively increased, so the bigger the string the
-   bigger the blocks.
-
-   When `get-output-string' is called the blocks have to be coalesced into a
-   string, the result could be kept as a single big block.  If blocks were
-   strings then `get-output-string' could notice when there's just one and
-   return that with a copy-on-write (though repeated calls to
-   `get-output-string' are probably unlikely).
-
-   Another possibility would be to extend the port mechanism to let SCM
-   strings come through directly from `display' and friends.  That way if a
-   big string is written it can be kept as a copy-on-write, saving time
-   copying and maybe saving some space.  */
-
-
-scm_t_bits scm_tc16_strport;
-
-
-static int
-st_fill_input (SCM port)
+static size_t
+string_port_read (SCM port, SCM dst, size_t start, size_t count)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  
-  if (pt->read_pos >= pt->read_end)
-    return EOF;
-  else
-    return *pt->read_pos;
+  struct string_port *stream = (void *) SCM_STREAM (port);
+
+  if (stream->pos >= stream->len)
+    return 0;
+
+  if (count > stream->len - stream->pos)
+    count = stream->len - stream->pos;
+
+  memcpy (SCM_BYTEVECTOR_CONTENTS (dst) + start,
+          SCM_BYTEVECTOR_CONTENTS (stream->bytevector) + stream->pos,
+          count);
+
+  stream->pos += count;
+  return count;
 }
 
-/* Change the size of a port's bytevector to NEW_SIZE.  This doesn't
-   change `read_buf_size'.  */
-static void
-st_resize_port (scm_t_port *pt, scm_t_off new_size)
+static size_t
+string_port_write (SCM port, SCM src, size_t start, size_t count)
 {
-  SCM old_stream = SCM_PACK (pt->stream);
-  const signed char *src = SCM_BYTEVECTOR_CONTENTS (old_stream);
-  SCM new_stream = scm_c_make_bytevector (new_size);
-  signed char *dst = SCM_BYTEVECTOR_CONTENTS (new_stream);
-  unsigned long int old_size = SCM_BYTEVECTOR_LENGTH (old_stream);
-  unsigned long int min_size = min (old_size, new_size);
+  struct string_port *stream = (void *) SCM_STREAM (port);
 
-  scm_t_off offset = pt->write_pos - pt->write_buf;
-
-  pt->write_buf_size = new_size;
-
-  memcpy (dst, src, min_size);
-
-  scm_remember_upto_here_1 (old_stream);
-
-  /* reset buffer. */
-  {
-    pt->stream = SCM_UNPACK (new_stream);
-    pt->read_buf = pt->write_buf = (unsigned char *)dst;
-    pt->read_pos = pt->write_pos = pt->write_buf + offset;
-    pt->write_end = pt->write_buf + pt->write_buf_size;
-    pt->read_end = pt->read_buf + pt->read_buf_size;
-  }
-}
-
-static void
-st_write (SCM port, const void *data, size_t size)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (size > pt->write_end - pt->write_pos)
-    st_resize_port (pt, max (pt->write_buf_size * 2,
-                             pt->write_end - pt->write_pos + size));
-
-  memcpy ((char *) pt->write_pos, data, size);
-  pt->read_pos = (pt->write_pos += size);
-
-  if (pt->read_pos > pt->read_end)
+  if (SCM_BYTEVECTOR_LENGTH (stream->bytevector) < stream->pos + count)
     {
-      pt->read_end = (unsigned char *) pt->read_pos;
-      pt->read_buf_size = pt->read_end - pt->read_buf;
+      SCM new_bv;
+      size_t new_size;
+
+      new_size = max (SCM_BYTEVECTOR_LENGTH (stream->bytevector) * 2,
+                      stream->pos + count);
+      new_bv = scm_c_make_bytevector (new_size);
+      memcpy (SCM_BYTEVECTOR_CONTENTS (new_bv),
+              SCM_BYTEVECTOR_CONTENTS (stream->bytevector),
+              stream->len);
+      stream->bytevector = new_bv;
     }
-}
 
-static void
-st_end_input (SCM port, int offset)
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  
-  if (pt->read_pos - pt->read_buf < offset)
-    scm_misc_error ("st_end_input", "negative position", SCM_EOL);
+  memcpy (SCM_BYTEVECTOR_CONTENTS (stream->bytevector) + stream->pos,
+          SCM_BYTEVECTOR_CONTENTS (src) + start,
+          count);
+  stream->pos += count;
+  if (stream->pos > stream->len)
+    stream->len = stream->pos;
 
-  pt->write_pos = (unsigned char *) (pt->read_pos = pt->read_pos - offset);
-  pt->rw_active = SCM_PORT_NEITHER;
+  return count;
 }
 
 static scm_t_off
-st_seek (SCM port, scm_t_off offset, int whence)
+string_port_seek (SCM port, scm_t_off offset, int whence)
+#define FUNC_NAME "string_port_seek"
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
+  struct string_port *stream = (void *) SCM_STREAM (port);
   scm_t_off target;
 
-  if (pt->rw_active == SCM_PORT_READ && offset == 0 && whence == SEEK_CUR)
-    /* special case to avoid disturbing the unread-char buffer.  */
-    {
-      if (pt->read_buf == pt->putback_buf)
-	{
-	  target = pt->saved_read_pos - pt->saved_read_buf
-	    - (pt->read_end - pt->read_pos);
-	}
-      else
-	{
-	  target = pt->read_pos - pt->read_buf;
-	}
-    }
+  if (whence == SEEK_CUR)
+    target = offset + stream->pos;
+  else if (whence == SEEK_SET)
+    target = offset;
+  else if (whence == SEEK_END)
+    target = offset + stream->len;
   else
-    /* all other cases.  */
-    {
-      if (pt->rw_active == SCM_PORT_READ)
-	scm_end_input_unlocked (port);
+    scm_wrong_type_arg_msg (FUNC_NAME, 0, port, "invalid `seek' parameter");
 
-      pt->rw_active = SCM_PORT_NEITHER;
+  if (target >= 0 && target <= stream->len)
+    stream->pos = target;
+  else
+    scm_out_of_range (FUNC_NAME, scm_from_long (offset));
 
-      switch (whence)
-	{
-	case SEEK_CUR:
-	  target = pt->read_pos - pt->read_buf + offset;
-	  break;
-	case SEEK_END:
-	  target = pt->read_end - pt->read_buf + offset;
-	  break;
-	default: /* SEEK_SET */
-	  target = offset;
-	  break;
-	}
-
-      if (target < 0)
-	scm_misc_error ("st_seek", "negative offset", SCM_EOL);
-  
-      if (target >= pt->write_buf_size)
-	{
-	  if (!(SCM_CELL_WORD_0 (port) & SCM_WRTNG))
-	    {
-	      if (target > pt->write_buf_size)
-		{
-		  scm_misc_error ("st_seek", 
-				  "seek past end of read-only strport",
-				  SCM_EOL);
-		}
-	    }
-	  else if (target == pt->write_buf_size)
-	    st_resize_port (pt, target * 2);
-	}
-      pt->read_pos = pt->write_pos = pt->read_buf + target;
-      if (pt->read_pos > pt->read_end)
-	{
-	  pt->read_end = (unsigned char *) pt->read_pos;
-	  pt->read_buf_size = pt->read_end - pt->read_buf;
-	}
-    }
   return target;
 }
+#undef FUNC_NAME
 
 static void
-st_truncate (SCM port, scm_t_off length)
+string_port_truncate (SCM port, scm_t_off length)
+#define FUNC_NAME "string_port_truncate"
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
+  struct string_port *stream = (void *) SCM_STREAM (port);
 
-  if (length > pt->write_buf_size)
-    st_resize_port (pt, length);
-
-  pt->read_buf_size = length;
-  pt->read_end = pt->read_buf + length;
-  if (pt->read_pos > pt->read_end)
-    pt->read_pos = pt->write_pos = pt->read_end;
+  if (0 <= length && stream->pos <= length && length <= stream->len)
+    stream->len = length;
+  else
+    scm_out_of_range (FUNC_NAME, scm_from_off_t_or_off64_t (length));
 }
+#undef FUNC_NAME
 
+
 /* The initial size in bytes of a string port's buffer.  */
 #define INITIAL_BUFFER_SIZE 128
 
@@ -247,10 +157,9 @@ st_truncate (SCM port, scm_t_off length)
 SCM
 scm_mkstrport (SCM pos, SCM str, long modes, const char *caller)
 {
-  SCM z, buf;
-  scm_t_port *pt;
-  size_t read_buf_size, num_bytes, c_byte_pos;
-  char *c_buf;
+  SCM buf;
+  size_t len, byte_pos;
+  struct string_port *stream;
 
   if (!((modes & SCM_WRTNG) || (modes & SCM_RDNG)))
     scm_misc_error ("scm_mkstrport", "port must read or write", SCM_EOL);
@@ -258,55 +167,34 @@ scm_mkstrport (SCM pos, SCM str, long modes, const char *caller)
   if (scm_is_false (str))
     {
       /* Allocate a new buffer to write to.  */
-      num_bytes = INITIAL_BUFFER_SIZE;
-      buf = scm_c_make_bytevector (num_bytes);
-      c_buf = (char *) SCM_BYTEVECTOR_CONTENTS (buf);
-
-      /* Reset `read_buf_size'.  It will contain the actual number of
-	 bytes written to the port.  */
-      read_buf_size = 0;
-      c_byte_pos = 0;
+      buf = scm_c_make_bytevector (INITIAL_BUFFER_SIZE);
+      len = byte_pos = 0;
     }
   else
     {
-      char *copy;
-
       SCM_ASSERT (scm_is_string (str), str, SCM_ARG1, caller);
 
-      /* STR is a string.  */
-      /* Create a copy of STR in UTF-8.  */
-      copy = scm_to_utf8_stringn (str, &num_bytes);
-      buf = scm_c_make_bytevector (num_bytes);
-      c_buf = (char *) SCM_BYTEVECTOR_CONTENTS (buf);
-      memcpy (c_buf, copy, num_bytes);
-      free (copy);
-
-      read_buf_size = num_bytes;
+      buf = scm_string_to_utf8 (str);
+      len = scm_c_bytevector_length (buf);
 
       if (scm_is_eq (pos, SCM_INUM0))
-        c_byte_pos = 0;
+        byte_pos = 0;
       else
         /* Inefficient but simple way to convert the character position
-           POS into a byte position C_BYTE_POS.  */
+           POS into a byte position BYTE_POS.  */
         free (scm_to_utf8_stringn (scm_substring (str, SCM_INUM0, pos),
-                                   &c_byte_pos));
+                                   &byte_pos));
     }
 
-  z = scm_c_make_port_with_encoding (scm_tc16_strport, modes,
-                                     "UTF-8",
-                                     scm_i_default_port_conversion_handler (),
-                                     SCM_UNPACK (buf));
+  stream = scm_gc_typed_calloc (struct string_port);
+  stream->bytevector = buf;
+  stream->pos = byte_pos;
+  stream->len = len;
 
-  pt = SCM_PTAB_ENTRY (z);
-
-  pt->write_buf = pt->read_buf = (unsigned char *) c_buf;
-  pt->read_pos = pt->write_pos = pt->read_buf + c_byte_pos;
-  pt->read_buf_size = read_buf_size;
-  pt->write_buf_size = num_bytes;
-  pt->write_end = pt->read_end = pt->read_buf + pt->read_buf_size;
-  pt->rw_random = 1;
-
-  return z;
+  return
+    scm_c_make_port_with_encoding (scm_string_port_type, modes, sym_UTF_8,
+                                   scm_i_default_port_conversion_strategy (),
+                                   (scm_t_bits) stream);
 }
 
 /* Create a new string from the buffer of PORT, a string port, converting from
@@ -314,12 +202,16 @@ scm_mkstrport (SCM pos, SCM str, long modes, const char *caller)
 SCM
 scm_strport_to_string (SCM port)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
+  signed char *ptr;
+  struct string_port *stream = (void *) SCM_STREAM (port);
 
-  if (pt->read_buf_size == 0)
+  scm_flush (port);
+
+  if (stream->len == 0)
     return scm_nullstr;
 
-  return scm_from_port_stringn ((char *)pt->read_buf, pt->read_buf_size, port);
+  ptr = SCM_BYTEVECTOR_CONTENTS (stream->bytevector);
+  return scm_from_port_stringn ((char *) ptr, stream->len, port);
 }
 
 SCM_DEFINE (scm_object_to_string, "object->string", 1, 1, 0,
@@ -334,8 +226,7 @@ SCM_DEFINE (scm_object_to_string, "object->string", 1, 1, 0,
   if (!SCM_UNBNDP (printer))
     SCM_VALIDATE_PROC (2, printer);
 
-  port = scm_mkstrport (SCM_INUM0, SCM_BOOL_F,
-			SCM_OPN | SCM_WRTNG, FUNC_NAME);
+  port = scm_mkstrport (SCM_INUM0, SCM_BOOL_F, SCM_WRTNG, FUNC_NAME);
 
   if (SCM_UNBNDP (printer))
     scm_write (obj, port);
@@ -386,8 +277,7 @@ SCM_DEFINE (scm_open_input_string, "open-input-string", 1, 0, 0,
 	    "by the garbage collector if it becomes inaccessible.")
 #define FUNC_NAME s_scm_open_input_string
 {
-  SCM p = scm_mkstrport(SCM_INUM0, str, SCM_OPN | SCM_RDNG, FUNC_NAME);
-  return p;
+  return scm_mkstrport (SCM_INUM0, str, SCM_RDNG, FUNC_NAME);
 }
 #undef FUNC_NAME
 
@@ -400,12 +290,7 @@ SCM_DEFINE (scm_open_output_string, "open-output-string", 0, 0, 0,
 	    "inaccessible.")
 #define FUNC_NAME s_scm_open_output_string
 {
-  SCM p;
-
-  p = scm_mkstrport (SCM_INUM0, SCM_BOOL_F,
-		     SCM_OPN | SCM_WRTNG,
-                     FUNC_NAME);
-  return p;
+  return scm_mkstrport (SCM_INUM0, SCM_BOOL_F, SCM_WRTNG, FUNC_NAME);
 }
 #undef FUNC_NAME
 
@@ -427,15 +312,13 @@ SCM_DEFINE (scm_get_output_string, "get-output-string", 1, 0, 0,
 SCM
 scm_c_read_string (const char *expr)
 {
-  SCM port = scm_mkstrport (SCM_INUM0,
-			    scm_from_locale_string (expr),
-			    SCM_OPN | SCM_RDNG,
-			    "scm_c_read_string");
-  SCM form;
+  SCM port, form;
 
+  port = scm_mkstrport (SCM_INUM0, scm_from_locale_string (expr),
+                        SCM_RDNG, "scm_c_read_string");
   form = scm_read (port);
-
   scm_close_port (port);
+
   return form;
 }
 
@@ -494,22 +377,22 @@ scm_eval_string (SCM string)
   return scm_eval_string_in_module (string, SCM_UNDEFINED);
 }
 
-static scm_t_bits
-scm_make_stptob ()
+static scm_t_port_type *
+scm_make_string_port_type ()
 {
-  scm_t_bits tc = scm_make_port_type ("string", st_fill_input, st_write);
+  scm_t_port_type *ptob = scm_make_port_type ("string",
+                                              string_port_read,
+                                              string_port_write);
+  scm_set_port_seek (ptob, string_port_seek);
+  scm_set_port_truncate (ptob, string_port_truncate);
 
-  scm_set_port_end_input   (tc, st_end_input);
-  scm_set_port_seek        (tc, st_seek);
-  scm_set_port_truncate    (tc, st_truncate);
-
-  return tc;
+  return ptob;
 }
 
 void
 scm_init_strports ()
 {
-  scm_tc16_strport = scm_make_stptob ();
+  scm_string_port_type = scm_make_string_port_type ();
 
 #include "libguile/strports.x"
 }

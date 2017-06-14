@@ -1,7 +1,7 @@
 ;;; srfi-19.scm --- Time/Date Library
 
-;; Copyright (C) 2001, 2002, 2003, 2005, 2006, 2007, 2008, 2009, 2010,
-;;   2011, 2014 Free Software Foundation, Inc.
+;; Copyright (C) 2001-2003, 2005-2011, 2014, 2016-2017
+;;   Free Software Foundation, Inc.
 ;;
 ;; This library is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU Lesser General Public
@@ -203,7 +203,8 @@
 ;; each entry is (tai seconds since epoch . # seconds to subtract for utc)
 ;; note they go higher to lower, and end in 1972.
 (define leap-second-table
-  '((1341100800 . 35)
+  '((1435708800 . 36)
+    (1341100800 . 35)
     (1230768000 . 34)
     (1136073600 . 33)
     (915148800 . 32)
@@ -332,8 +333,11 @@
 ;;    of course.
 
 (define (current-time-monotonic)
-  ;; Resolution is microseconds.
-  (current-time-tai))
+  ;; Guile monotonic and TAI times are the same.
+  (let ((tai (current-time-tai)))
+    (make-time time-monotonic
+               (time-nanosecond tai)
+               (time-second tai))))
 
 (define (current-time-thread)
   (time-error 'current-time 'unsupported-clock-type 'time-thread))
@@ -1001,24 +1005,14 @@
                                       #\Space 2)
                         port)))
    (cons #\f (lambda (date pad-with port)
-               (if (> (date-nanosecond date)
-                      nano)
-                   (display (padding (+ (date-second date) 1)
-                                          pad-with 2)
-                            port)
-                   (display (padding (date-second date)
-                                          pad-with 2)
-                            port))
-               (receive (i f)
-                        (split-real (/
-                                          (date-nanosecond date)
-                                          nano 1.0))
-                        (let* ((ns (number->string f))
-                               (le (string-length ns)))
-                          (if (> le 2)
-                              (begin
-                                (display (locale-decimal-point) port)
-                                (display (substring ns 2 le) port)))))))
+               (receive (s ns) (floor/ (+ (* (date-second date) nano)
+                                          (date-nanosecond date))
+                                       nano)
+                 (display (number->string s) port)
+                 (display (locale-decimal-point) port)
+                 (let ((str (padding ns #\0 9)))
+                   (display (substring str 0 1) port)
+                   (display (string-trim-right str #\0 1) port)))))
    (cons #\h (lambda (date pad-with port)
                (display (date->string date "~b") port)))
    (cons #\H (lambda (date pad-with port)
@@ -1059,7 +1053,7 @@
                (newline port)))
    (cons #\N (lambda (date pad-with port)
                (display (padding (date-nanosecond date)
-                                      pad-with 7)
+                                      pad-with 9)
                         port)))
    (cons #\p (lambda (date pad-with port)
                (display (locale-am-string/pm (date-hour date)) port)))

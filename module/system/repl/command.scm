@@ -58,7 +58,7 @@
 	      (disassemble x) (disassemble-file xx))
     (profile  (time t) (profile pr) (trace tr))
     (debug    (backtrace bt) (up) (down) (frame fr)
-              (procedure proc) (locals) (error-message error)
+              (locals) (error-message error)
               (break br bp) (break-at-source break-at bs)
               (step s) (step-instruction si)
               (next n) (next-instruction ni)
@@ -644,11 +644,6 @@ With an argument, select a frame by index, then show it."
      (else
       (format #t "No such frame.~%"))))
    (else (print-frame cur #:index index))))
-
-(define-stack-command (procedure repl)
-  "procedure
-Print the procedure for the selected frame."
-  (repl-print repl (frame-procedure cur)))
 
 (define-stack-command (locals repl #:key (width (terminal-width)))
   "locals

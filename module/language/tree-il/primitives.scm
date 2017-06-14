@@ -21,13 +21,14 @@
 (define-module (language tree-il primitives)
   #:use-module (system base pmatch)
   #:use-module (ice-9 match)
+  #:use-module (ice-9 threads)
   #:use-module (rnrs bytevectors)
   #:use-module (system base syntax)
   #:use-module (language tree-il)
   #:use-module (srfi srfi-4)
   #:use-module (srfi srfi-16)
   #:export (resolve-primitives add-interesting-primitive!
-            expand-primitives
+            expand-primcall expand-primitives
             effect-free-primitive? effect+exception-free-primitive?
             constructor-primitive?
             singly-valued-primitive? equality-primitive?
@@ -83,7 +84,7 @@
 
     current-module define!
 
-    fluid-ref fluid-set! with-fluid*
+    current-thread fluid-ref fluid-set! with-fluid* with-dynamic-state
 
     call-with-prompt
     abort-to-prompt* abort-to-prompt
@@ -171,7 +172,7 @@
     not
     pair? null? nil? list?
     symbol? variable? vector? struct? string? number? char?
-    bytevector? keyword? bitvector?
+    bytevector? keyword? bitvector? atomic-box?
     complex? real? rational? inf? nan? integer? exact? inexact? even? odd?
     char<? char<=? char>=? char>?
     integer->char char->integer number->string string->number
@@ -194,7 +195,7 @@
     pair? null? nil? list?
     symbol? variable? vector? struct? string? number? char?
     bytevector? keyword? bitvector?
-    procedure? thunk?
+    procedure? thunk? atomic-box?
     acons cons cons* list vector))
 
 ;; Primitives that don't always return one value.
@@ -313,16 +314,16 @@
 
 (define *primitive-expand-table* (make-hash-table))
 
+(define (expand-primcall x)
+  (record-case x
+    ((<primcall> src name args)
+     (let ((expand (hashq-ref *primitive-expand-table* name)))
+       (or (and expand (apply expand src args))
+           x)))
+    (else x)))
+
 (define (expand-primitives x)
-  (pre-order
-   (lambda (x)
-     (record-case x
-       ((<primcall> src name args)
-        (let ((expand (hashq-ref *primitive-expand-table* name)))
-          (or (and expand (apply expand src args))
-              x)))
-       (else x)))
-   x))
+  (pre-order expand-primcall x))
 
 ;;; I actually did spend about 10 minutes trying to redo this with
 ;;; syntax-rules. Patches appreciated.
@@ -388,18 +389,16 @@
 
 ;; FIXME: All the code that uses `const?' is redundant with `peval'.
 
+(define-primitive-expander 1+ (x)
+  (+ x 1))
+
+(define-primitive-expander 1- (x)
+  (- x 1))
+
 (define-primitive-expander +
   () 0
   (x) (values x)
-  (x y) (if (and (const? y) (eqv? (const-exp y) 1))
-            (1+ x)
-            (if (and (const? y) (eqv? (const-exp y) -1))
-                (1- x)
-                (if (and (const? x) (eqv? (const-exp x) 1))
-                    (1+ y)
-                    (if (and (const? x) (eqv? (const-exp x) -1))
-                        (1- y)
-                        (+ x y)))))
+  (x y) (+ x y)
   (x y z ... last) (+ (+ x y . z) last))
 
 (define-primitive-expander *
@@ -409,9 +408,7 @@
   
 (define-primitive-expander -
   (x) (- 0 x)
-  (x y) (if (and (const? y) (eqv? (const-exp y) 1))
-            (1- x)
-            (- x y))
+  (x y) (- x y)
   (x y z ... last) (- (- x y . z) last))
   
 (define-primitive-expander /
@@ -553,6 +550,24 @@
                         (chained-comparison-expander prim-name)))
           '(< > <= >= =))
 
+(define (character-comparison-expander char< <)
+  (lambda (src . args)
+    (expand-primcall
+     (make-primcall src <
+                    (map (lambda (arg)
+                           (make-primcall src 'char->integer (list arg)))
+                         args)))))
+
+(for-each (match-lambda
+            ((char< . <)
+             (hashq-set! *primitive-expand-table* char<
+                         (character-comparison-expander char< <))))
+          '((char<? . <)
+            (char>? . >)
+            (char<=? . <=)
+            (char>=? . >=)
+            (char=? . =)))
+
 ;; Appropriate for use with either 'eqv?' or 'equal?'.
 (define (maybe-simplify-to-eq prim)
   (case-lambda
@@ -583,7 +598,12 @@
 (define (expand-chained-comparisons prim)
   (case-lambda
     ((src) (make-const src #t))
-    ((src a) (make-const src #t))
+    ((src a)
+     ;; (< x) -> (begin (< x 0) #t).  Residualizes side-effects from x
+     ;; and, for numeric comparisons, checks that x is a number.
+     (make-seq src
+               (make-primcall src prim (list a (make-const src 0)))
+               (make-const src #t)))
     ((src a b) #f)
     ((src a b . rest)
      (make-conditional src (make-primcall src prim (list a b))

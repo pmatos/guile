@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2013  Free Software Foundation, Inc.
+/* Copyright (C) 2010-2016  Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -26,6 +26,7 @@
 #include <alignof.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 
 #include "libguile/_scm.h"
 #include "libguile/bytevectors.h"
@@ -75,7 +76,7 @@ null_pointer_error (const char *func_name)
 }
 
 
-static SCM cif_to_procedure (SCM cif, SCM func_ptr);
+static SCM cif_to_procedure (SCM cif, SCM func_ptr, int with_errno);
 
 
 static SCM pointer_weak_refs = SCM_BOOL_F;
@@ -313,9 +314,9 @@ SCM_DEFINE (scm_set_pointer_finalizer_x, "set-pointer-finalizer!", 2, 0, 0,
 void
 scm_i_pointer_print (SCM pointer, SCM port, scm_print_state *pstate)
 {
-  scm_puts_unlocked ("#<pointer 0x", port);
+  scm_puts ("#<pointer 0x", port);
   scm_uintprint (scm_to_uintptr_t (scm_pointer_address (pointer)), 16, port);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
 }
 
 
@@ -370,7 +371,7 @@ SCM_DEFINE (scm_string_to_pointer, "string->pointer", 1, 1, 0,
 
       ret = scm_from_pointer
         (scm_to_stringn (string, NULL, enc,
-                         scm_i_default_port_conversion_handler ()),
+                         scm_i_default_string_failed_conversion_handler ()),
          free);
 
       scm_dynwind_end ();
@@ -415,7 +416,7 @@ SCM_DEFINE (scm_pointer_to_string, "pointer->string", 1, 2, 0,
       scm_dynwind_free (enc);
 
       ret = scm_from_stringn (SCM_POINTER_VALUE (pointer), len, enc,
-                              scm_i_default_port_conversion_handler ());
+                              scm_i_default_string_failed_conversion_handler ());
 
       scm_dynwind_end ();
 
@@ -740,16 +741,10 @@ make_cif (SCM return_type, SCM arg_types, const char *caller)
 }
 #undef FUNC_NAME
 
-SCM_DEFINE (scm_pointer_to_procedure, "pointer->procedure", 3, 0, 0,
-            (SCM return_type, SCM func_ptr, SCM arg_types),
-            "Make a foreign function.\n\n"
-            "Given the foreign void pointer @var{func_ptr}, its argument and\n"
-            "return types @var{arg_types} and @var{return_type}, return a\n"
-            "procedure that will pass arguments to the foreign function\n"
-            "and return appropriate values.\n\n"
-            "@var{arg_types} should be a list of foreign types.\n"
-            "@code{return_type} should be a foreign type.")
-#define FUNC_NAME s_scm_pointer_to_procedure
+static SCM
+pointer_to_procedure (SCM return_type, SCM func_ptr, SCM arg_types,
+                      int with_errno)
+#define FUNC_NAME "pointer->procedure"
 {
   ffi_cif *cif;
 
@@ -757,62 +752,81 @@ SCM_DEFINE (scm_pointer_to_procedure, "pointer->procedure", 3, 0, 0,
 
   cif = make_cif (return_type, arg_types, FUNC_NAME);
 
-  return cif_to_procedure (scm_from_pointer (cif, NULL), func_ptr);
+  return cif_to_procedure (scm_from_pointer (cif, NULL), func_ptr,
+                           with_errno);
+}
+#undef FUNC_NAME
+
+SCM
+scm_pointer_to_procedure (SCM return_type, SCM func_ptr, SCM arg_types)
+{
+  return pointer_to_procedure (return_type, func_ptr, arg_types, 0);
+}
+
+SCM
+scm_pointer_to_procedure_with_errno (SCM return_type, SCM func_ptr,
+                                     SCM arg_types)
+{
+  return pointer_to_procedure (return_type, func_ptr, arg_types, 1);
+}
+
+SCM_KEYWORD (k_return_errno, "return-errno?");
+
+SCM_INTERNAL SCM scm_i_pointer_to_procedure (SCM, SCM, SCM, SCM);
+SCM_DEFINE (scm_i_pointer_to_procedure, "pointer->procedure", 3, 0, 1,
+            (SCM return_type, SCM func_ptr, SCM arg_types, SCM keyword_args),
+            "Make a foreign function.\n\n"
+            "Given the foreign void pointer @var{func_ptr}, its argument and\n"
+            "return types @var{arg_types} and @var{return_type}, return a\n"
+            "procedure that will pass arguments to the foreign function\n"
+            "and return appropriate values.\n\n"
+            "@var{arg_types} should be a list of foreign types.\n"
+            "@code{return_type} should be a foreign type.\n"
+            "If the @code{#:return-errno?} keyword argument is provided and\n"
+            "its value is true, then the returned procedure will return two\n"
+            "values, with @code{errno} as the second value.")
+#define FUNC_NAME s_scm_i_pointer_to_procedure
+{
+  SCM return_errno = SCM_BOOL_F;
+
+  scm_c_bind_keyword_arguments (FUNC_NAME, keyword_args, 0,
+                                k_return_errno, &return_errno,
+                                SCM_UNDEFINED);
+
+  return pointer_to_procedure (return_type, func_ptr, arg_types,
+                               scm_to_bool (return_errno));
 }
 #undef FUNC_NAME
 
 
 
-/* We support calling foreign functions with up to 100 arguments. */
-
-#define CODE(nreq)                                                  \
-  SCM_PACK_OP_24 (assert_nargs_ee, nreq + 1),                       \
-  SCM_PACK_OP_12_12 (foreign_call, 0, 1)
-
-#define CODE_10(n)                                                      \
-  CODE (n + 0), CODE (n + 1), CODE (n + 2), CODE (n + 3), CODE (n + 4), \
-  CODE (n + 5), CODE (n + 6), CODE (n + 7), CODE (n + 8), CODE (n + 9)
-
-static const scm_t_uint32 foreign_stub_code[] =
-  {
-    CODE_10 (0), CODE_10 (10), CODE_10 (20), CODE_10 (30), CODE_10 (40),
-    CODE_10 (50), CODE_10 (60), CODE_10 (70), CODE_10 (80), CODE_10 (90)
-  };
-
-#undef CODE
-#undef CODE_10
-
 static const scm_t_uint32 *
-get_foreign_stub_code (unsigned int nargs)
+get_foreign_stub_code (unsigned int nargs, int with_errno)
 {
-  if (nargs >= 100)
-    scm_misc_error ("make-foreign-function", "args >= 100 currently unimplemented",
-                    SCM_EOL);
+  size_t i;
+  size_t code_len = with_errno ? 4 : 5;
+  scm_t_uint32 *code;
 
-  return &foreign_stub_code[nargs * 2];
-}
+  code = scm_gc_malloc_pointerless (code_len * sizeof (scm_t_uint32),
+                                    "foreign code");
 
-/* Given a foreign procedure, determine its minimum arity. */
-int
-scm_i_foreign_arity (SCM foreign, int *req, int *opt, int *rest)
-{
-  const scm_t_uint32 *code = SCM_PROGRAM_CODE (foreign);
+  if (nargs >= (1 << 24) + 1)
+    scm_misc_error ("make-foreign-function", "too many arguments: ~a",
+                    scm_list_1 (scm_from_uint (nargs)));
 
-  if (code < foreign_stub_code)
-    return 0;
-  if (code > (foreign_stub_code
-              + (sizeof(foreign_stub_code) / sizeof(scm_t_uint32))))
-    return 0;
+  i = 0;
+  code[i++] = SCM_PACK_OP_24 (assert_nargs_ee, nargs + 1);
+  code[i++] = SCM_PACK_OP_12_12 (foreign_call, 0, 1);
+  code[i++] = SCM_PACK_OP_24 (handle_interrupts, 0);
+  if (!with_errno)
+    code[i++] = SCM_PACK_OP_24 (reset_frame, 2);
+  code[i++] = SCM_PACK_OP_24 (return_values, 0);
 
-  *req = (code - foreign_stub_code) / 2;
-  *opt = 0;
-  *rest = 0;
-
-  return 1;
+  return code;
 }
 
 static SCM
-cif_to_procedure (SCM cif, SCM func_ptr)
+cif_to_procedure (SCM cif, SCM func_ptr, int with_errno)
 {
   ffi_cif *c_cif;
   SCM ret;
@@ -822,7 +836,7 @@ cif_to_procedure (SCM cif, SCM func_ptr)
   c_cif = (ffi_cif *) SCM_POINTER_VALUE (cif);
 
   ret = scm_words (scm_tc7_program | (nfree << 16) | flags, nfree + 2);
-  SCM_SET_CELL_WORD_1 (ret, get_foreign_stub_code (c_cif->nargs));
+  SCM_SET_CELL_WORD_1 (ret, get_foreign_stub_code (c_cif->nargs, with_errno));
   SCM_PROGRAM_FREE_VARIABLE_SET (ret, 0, cif);
   SCM_PROGRAM_FREE_VARIABLE_SET (ret, 1, func_ptr);
   
@@ -977,7 +991,8 @@ pack (const ffi_type * type, const void *loc, int return_value_p)
 
 
 SCM
-scm_i_foreign_call (SCM foreign, const SCM *argv)
+scm_i_foreign_call (SCM cif_scm, SCM pointer_scm, int *errno_ret,
+                    const union scm_vm_stack_element *argv)
 {
   /* FOREIGN is the pair that cif_to_procedure set as the 0th element of the
      objtable. */
@@ -990,8 +1005,8 @@ scm_i_foreign_call (SCM foreign, const SCM *argv)
   size_t arg_size;
   scm_t_ptrdiff off;
 
-  cif = SCM_POINTER_VALUE (SCM_CAR (foreign));
-  func = SCM_POINTER_VALUE (SCM_CDR (foreign));
+  cif = SCM_POINTER_VALUE (cif_scm);
+  func = SCM_POINTER_VALUE (pointer_scm);
 
   /* Argument pointers.  */
   args = alloca (sizeof (void *) * cif->nargs);
@@ -1016,7 +1031,7 @@ scm_i_foreign_call (SCM foreign, const SCM *argv)
       args[i] = (void *) ROUND_UP ((scm_t_uintptr) data + off,
 				   cif->arg_types[i]->alignment);
       assert ((scm_t_uintptr) args[i] % cif->arg_types[i]->alignment == 0);
-      unpack (cif->arg_types[i], args[i], argv[i], 0);
+      unpack (cif->arg_types[i], args[i], argv[cif->nargs - i - 1].as_scm, 0);
     }
 
   /* Prepare space for the return value.  On some platforms, such as
@@ -1027,7 +1042,9 @@ scm_i_foreign_call (SCM foreign, const SCM *argv)
 			      max (sizeof (void *), cif->rtype->alignment));
 
   /* off we go! */
+  errno = 0;
   ffi_call (cif, func, rvalue, args);
+  *errno_ret = errno;
 
   return pack (cif->rtype, rvalue, 1);
 }

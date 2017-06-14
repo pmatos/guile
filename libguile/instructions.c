@@ -31,33 +31,43 @@ SCM_SYMBOL (sym_left_arrow, "<-");
 SCM_SYMBOL (sym_bang, "!");
 
 
-#define OP_HAS_ARITY (1U << 0)
-
 #define FOR_EACH_INSTRUCTION_WORD_TYPE(M)       \
     M(X32)                                      \
-    M(U8_X24)                                   \
-    M(U8_U24)                                   \
-    M(U8_L24)                                   \
-    M(U8_U8_I16)                                \
-    M(U8_U8_U8_U8)                              \
-    M(U8_U12_U12)                               \
-    M(U32) /* Unsigned. */                      \
+    M(X8_S24)                                   \
+    M(X8_F24)                                   \
+    M(X8_L24)                                   \
+    M(X8_C24)                                   \
+    M(X8_S8_I16)                                \
+    M(X8_S12_S12)                               \
+    M(X8_S12_C12)                               \
+    M(X8_C12_C12)                               \
+    M(X8_F12_F12)                               \
+    M(X8_S8_S8_S8)                              \
+    M(X8_S8_C8_S8)                              \
+    M(X8_S8_S8_C8)                              \
+    M(C8_C24)                                   \
+    M(C32) /* Unsigned. */                      \
     M(I32) /* Immediate. */                     \
     M(A32) /* Immediate, high bits. */          \
     M(B32) /* Immediate, low bits. */           \
+    M(AF32) /* Immediate double, high bits. */  \
+    M(BF32) /* Immediate double, low bits. */   \
+    M(AU32) /* Immediate uint64, high bits. */  \
+    M(BU32) /* Immediate uint64, low bits. */   \
+    M(AS32) /* Immediate int64, high bits. */   \
+    M(BS32) /* Immediate int64, low bits. */    \
     M(N32) /* Non-immediate. */                 \
-    M(S32) /* Scheme value (indirected). */     \
+    M(R32) /* Scheme value (indirected). */     \
     M(L32) /* Label. */                         \
     M(LO32) /* Label with offset. */            \
-    M(X8_U24)                                   \
-    M(X8_U12_U12)                               \
-    M(X8_L24)                                   \
+    M(B1_C7_L24)                                \
     M(B1_X7_L24)                                \
-    M(B1_U7_L24)                                \
-    M(B1_X7_U24)                                \
+    M(B1_X7_C24)                                \
+    M(B1_X7_S24)                                \
+    M(B1_X7_F24)                                \
     M(B1_X31)
 
-#define TYPE_WIDTH 5
+#define TYPE_WIDTH 6
 
 enum word_type
   {
@@ -73,19 +83,19 @@ static SCM word_type_symbols[] =
 #undef FALSE
   };
 
-#define OP(n,type) ((type) << (n*TYPE_WIDTH))
+#define OP(n,type) (((type) + 1) << (n*TYPE_WIDTH))
 
 /* The VM_DEFINE_OP macro uses a CPP-based DSL to describe what kinds of
    arguments each instruction takes.  This piece of code is the only
    bit that actually interprets that language.  These macro definitions
-   encode the operand types into bits in a 32-bit integer.
+   encode the operand types into bits in a 64-bit integer.
 
    (instruction-list) parses those encoded values into lists of symbols,
-   one for each 32-bit word that the operator takes.  This list is used
+   one for each 64-bit word that the operator takes.  This list is used
    by Scheme to generate assemblers and disassemblers for the
    instructions.  */
 
-#define NOP SCM_T_UINT32_MAX
+#define NOP SCM_T_UINT64_MAX
 #define OP1(type0) \
   (OP (0, type0))
 #define OP2(type0, type1) \
@@ -99,28 +109,32 @@ static SCM word_type_symbols[] =
 
 #define OP_DST (1 << (TYPE_WIDTH * 5))
 
-#define WORD_TYPE(n, word) \
+#define WORD_TYPE_AND_FLAG(n, word) \
   (((word) >> ((n) * TYPE_WIDTH)) & ((1 << TYPE_WIDTH) - 1))
+#define WORD_TYPE(n, word) \
+  (WORD_TYPE_AND_FLAG (n, word) - 1)
+#define HAS_WORD(n, word) \
+  (WORD_TYPE_AND_FLAG (n, word) != 0)
 
 /* Scheme interface */
 
 static SCM
-parse_instruction (scm_t_uint8 opcode, const char *name, scm_t_uint32 meta)
+parse_instruction (scm_t_uint8 opcode, const char *name, scm_t_uint64 meta)
 {
   SCM tail = SCM_EOL;
   int len;
 
   /* Format: (name opcode word0 word1 ...) */
 
-  if (WORD_TYPE (4, meta))
+  if (HAS_WORD (4, meta))
     len = 5;
-  else if (WORD_TYPE (3, meta))
+  else if (HAS_WORD (3, meta))
     len = 4;
-  else if (WORD_TYPE (2, meta))
+  else if (HAS_WORD (2, meta))
     len = 3;
-  else if (WORD_TYPE (1, meta))
+  else if (HAS_WORD (1, meta))
     len = 2;
-  else if (WORD_TYPE (0, meta))
+  else if (HAS_WORD (0, meta))
     len = 1;
   else
     abort ();

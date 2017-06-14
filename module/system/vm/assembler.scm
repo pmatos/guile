@@ -47,6 +47,7 @@
   #:use-module (system vm dwarf)
   #:use-module (system vm elf)
   #:use-module (system vm linker)
+  #:use-module (system syntax internal)
   #:use-module (language bytecode)
   #:use-module (rnrs bytevectors)
   #:use-module (ice-9 binary-ports)
@@ -58,17 +59,20 @@
   #:use-module (srfi srfi-11)
   #:export (make-assembler
 
+            (emit-receive* . emit-receive)
+            (emit-mov* . emit-mov)
+            (emit-fmov* . emit-fmov)
+
             emit-call
             emit-call-label
             emit-tail-call
             emit-tail-call-label
-            (emit-receive* . emit-receive)
             emit-receive-values
             emit-return
             emit-return-values
             emit-call/cc
             emit-abort
-            (emit-builtin-ref* . emit-builtin-ref)
+            emit-builtin-ref
             emit-br-if-nargs-ne
             emit-br-if-nargs-lt
             emit-br-if-nargs-gt
@@ -89,91 +93,144 @@
             emit-br-if-struct
             emit-br-if-char
             emit-br-if-tc7
-            (emit-br-if-eq* . emit-br-if-eq)
-            (emit-br-if-eqv* . emit-br-if-eqv)
-            (emit-br-if-equal* . emit-br-if-equal)
-            (emit-br-if-=* . emit-br-if-=)
-            (emit-br-if-<* . emit-br-if-<)
-            (emit-br-if-<=* . emit-br-if-<=)
-            (emit-br-if-logtest* . emit-br-if-logtest)
-            (emit-mov* . emit-mov)
-            (emit-box* . emit-box)
-            (emit-box-ref* . emit-box-ref)
-            (emit-box-set!* . emit-box-set!)
+            emit-br-if-eq
+            emit-br-if-eqv
+            emit-br-if-=
+            emit-br-if-<
+            emit-br-if-<=
+            emit-br-if-logtest
+            emit-br-if-u64-=
+            emit-br-if-u64-<
+            emit-br-if-u64-<=
+            emit-br-if-u64-<-scm
+            emit-br-if-u64-<=-scm
+            emit-br-if-u64-=-scm
+            emit-br-if-u64->=-scm
+            emit-br-if-u64->-scm
+            emit-br-if-f64-=
+            emit-br-if-f64-<
+            emit-br-if-f64-<=
+            emit-br-if-f64->
+            emit-br-if-f64->=
+            emit-box
+            emit-box-ref
+            emit-box-set!
             emit-make-closure
-            (emit-free-ref* . emit-free-ref)
-            (emit-free-set!* . emit-free-set!)
+            emit-free-ref
+            emit-free-set!
             emit-current-module
             emit-resolve
-            (emit-define!* . emit-define!)
+            emit-define!
             emit-toplevel-box
             emit-module-box
             emit-prompt
-            (emit-wind* . emit-wind)
+            emit-wind
             emit-unwind
-            (emit-push-fluid* . emit-push-fluid)
+            emit-push-fluid
             emit-pop-fluid
-            (emit-fluid-ref* . emit-fluid-ref)
-            (emit-fluid-set* . emit-fluid-set)
-            (emit-string-length* . emit-string-length)
-            (emit-string-ref* . emit-string-ref)
-            (emit-string->number* . emit-string->number)
-            (emit-string->symbol* . emit-string->symbol)
-            (emit-symbol->keyword* . emit-symbol->keyword)
-            (emit-cons* . emit-cons)
-            (emit-car* . emit-car)
-            (emit-cdr* . emit-cdr)
-            (emit-set-car!* . emit-set-car!)
-            (emit-set-cdr!* . emit-set-cdr!)
-            (emit-add* . emit-add)
-            (emit-add1* . emit-add1)
-            (emit-sub* . emit-sub)
-            (emit-sub1* . emit-sub1)
-            (emit-mul* . emit-mul)
-            (emit-div* . emit-div)
-            (emit-quo* . emit-quo)
-            (emit-rem* . emit-rem)
-            (emit-mod* . emit-mod)
-            (emit-ash* . emit-ash)
-            (emit-logand* . emit-logand)
-            (emit-logior* . emit-logior)
-            (emit-logxor* . emit-logxor)
-            (emit-make-vector* . emit-make-vector)
-            (emit-make-vector/immediate* . emit-make-vector/immediate)
-            (emit-vector-length* . emit-vector-length)
-            (emit-vector-ref* . emit-vector-ref)
-            (emit-vector-ref/immediate* . emit-vector-ref/immediate)
-            (emit-vector-set!* . emit-vector-set!)
-            (emit-vector-set!/immediate* . emit-vector-set!/immediate)
-            (emit-struct-vtable* . emit-struct-vtable)
-            (emit-allocate-struct/immediate* . emit-allocate-struct/immediate)
-            (emit-struct-ref/immediate* . emit-struct-ref/immediate)
-            (emit-struct-set!/immediate* . emit-struct-set!/immediate)
-            (emit-allocate-struct* . emit-allocate-struct)
-            (emit-struct-ref* . emit-struct-ref)
-            (emit-struct-set!* . emit-struct-set!)
-            (emit-class-of* . emit-class-of)
-            (emit-make-array* . emit-make-array)
-            (emit-bv-u8-ref* . emit-bv-u8-ref)
-            (emit-bv-s8-ref* . emit-bv-s8-ref)
-            (emit-bv-u16-ref* . emit-bv-u16-ref)
-            (emit-bv-s16-ref* . emit-bv-s16-ref)
-            (emit-bv-u32-ref* . emit-bv-u32-ref)
-            (emit-bv-s32-ref* . emit-bv-s32-ref)
-            (emit-bv-u64-ref* . emit-bv-u64-ref)
-            (emit-bv-s64-ref* . emit-bv-s64-ref)
-            (emit-bv-f32-ref* . emit-bv-f32-ref)
-            (emit-bv-f64-ref* . emit-bv-f64-ref)
-            (emit-bv-u8-set!* . emit-bv-u8-set!)
-            (emit-bv-s8-set!* . emit-bv-s8-set!)
-            (emit-bv-u16-set!* . emit-bv-u16-set!)
-            (emit-bv-s16-set!* . emit-bv-s16-set!)
-            (emit-bv-u32-set!* . emit-bv-u32-set!)
-            (emit-bv-s32-set!* . emit-bv-s32-set!)
-            (emit-bv-u64-set!* . emit-bv-u64-set!)
-            (emit-bv-s64-set!* . emit-bv-s64-set!)
-            (emit-bv-f32-set!* . emit-bv-f32-set!)
-            (emit-bv-f64-set!* . emit-bv-f64-set!)
+            emit-push-dynamic-state
+            emit-pop-dynamic-state
+            emit-current-thread
+            emit-fluid-ref
+            emit-fluid-set!
+            emit-string-length
+            emit-string-ref
+            emit-string-set!
+            emit-string->number
+            emit-string->symbol
+            emit-symbol->keyword
+            emit-cons
+            emit-car
+            emit-cdr
+            emit-set-car!
+            emit-set-cdr!
+            emit-add
+            emit-add/immediate
+            emit-sub
+            emit-sub/immediate
+            emit-mul
+            emit-div
+            emit-quo
+            emit-rem
+            emit-mod
+            emit-ash
+            emit-fadd
+            emit-fsub
+            emit-fmul
+            emit-fdiv
+            emit-uadd
+            emit-usub
+            emit-umul
+            emit-uadd/immediate
+            emit-usub/immediate
+            emit-umul/immediate
+            emit-logand
+            emit-logior
+            emit-logxor
+            emit-logsub
+            emit-ulogand
+            emit-ulogior
+            emit-ulogxor
+            emit-ulogsub
+            emit-ursh
+            emit-ulsh
+            emit-ursh/immediate
+            emit-ulsh/immediate
+            emit-char->integer
+            emit-integer->char
+            emit-make-vector
+            emit-make-vector/immediate
+            emit-vector-length
+            emit-vector-ref
+            emit-vector-ref/immediate
+            emit-vector-set!
+            emit-vector-set!/immediate
+            emit-struct-vtable
+            emit-allocate-struct/immediate
+            emit-struct-ref/immediate
+            emit-struct-set!/immediate
+            emit-allocate-struct
+            emit-struct-ref
+            emit-struct-set!
+            emit-class-of
+            emit-make-array
+            emit-scm->f64
+            emit-load-f64
+            emit-f64->scm
+            emit-scm->u64
+            emit-scm->u64/truncate
+            emit-load-u64
+            emit-u64->scm
+            emit-scm->s64
+            emit-load-s64
+            emit-s64->scm
+            emit-bv-length
+            emit-bv-u8-ref
+            emit-bv-s8-ref
+            emit-bv-u16-ref
+            emit-bv-s16-ref
+            emit-bv-u32-ref
+            emit-bv-s32-ref
+            emit-bv-u64-ref
+            emit-bv-s64-ref
+            emit-bv-f32-ref
+            emit-bv-f64-ref
+            emit-bv-u8-set!
+            emit-bv-s8-set!
+            emit-bv-u16-set!
+            emit-bv-s16-set!
+            emit-bv-u32-set!
+            emit-bv-s32-set!
+            emit-bv-u64-set!
+            emit-bv-s64-set!
+            emit-bv-f32-set!
+            emit-bv-f64-set!
+            emit-make-atomic-box
+            emit-atomic-box-ref
+            emit-atomic-box-set!
+            emit-atomic-box-swap!
+            emit-atomic-box-compare-and-swap!
+            emit-handle-interrupts
 
             emit-text
             link-assembly))
@@ -197,73 +254,80 @@
 ;;; Bytecode consists of 32-bit units, often subdivided in some way.
 ;;; These helpers create one 32-bit unit from multiple components.
 
+(define-inline (check-urange x mask)
+  (let ((x* (logand x mask)))
+    (unless (= x x*)
+      (error "out of range" x))
+    x*))
+
+(define-inline (check-srange x mask)
+  (let ((x* (logand x mask)))
+    (unless (if (negative? x)
+                (= (+ x mask 1) x*)
+                (= x x*))
+      (error "out of range" x))
+    x*))
+
 (define-inline (pack-u8-u24 x y)
-  (unless (<= 0 x 255)
-    (error "out of range" x))
-  (logior x (ash y 8)))
+  (let ((x (check-urange x #xff))
+        (y (check-urange y #xffffff)))
+    (logior x (ash y 8))))
 
 (define-inline (pack-u8-s24 x y)
-  (unless (<= 0 x 255)
-    (error "out of range" x))
-  (logior x (ash (cond
-                  ((< 0 (- y) #x800000)
-                   (+ y #x1000000))
-                  ((<= 0 y #xffffff)
-                   y)
-                  (else (error "out of range" y)))
-                 8)))
+  (let ((x (check-urange x #xff))
+        (y (check-srange y #xffffff)))
+    (logior x (ash y 8))))
 
 (define-inline (pack-u1-u7-u24 x y z)
-  (unless (<= 0 x 1)
-    (error "out of range" x))
-  (unless (<= 0 y 127)
-    (error "out of range" y))
-  (logior x (ash y 1) (ash z 8)))
+  (let ((x (check-urange x #x1))
+        (y (check-urange y #x7f))
+        (z (check-urange z #xffffff)))
+    (logior x (ash y 1) (ash z 8))))
 
 (define-inline (pack-u8-u12-u12 x y z)
-  (unless (<= 0 x 255)
-    (error "out of range" x))
-  (unless (<= 0 y 4095)
-    (error "out of range" y))
-  (logior x (ash y 8) (ash z 20)))
+  (let ((x (check-urange x #xff))
+        (y (check-urange y #xfff))
+        (z (check-urange z #xfff)))
+    (logior x (ash y 8) (ash z 20))))
 
 (define-inline (pack-u8-u8-u16 x y z)
-  (unless (<= 0 x 255)
-    (error "out of range" x))
-  (unless (<= 0 y 255)
-    (error "out of range" y))
-  (logior x (ash y 8) (ash z 16)))
+  (let ((x (check-urange x #xff))
+        (y (check-urange y #xff))
+        (z (check-urange z #xffff)))
+    (logior x (ash y 8) (ash z 16))))
 
 (define-inline (pack-u8-u8-u8-u8 x y z w)
-  (unless (<= 0 x 255)
-    (error "out of range" x))
-  (unless (<= 0 y 255)
-    (error "out of range" y))
-  (unless (<= 0 z 255)
-    (error "out of range" z))
-  (logior x (ash y 8) (ash z 16) (ash w 24)))
+  (let ((x (check-urange x #xff))
+        (y (check-urange y #xff))
+        (z (check-urange z #xff))
+        (w (check-urange w #xff)))
+    (logior x (ash y 8) (ash z 16) (ash w 24))))
 
 (eval-when (expand)
   (define-syntax pack-flags
     (syntax-rules ()
       ;; Add clauses as needed.
       ((pack-flags f1 f2) (logior (if f1 (ash 1 0) 0)
-                                  (if f2 (ash 2 0) 0))))))
+                                  (if f2 (ash 1 1) 0))))))
 
-;;; Helpers to read and write 32-bit units in a buffer.
 
-(define-inline (u32-ref buf n)
-  (bytevector-u32-native-ref buf (* n 4)))
+(define-syntax-rule (define-byte-order-swapper name size ref set)
+  (define* (name buf #:optional (start 0) (end (bytevector-length buf)))
+    "Patch up the text buffer @var{buf}, swapping the endianness of each
+N-byte unit."
+    (unless (zero? (modulo (- end start) size))
+      (error "unexpected length"))
+    (let lp ((pos start))
+      (when (< pos end)
+        (set buf pos (ref buf pos (endianness big)) (endianness little))
+        (lp (+ pos size))))))
 
-(define-inline (u32-set! buf n val)
-  (bytevector-u32-native-set! buf (* n 4) val))
-
-(define-inline (s32-ref buf n)
-  (bytevector-s32-native-ref buf (* n 4)))
-
-(define-inline (s32-set! buf n val)
-  (bytevector-s32-native-set! buf (* n 4) val))
-
+(define-byte-order-swapper byte-swap/2!
+  2 bytevector-u16-ref bytevector-u16-set!)
+(define-byte-order-swapper byte-swap/4!
+  4 bytevector-u32-ref bytevector-u32-set!)
+(define-byte-order-swapper byte-swap/8!
+  8 bytevector-u64-ref bytevector-u64-set!)
 
 
 
@@ -307,9 +371,6 @@
   (high-pc arity-high-pc set-arity-high-pc!)
   (definitions arity-definitions set-arity-definitions!))
 
-(eval-when (expand)
-  (define-syntax *block-size* (identifier-syntax 32)))
-
 ;;; An assembler collects all of the words emitted during assembly, and
 ;;; also maintains ancillary information such as the constant table, a
 ;;; relocation list, and so on.
@@ -319,40 +380,30 @@
 ;;; the bytevector as a whole instead of conditionalizing each access.
 ;;;
 (define-record-type <asm>
-  (make-asm cur idx start prev written
+  (make-asm buf pos start
             labels relocs
             word-size endianness
             constants inits
             shstrtab next-section-number
             meta sources
-            dead-slot-maps)
+            slot-maps)
   asm?
 
-  ;; We write bytecode into what is logically a growable vector,
-  ;; implemented as a list of blocks.  asm-cur is the current block, and
-  ;; asm-idx is the current index into that block, in 32-bit units.
+  ;; We write bytecode into a bytevector, growing the bytevector as
+  ;; needed.  asm-cur is that bytevector, and asm-pos is the byte offset
+  ;; into the vector at which the next word should be written.
   ;;
-  (cur asm-cur set-asm-cur!)
-  (idx asm-idx set-asm-idx!)
+  (buf asm-buf set-asm-buf!)
+  (pos asm-pos set-asm-pos!)
 
-  ;; asm-start is an absolute position, indicating the offset of the
-  ;; beginning of an instruction (in u32 units).  It is updated after
-  ;; writing all the words for one primitive instruction.  It models the
-  ;; position of the instruction pointer during execution, given that
-  ;; the VM updates the IP only at the end of executing the instruction,
-  ;; and is thus useful for computing offsets between two points in a
-  ;; program.
+  ;; asm-start is an absolute position, indicating the byte offset of
+  ;; the beginning of an instruction.  It is updated after writing all
+  ;; the words for one primitive instruction.  It models the position of
+  ;; the instruction pointer during execution, given that the VM updates
+  ;; the IP only at the end of executing the instruction, and is thus
+  ;; useful for computing offsets between two points in a program.
   ;;
   (start asm-start set-asm-start!)
-
-  ;; The list of previously written blocks.
-  ;;
-  (prev asm-prev set-asm-prev!)
-
-  ;; The number of u32 words written in asm-prev, which is the same as
-  ;; the offset of the current block.
-  ;;
-  (written asm-written set-asm-written!)
 
   ;; An alist of symbol -> position pairs, indicating the labels defined
   ;; in this compilation unit.
@@ -403,22 +454,18 @@
   ;;
   (sources asm-sources set-asm-sources!)
 
-  ;; A list of (pos . dead-slot-map) pairs, indicating dead slot maps.
-  ;; POS is relative to the beginning of the text section.
-  ;; DEAD-SLOT-MAP is a bitfield of slots that are dead at call sites,
-  ;; as an integer.
+  ;; A list of (pos . slot-map) pairs, indicating slot maps.  POS is
+  ;; relative to the beginning of the text section.  SLOT-MAP is a
+  ;; bitfield describing the stack at call sites, as an integer.
   ;;
-  (dead-slot-maps asm-dead-slot-maps set-asm-dead-slot-maps!))
-
-(define-inline (fresh-block)
-  (make-u32vector *block-size*))
+  (slot-maps asm-slot-maps set-asm-slot-maps!))
 
 (define* (make-assembler #:key (word-size (target-word-size))
                          (endianness (target-endianness)))
   "Create an assembler for a given target @var{word-size} and
 @var{endianness}, falling back to appropriate values for the configured
 target."
-  (make-asm (fresh-block) 0 0 '() 0
+  (make-asm (make-u32vector 1000) 0 0
             (make-hash-table) '()
             word-size endianness
             vlist-null '()
@@ -429,28 +476,20 @@ target."
   "Add a string to the section name table (shstrtab)."
   (string-table-intern! (asm-shstrtab asm) string))
 
-(define-inline (asm-pos asm)
-  "The offset of the next word to be written into the code buffer, in
-32-bit units."
-  (+ (asm-idx asm) (asm-written asm)))
-
-(define (allocate-new-block asm)
-  "Close off the current block, and arrange for the next word to be
-written to a fresh block."
-  (let ((new (fresh-block)))
-    (set-asm-prev! asm (cons (asm-cur asm) (asm-prev asm)))
-    (set-asm-written! asm (asm-pos asm))
-    (set-asm-cur! asm new)
-    (set-asm-idx! asm 0)))
+(define (grow-buffer! asm)
+  "Grow the code buffer of the asm."
+  (let* ((buf (asm-buf asm))
+         (len (bytevector-length buf))
+         (new (make-u32vector (ash len -1) 0)))
+    (bytevector-copy! buf 0 new 0 len)
+    (set-asm-buf! asm new)
+    #f))
 
 (define-inline (emit asm u32)
   "Emit one 32-bit word into the instruction stream.  Assumes that there
-is space for the word, and ensures that there is space for the next
-word."
-  (u32-set! (asm-cur asm) (asm-idx asm) u32)
-  (set-asm-idx! asm (1+ (asm-idx asm)))
-  (if (= (asm-idx asm) *block-size*)
-      (allocate-new-block asm)))
+is space for the word."
+  (bytevector-u32-native-set! (asm-buf asm) (asm-pos asm) u32)
+  (set-asm-pos! asm (+ (asm-pos asm) 4)))
 
 (define-inline (make-reloc type label base word)
   "Make an internal relocation of type @var{type} referencing symbol
@@ -492,7 +531,7 @@ later by the linker."
   (define (id-append ctx a b)
     (datum->syntax ctx (symbol-append (syntax->datum a) (syntax->datum b))))
 
-  (define-syntax assembler
+  (define-syntax encoder
     (lambda (x)
       (define-syntax op-case
         (lambda (x)
@@ -510,45 +549,67 @@ later by the linker."
         (with-syntax ((opcode opcode))
           (op-case
            asm type
-           ((U8_X24)
+           ((X32)
             (emit asm opcode))
-           ((U8_U24 arg)
+           ((X8_S24 arg)
             (emit asm (pack-u8-u24 opcode arg)))
-           ((U8_L24 label)
+           ((X8_F24 arg)
+            (emit asm (pack-u8-u24 opcode arg)))
+           ((X8_C24 arg)
+            (emit asm (pack-u8-u24 opcode arg)))
+           ((X8_L24 label)
             (record-label-reference asm label)
             (emit asm opcode))
-           ((U8_U8_I16 a imm)
-            (emit asm (pack-u8-u8-u16 opcode a (object-address imm))))
-           ((U8_U12_U12 a b)
+           ((X8_S8_I16 a imm)
+            (emit asm (pack-u8-u8-u16 opcode a (immediate-bits asm imm))))
+           ((X8_S12_S12 a b)
             (emit asm (pack-u8-u12-u12 opcode a b)))
-           ((U8_U8_U8_U8 a b c)
+           ((X8_S12_C12 a b)
+            (emit asm (pack-u8-u12-u12 opcode a b)))
+           ((X8_C12_C12 a b)
+            (emit asm (pack-u8-u12-u12 opcode a b)))
+           ((X8_F12_F12 a b)
+            (emit asm (pack-u8-u12-u12 opcode a b)))
+           ((X8_S8_S8_S8 a b c)
+            (emit asm (pack-u8-u8-u8-u8 opcode a b c)))
+           ((X8_S8_S8_C8 a b c)
+            (emit asm (pack-u8-u8-u8-u8 opcode a b c)))
+           ((X8_S8_C8_S8 a b c)
             (emit asm (pack-u8-u8-u8-u8 opcode a b c))))))
 
       (define (pack-tail-word asm type)
         (op-case
          asm type
-         ((U8_U24 a b)
-          (emit asm (pack-u8-u24 a b)))
-         ((U8_L24 a label)
-          (record-label-reference asm label)
-          (emit asm a))
-         ((U32 a)
+         ((C32 a)
           (emit asm a))
          ((I32 imm)
-          (let ((val (object-address imm)))
-            (unless (zero? (ash val -32))
-              (error "FIXME: enable truncation of negative fixnums when cross-compiling"))
+          (let ((val (immediate-bits asm imm)))
             (emit asm val)))
          ((A32 imm)
           (unless (= (asm-word-size asm) 8)
             (error "make-long-immediate unavailable for this target"))
-          (emit asm (ash (object-address imm) -32))
-          (emit asm (logand (object-address imm) (1- (ash 1 32)))))
+          (let ((bits (immediate-bits asm imm)))
+            (emit asm (ash bits -32))
+            (emit asm (logand bits (1- (ash 1 32))))))
+         ((AF32 f64)
+          (let ((u64 (u64vector-ref (f64vector f64) 0)))
+            (emit asm (ash u64 -32))
+            (emit asm (logand u64 (1- (ash 1 32))))))
+         ((AU32 u64)
+          (emit asm (ash u64 -32))
+          (emit asm (logand u64 (1- (ash 1 32)))))
+         ((AS32 s64)
+          (let ((u64 (u64vector-ref (s64vector s64) 0)))
+            (emit asm (ash u64 -32))
+            (emit asm (logand u64 (1- (ash 1 32))))))
          ((B32))
+         ((BU32))
+         ((BS32))
+         ((BF32))
          ((N32 label)
           (record-far-label-reference asm label)
           (emit asm 0))
-         ((S32 label)
+         ((R32 label)
           (record-far-label-reference asm label)
           (emit asm 0))
          ((L32 label)
@@ -556,40 +617,269 @@ later by the linker."
           (emit asm 0))
          ((LO32 label offset)
           (record-far-label-reference asm label
-                                      (* offset (/ (asm-word-size asm) 4)))
+                                      (* offset (asm-word-size asm)))
           (emit asm 0))
-         ((X8_U24 a)
-          (emit asm (pack-u8-u24 0 a)))
-         ((X8_L24 label)
-          (record-label-reference asm label)
-          (emit asm 0))
+         ((C8_C24 a b)
+          (emit asm (pack-u8-u24 a b)))
          ((B1_X7_L24 a label)
           (record-label-reference asm label)
           (emit asm (pack-u1-u7-u24 (if a 1 0) 0 0)))
-         ((B1_U7_L24 a b label)
+         ((B1_C7_L24 a b label)
           (record-label-reference asm label)
           (emit asm (pack-u1-u7-u24 (if a 1 0) b 0)))
          ((B1_X31 a)
           (emit asm (pack-u1-u7-u24 (if a 1 0) 0 0)))
-         ((B1_X7_U24 a b)
-          (emit asm (pack-u1-u7-u24 (if a 1 0) 0 b)))))
+         ((B1_X7_S24 a b)
+          (emit asm (pack-u1-u7-u24 (if a 1 0) 0 b)))
+         ((B1_X7_F24 a b)
+          (emit asm (pack-u1-u7-u24 (if a 1 0) 0 b)))
+         ((B1_X7_C24 a b)
+          (emit asm (pack-u1-u7-u24 (if a 1 0) 0 b)))
+         ((X8_S24 a)
+          (emit asm (pack-u8-u24 0 a)))
+         ((X8_F24 a)
+          (emit asm (pack-u8-u24 0 a)))
+         ((X8_C24 a)
+          (emit asm (pack-u8-u24 0 a)))
+         ((X8_L24 label)
+          (record-label-reference asm label)
+          (emit asm 0))))
 
       (syntax-case x ()
-        ((_ name opcode word0 word* ...)
+        ((_ word0 word* ...)
          (with-syntax ((((formal0 ...)
                          code0 ...)
-                        (pack-first-word #'asm
-                                         (syntax->datum #'opcode)
+                        (pack-first-word #'asm #'opcode
                                          (syntax->datum #'word0)))
                        ((((formal* ...)
                           code* ...) ...)
                         (map (lambda (word) (pack-tail-word #'asm word))
                              (syntax->datum #'(word* ...)))))
-           #'(lambda (asm formal0 ... formal* ... ...)
-               (unless (asm? asm) (error "not an asm"))
+           ;; The opcode is the last argument, so that assemblers don't
+           ;; have to shuffle their arguments before tail-calling an
+           ;; encoder.
+           #'(lambda (asm formal0 ... formal* ... ... opcode)
+               (let lp ()
+                 (let ((words (length '(word0 word* ...))))
+                   (unless (<= (+ (asm-pos asm) (* 4 words))
+                               (bytevector-length (asm-buf asm)))
+                     (grow-buffer! asm)
+                     (lp))))
                code0 ...
                code* ... ...
-               (reset-asm-start! asm))))))))
+               (reset-asm-start! asm)))))))
+
+  (define (encoder-name operands)
+    (let lp ((operands operands) (out #'encode))
+      (syntax-case operands ()
+        (() out)
+        ((operand . operands)
+         (lp #'operands
+             (id-append #'operand (id-append out out #'-) #'operand))))))
+
+  (define-syntax define-encoder
+    (lambda (x)
+      (syntax-case x ()
+        ((_ operand ...)
+         (with-syntax ((encode (encoder-name #'(operand ...))))
+           #'(define encode (encoder operand ...)))))))
+
+  (define-syntax visit-instruction-kinds
+    (lambda (x)
+      (syntax-case x ()
+        ((visit-instruction-kinds macro arg ...)
+         (with-syntax (((operands ...)
+                        (delete-duplicates
+                         (map (match-lambda
+                                ((name opcode kind . operands)
+                                 (datum->syntax #'macro operands)))
+                              (instruction-list)))))
+           #'(begin
+               (macro arg ... . operands)
+               ...)))))))
+
+(visit-instruction-kinds define-encoder)
+
+;; In Guile's VM, locals are usually addressed via the stack pointer
+;; (SP).  There can be up to 2^24 slots for local variables in a
+;; frame.  Some instructions encode their operands using a restricted
+;; subset of the full 24-bit local address space, in order to make the
+;; bytecode more dense in the usual case that a function needs few
+;; local slots.  To allow these instructions to be used when there are
+;; many local slots, we can temporarily push the values on the stack,
+;; operate on them there, and then store back any result as we pop the
+;; SP to its original position.
+;;
+;; We implement this shuffling via wrapper encoders that have the same
+;; arity as the encoder they wrap, e.g. encode-X8_S12_S12/shuffle that
+;; wraps encode-X8_S12_S12.  We make the emit-cons public interface
+;; use the shuffling encoder.  That way we solve the problem fully and
+;; in just one place.
+
+(define (encode-X8_S12_S12!/shuffle asm a b opcode)
+  (cond
+   ((< (logior a b) (ash 1 12))
+    (encode-X8_S12_S12 asm a b opcode))
+   (else
+    (emit-push asm a)
+    (emit-push asm (1+ b))
+    (encode-X8_S12_S12 asm 1 0 opcode)
+    (emit-drop asm 2))))
+(define (encode-X8_S12_S12<-/shuffle asm dst a opcode)
+  (cond
+   ((< (logior dst a) (ash 1 12))
+    (encode-X8_S12_S12 asm dst a opcode))
+   (else
+    (emit-push asm a)
+    (encode-X8_S12_S12 asm 0 0 opcode)
+    (emit-pop asm dst))))
+(define (encode-X8_S12_S12-X8_C24!/shuffle asm a b c opcode)
+  (cond
+   ((< (logior a b) (ash 1 12))
+    (encode-X8_S12_S12-X8_C24 asm a b c opcode))
+   (else
+    (emit-push asm a)
+    (emit-push asm (1+ b))
+    (encode-X8_S12_S12-X8_C24 asm 1 0 c opcode)
+    (emit-drop asm 2))))
+(define (encode-X8_S12_S12-X8_C24<-/shuffle asm dst a const opcode)
+  (cond
+   ((< (logior dst a) (ash 1 12))
+    (encode-X8_S12_S12-X8_C24 asm dst a const opcode))
+   (else
+    (emit-push asm a)
+    (encode-X8_S12_S12-X8_C24 asm 0 0 const opcode)
+    (emit-pop asm dst))))
+(define (encode-X8_S12_C12<-/shuffle asm dst const opcode)
+  (cond
+   ((< dst (ash 1 12))
+    (encode-X8_S12_C12 asm dst const opcode))
+   (else
+    ;; Push garbage value to make space for dst.
+    (emit-push asm dst)
+    (encode-X8_S12_C12 asm 0 const opcode)
+    (emit-pop asm dst))))
+(define (encode-X8_S8_I16<-/shuffle asm dst imm opcode)
+  (cond
+   ((< dst (ash 1 8))
+    (encode-X8_S8_I16 asm dst imm opcode))
+   (else
+    ;; Push garbage value to make space for dst.
+    (emit-push asm dst)
+    (encode-X8_S8_I16 asm 0 imm opcode)
+    (emit-pop asm dst))))
+(define (encode-X8_S8_S8_S8!/shuffle asm a b c opcode)
+  (cond
+   ((< (logior a b c) (ash 1 8))
+    (encode-X8_S8_S8_S8 asm a b c opcode))
+   (else
+    (emit-push asm a)
+    (emit-push asm (+ b 1))
+    (emit-push asm (+ c 2))
+    (encode-X8_S8_S8_S8 asm 2 1 0 opcode)
+    (emit-drop asm 3))))
+(define (encode-X8_S8_S8_S8<-/shuffle asm dst a b opcode)
+  (cond
+   ((< (logior dst a b) (ash 1 8))
+    (encode-X8_S8_S8_S8 asm dst a b opcode))
+   (else
+    (emit-push asm a)
+    (emit-push asm (1+ b))
+    (encode-X8_S8_S8_S8 asm 1 1 0 opcode)
+    (emit-drop asm 1)
+    (emit-pop asm dst))))
+(define (encode-X8_S8_S8_C8<-/shuffle asm dst a const opcode)
+  (cond
+   ((< (logior dst a) (ash 1 8))
+    (encode-X8_S8_S8_C8 asm dst a const opcode))
+   (else
+    (emit-push asm a)
+    (encode-X8_S8_S8_C8 asm 0 0 const opcode)
+    (emit-pop asm dst))))
+(define (encode-X8_S8_C8_S8!/shuffle asm a const b opcode)
+  (cond
+   ((< (logior a b) (ash 1 8))
+    (encode-X8_S8_C8_S8 asm a const b opcode))
+   (else
+    (emit-push asm a)
+    (emit-push asm (1+ b))
+    (encode-X8_S8_C8_S8 asm 1 const 0 opcode)
+    (emit-drop asm 2))))
+(define (encode-X8_S8_C8_S8<-/shuffle asm dst const a opcode)
+  (cond
+   ((< (logior dst a) (ash 1 8))
+    (encode-X8_S8_C8_S8 asm dst const a opcode))
+   (else
+    (emit-push asm a)
+    (encode-X8_S8_C8_S8 asm 0 const 0 opcode)
+    (emit-pop asm dst))))
+
+(eval-when (expand)
+  (define (id-append ctx a b)
+    (datum->syntax ctx (symbol-append (syntax->datum a) (syntax->datum b))))
+
+  (define (shuffling-encoder-name kind operands)
+    (match (cons (syntax->datum kind) (syntax->datum operands))
+      (('! 'X8_S12_S12)          #'encode-X8_S12_S12!/shuffle)
+      (('<- 'X8_S12_S12)         #'encode-X8_S12_S12<-/shuffle)
+      (('! 'X8_S12_S12 'X8_C24)  #'encode-X8_S12_S12-X8_C24!/shuffle)
+      (('<- 'X8_S12_S12 'X8_C24) #'encode-X8_S12_S12-X8_C24<-/shuffle)
+      (('<- 'X8_S12_C12)         #'encode-X8_S12_C12<-/shuffle)
+      (('<- 'X8_S8_I16)          #'encode-X8_S8_I16<-/shuffle)
+      (('! 'X8_S8_S8_S8)         #'encode-X8_S8_S8_S8!/shuffle)
+      (('<- 'X8_S8_S8_S8)        #'encode-X8_S8_S8_S8<-/shuffle)
+      (('<- 'X8_S8_S8_C8)        #'encode-X8_S8_S8_C8<-/shuffle)
+      (('! 'X8_S8_C8_S8)         #'encode-X8_S8_C8_S8!/shuffle)
+      (('<- 'X8_S8_C8_S8)        #'encode-X8_S8_C8_S8<-/shuffle)
+      (else (encoder-name operands))))
+
+  (define-syntax assembler
+    (lambda (x)
+      (define (word-args word)
+        (match word
+          ('C32 #'(a))
+          ('I32 #'(imm))
+          ('A32 #'(imm))
+          ('AF32 #'(f64))
+          ('AU32 #'(u64))
+          ('AS32 #'(s64))
+          ('B32 #'())
+          ('BU32 #'())
+          ('BS32 #'())
+          ('BF32 #'())
+          ('N32 #'(label))
+          ('R32 #'(label))
+          ('L32 #'(label))
+          ('LO32 #'(label offset))
+          ('C8_C24 #'(a b))
+          ('B1_X7_L24 #'(a label))
+          ('B1_C7_L24 #'(a b label))
+          ('B1_X31 #'(a))
+          ('B1_X7_S24 #'(a b))
+          ('B1_X7_F24 #'(a b))
+          ('B1_X7_C24 #'(a b))
+          ('X8_S24 #'(arg))
+          ('X8_F24 #'(arg))
+          ('X8_C24 #'(arg))
+          ('X8_L24 #'(label))
+          ('X8_S8_I16 #'(a imm))
+          ('X8_S12_S12 #'(a b))
+          ('X8_S12_C12 #'(a b))
+          ('X8_C12_C12 #'(a b))
+          ('X8_F12_F12 #'(a b))
+          ('X8_S8_S8_S8 #'(a b c))
+          ('X8_S8_S8_C8 #'(a b c))
+          ('X8_S8_C8_S8 #'(a b c))
+          ('X32 #'())))
+
+      (syntax-case x ()
+        ((_ name opcode kind word ...)
+         (with-syntax (((formal ...)
+                        (generate-temporaries
+                         (append-map word-args (syntax->datum #'(word ...)))))
+                       (encode (shuffling-encoder-name #'kind #'(word ...))))
+           #'(lambda (asm formal ...)
+               (encode asm formal ... opcode))))))))
 
 (define assemblers (make-hash-table))
 
@@ -600,7 +890,7 @@ later by the linker."
         ((_ name opcode kind arg ...)
          (with-syntax ((emit (id-append #'name #'emit- #'name)))
            #'(define emit
-               (let ((emit (assembler name opcode arg ...)))
+               (let ((emit (assembler name opcode kind arg ...)))
                  (hashq-set! assemblers 'name emit)
                  emit)))))))
 
@@ -617,163 +907,25 @@ later by the linker."
 
 (visit-opcodes define-assembler)
 
-(eval-when (expand)
-
-  ;; Some operands are encoded using a restricted subset of the full
-  ;; 24-bit local address space, in order to make the bytecode more
-  ;; dense in the usual case that there are few live locals.  Here we
-  ;; define wrapper emitters that shuffle out-of-range operands into and
-  ;; out of the reserved range of locals [233,255].  This range is
-  ;; sufficient because these restricted operands are only present in
-  ;; the first word of an instruction.  Since 8 bits is the smallest
-  ;; slot-addressing operand size, that means we can fit 3 operands in
-  ;; the 24 bits of payload of the first word (the lower 8 bits being
-  ;; taken by the opcode).
-  ;;
-  ;; The result are wrapper emitters with the same arity,
-  ;; e.g. emit-cons* that wraps emit-cons.  We expose these wrappers as
-  ;; the public interface for emitting `cons' instructions.  That way we
-  ;; solve the problem fully and in just one place.  The only manual
-  ;; care that need be taken is in the exports list at the top of the
-  ;; file -- to be sure that we export the wrapper and not the wrapped
-  ;; emitter.
-
-  (define (shuffling-assembler name kind word0 word*)
-    (define (analyze-first-word)
-      (define-syntax op-case
-        (syntax-rules ()
-          ((_ type ((%type %kind arg ...) values) clause ...)
-           (if (and (eq? type '%type) (eq? kind '%kind))
-               (with-syntax (((arg ...) (generate-temporaries #'(arg ...))))
-                 #'((arg ...) values))
-               (op-case type clause ...)))
-          ((_ type)
-           #f)))
-      (op-case
-       word0
-       ((U8_U8_I16 ! a imm)
-        (values (if (< a (ash 1 8))  a (begin (emit-mov* asm 253 a) 253))
-                imm))
-       ((U8_U8_I16 <- a imm)
-        (values (if (< a (ash 1 8))  a 253)
-                imm))
-       ((U8_U12_U12 ! a b)
-        (values (if (< a (ash 1 12)) a (begin (emit-mov* asm 253 a) 253))
-                (if (< b (ash 1 12)) b (begin (emit-mov* asm 254 b) 254))))
-       ((U8_U12_U12 <- a b)
-        (values (if (< a (ash 1 12)) a 253)
-                (if (< b (ash 1 12)) b (begin (emit-mov* asm 254 b) 254))))
-       ((U8_U8_U8_U8 ! a b c)
-        (values (if (< a (ash 1 8))  a (begin (emit-mov* asm 253 a) 253))
-                (if (< b (ash 1 8))  b (begin (emit-mov* asm 254 b) 254))
-                (if (< c (ash 1 8))  c (begin (emit-mov* asm 255 c) 255))))
-       ((U8_U8_U8_U8 <- a b c)
-        (values (if (< a (ash 1 8))  a 253)
-                (if (< b (ash 1 8))  b (begin (emit-mov* asm 254 b) 254))
-                (if (< c (ash 1 8))  c (begin (emit-mov* asm 255 c) 255))))))
-
-    (define (tail-formals type)
-      (define-syntax op-case
-        (syntax-rules ()
-          ((op-case type (%type arg ...) clause ...)
-           (if (eq? type '%type)
-               (generate-temporaries #'(arg ...))
-               (op-case type clause ...)))
-          ((op-case type)
-           (error "unmatched type" type))))
-      (op-case type
-               (U8_U24 a b)
-               (U8_L24 a label)
-               (U32 a)
-               (I32 imm)
-               (A32 imm)
-               (B32)
-               (N32 label)
-               (S32 label)
-               (L32 label)
-               (LO32 label offset)
-               (X8_U24 a)
-               (X8_L24 label)
-               (B1_X7_L24 a label)
-               (B1_U7_L24 a b label)
-               (B1_X31 a)
-               (B1_X7_U24 a b)))
-
-    (define (shuffle-up dst)
-      (define-syntax op-case
-        (syntax-rules ()
-          ((_ type ((%type ...) exp) clause ...)
-           (if (memq type '(%type ...))
-               #'exp
-               (op-case type clause ...)))
-          ((_ type)
-           (error "unexpected type" type))))
-      (with-syntax ((dst dst))
-        (op-case
-         word0
-         ((U8_U8_I16 U8_U8_U8_U8)
-          (unless (< dst (ash 1 8))
-            (emit-mov* asm dst 253)))
-         ((U8_U12_U12)
-          (unless (< dst (ash 1 12))
-            (emit-mov* asm dst 253))))))
-
-    (and=>
-     (analyze-first-word)
-     (lambda (formals+shuffle)
-       (with-syntax ((emit-name (id-append name #'emit- name))
-                     (((formal0 ...) shuffle) formals+shuffle)
-                     (((formal* ...) ...) (map tail-formals word*)))
-         (with-syntax (((shuffle-up-dst ...)
-                        (if (eq? kind '<-)
-                            (syntax-case #'(formal0 ...) ()
-                              ((dst . _)
-                               (list (shuffle-up #'dst))))
-                            '())))
-           #'(lambda (asm formal0 ... formal* ... ...)
-               (call-with-values (lambda () shuffle)
-                 (lambda (formal0 ...)
-                   (emit-name asm formal0 ... formal* ... ...)))
-               shuffle-up-dst ...))))))
-
-  (define-syntax define-shuffling-assembler
-    (lambda (stx)
-      (syntax-case stx ()
-        ((_ #:except (except ...) name opcode kind word0 word* ...)
-         (cond
-          ((or-map (lambda (op) (eq? (syntax->datum #'name) op))
-                   (map syntax->datum #'(except ...)))
-           #'(begin))
-          ((shuffling-assembler #'name (syntax->datum #'kind)
-                                (syntax->datum #'word0)
-                                (map syntax->datum #'(word* ...)))
-           => (lambda (proc)
-                (with-syntax ((emit (id-append #'name
-                                               (id-append #'name #'emit- #'name)
-                                               #'*))
-                              (proc proc))
-                  #'(define emit
-                      (let ((emit proc))
-                        (hashq-set! assemblers 'name emit)
-                        emit)))))
-          (else #'(begin))))))))
-
-(visit-opcodes define-shuffling-assembler #:except (receive mov))
-
-;; Mov and receive are two special cases that can work without wrappers.
-;; Indeed it is important that they do so.
+;; Shuffling is a general mechanism to get around address space
+;; limitations for SP-relative variable references.  FP-relative
+;; variables need special support.  Also, some instructions like `mov'
+;; have multiple variations with different addressing limits.
 
 (define (emit-mov* asm dst src)
   (if (and (< dst (ash 1 12)) (< src (ash 1 12)))
       (emit-mov asm dst src)
       (emit-long-mov asm dst src)))
 
+(define (emit-fmov* asm dst src)
+  (emit-long-fmov asm dst src))
+
 (define (emit-receive* asm dst proc nlocals)
   (if (and (< dst (ash 1 12)) (< proc (ash 1 12)))
       (emit-receive asm dst proc nlocals)
       (begin
         (emit-receive-values asm proc #t 1)
-        (emit-mov* asm dst (1+ proc))
+        (emit-fmov* asm dst (1+ proc))
         (emit-reset-frame asm nlocals))))
 
 (define (emit-text asm instructions)
@@ -802,9 +954,32 @@ lists.  This procedure can be called many times before calling
 ;;; to the table.
 ;;;
 
-(define-inline (immediate? x)
-  "Return @code{#t} if @var{x} is immediate, and @code{#f} otherwise."
-  (not (zero? (logand (object-address x) 6))))
+(define (immediate-bits asm x)
+  "Return the bit pattern to write into the buffer if @var{x} is
+immediate, and @code{#f} otherwise."
+  (define tc2-int 2)
+  (if (exact-integer? x)
+      ;; Object is an immediate if it is a fixnum on the target.
+      (call-with-values (lambda ()
+                          (case (asm-word-size asm)
+                            ((4) (values    (- #x20000000)
+                                            #x1fffffff))
+                            ((8) (values    (- #x2000000000000000)
+                                            #x1fffffffFFFFFFFF))
+                            (else (error "unexpected word size"))))
+        (lambda (fixnum-min fixnum-max)
+          (and (<= fixnum-min x fixnum-max)
+               (let ((fixnum-bits (if (negative? x)
+                                      (+ fixnum-max 1 (logand x fixnum-max))
+                                      x)))
+                 (logior (ash fixnum-bits 2) tc2-int)))))
+      ;; Otherwise, the object will be immediate on the target if and
+      ;; only if it is immediate on the host.  Except for integers,
+      ;; which we handle specially above, any immediate value is an
+      ;; immediate on both 32-bit and 64-bit targets.
+      (let ((bits (object-address x)))
+        (and (not (zero? (logand bits 6)))
+             bits))))
 
 (define-record-type <stringbuf>
   (make-stringbuf string)
@@ -835,13 +1010,16 @@ lists.  This procedure can be called many times before calling
 (define (simple-uniform-vector? obj)
   (and (array? obj)
        (symbol? (array-type obj))
-       (equal? (array-shape obj) (list (list 0 (1- (array-length obj)))))))
+       (match (array-shape obj)
+         (((0 n)) #t)
+         (else #f))))
 
 (define (statically-allocatable? x)
   "Return @code{#t} if a non-immediate constant can be allocated
 statically, and @code{#f} if it would need some kind of runtime
 allocation."
-  (or (pair? x) (string? x) (stringbuf? x) (static-procedure? x) (array? x)))
+  (or (pair? x) (string? x) (stringbuf? x) (static-procedure? x)
+      (array? x) (syntax? x)))
 
 (define (intern-constant asm obj)
   "Add an object to the constant table, and return a label that can be
@@ -869,11 +1047,17 @@ table, its existing label is used directly."
                 (append-reverse (field label (1+ i) (vector-ref obj i))
                                 inits))
             (reverse inits))))
+     ((syntax? obj)
+      (append (field label 1 (syntax-expression obj))
+              (field label 2 (syntax-wrap obj))
+              (field label 3 (syntax-module obj))))
      ((stringbuf? obj) '())
      ((static-procedure? obj)
       `((static-patch! ,label 1 ,(static-procedure-code obj))))
      ((cache-cell? obj) '())
      ((symbol? obj)
+      (unless (symbol-interned? obj)
+        (error "uninterned symbol cannot be saved to object file" obj))
       `((make-non-immediate 1 ,(recur (symbol->string obj)))
         (string->symbol 1 1)
         (static-set! 1 ,label 0)))
@@ -908,7 +1092,7 @@ table, its existing label is used directly."
      (else
       (error "don't know how to intern" obj))))
   (cond
-   ((immediate? obj) #f)
+   ((immediate-bits asm obj) #f)
    ((vhash-assoc obj (asm-constants asm)) => cdr)
    (else
     ;; Note that calling intern may mutate asm-constants and asm-inits.
@@ -921,7 +1105,7 @@ table, its existing label is used directly."
 (define (intern-non-immediate asm obj)
   "Intern a non-immediate into the constant table, and return its
 label."
-  (when (immediate? obj)
+  (when (immediate-bits asm obj)
     (error "expected a non-immediate" obj))
   (intern-constant asm obj))
 
@@ -959,15 +1143,15 @@ returned instead."
 
 (define-macro-assembler (load-constant asm dst obj)
   (cond
-   ((immediate? obj)
-    (let ((bits (object-address obj)))
-      (cond
-       ((and (< dst 256) (zero? (ash bits -16)))
-        (emit-make-short-immediate asm dst obj))
-       ((zero? (ash bits -32))
-        (emit-make-long-immediate asm dst obj))
-       (else
-        (emit-make-long-long-immediate asm dst obj)))))
+   ((immediate-bits asm obj)
+    => (lambda (bits)
+         (cond
+          ((and (< dst 256) (zero? (ash bits -16)))
+           (emit-make-short-immediate asm dst obj))
+          ((zero? (ash bits -32))
+           (emit-make-long-immediate asm dst obj))
+          (else
+           (emit-make-long-long-immediate asm dst obj)))))
    ((statically-allocatable? obj)
     (emit-make-non-immediate asm dst (intern-non-immediate asm obj)))
    (else
@@ -989,27 +1173,28 @@ returned instead."
 ;;
 ;; FIXME: Define all tc7 values in Scheme in one place, derived from
 ;; tags.h.
-(define-tc7-macro-assembler br-if-symbol 5)
-(define-tc7-macro-assembler br-if-variable 7)
-(define-tc7-macro-assembler br-if-vector 13)
+(define-tc7-macro-assembler br-if-symbol #x05)
+(define-tc7-macro-assembler br-if-variable #x07)
+(define-tc7-macro-assembler br-if-vector #x0d)
 ;(define-tc7-macro-assembler br-if-weak-vector 13)
-(define-tc7-macro-assembler br-if-string 21)
+(define-tc7-macro-assembler br-if-string #x15)
 ;(define-tc7-macro-assembler br-if-heap-number 23)
 ;(define-tc7-macro-assembler br-if-stringbuf 39)
-(define-tc7-macro-assembler br-if-bytevector 77)
+(define-tc7-macro-assembler br-if-bytevector #x4d)
 ;(define-tc7-macro-assembler br-if-pointer 31)
 ;(define-tc7-macro-assembler br-if-hashtable 29)
 ;(define-tc7-macro-assembler br-if-fluid 37)
 ;(define-tc7-macro-assembler br-if-dynamic-state 45)
 ;(define-tc7-macro-assembler br-if-frame 47)
-(define-tc7-macro-assembler br-if-keyword 53)
+(define-tc7-macro-assembler br-if-keyword #x35)
+;(define-tc7-macro-assembler br-if-syntax #x3d)
 ;(define-tc7-macro-assembler br-if-vm 55)
 ;(define-tc7-macro-assembler br-if-vm-cont 71)
 ;(define-tc7-macro-assembler br-if-rtl-program 69)
 ;(define-tc7-macro-assembler br-if-weak-set 85)
 ;(define-tc7-macro-assembler br-if-weak-table 87)
 ;(define-tc7-macro-assembler br-if-array 93)
-(define-tc7-macro-assembler br-if-bitvector 95)
+(define-tc7-macro-assembler br-if-bitvector #x5f)
 ;(define-tc7-macro-assembler br-if-port 125)
 ;(define-tc7-macro-assembler br-if-smob 127)
 
@@ -1063,19 +1248,6 @@ returned instead."
     (set-arity-definitions! arity (reverse (arity-definitions arity)))
     (set-arity-high-pc! arity (asm-start asm))))
 
-;; As noted above, we reserve locals 253 through 255 for shuffling large
-;; operands.  However the calling convention has all arguments passed in
-;; a contiguous block.  This helper, called after the clause has been
-;; chosen and the keyword/optional/rest arguments have been processed,
-;; shuffles up arguments from slot 253 and higher into their final
-;; allocations.
-;;
-(define (shuffle-up-args asm nargs)
-  (when (> nargs 253)
-    (let ((slot (1- nargs)))
-      (emit-mov asm (+ slot 3) slot)
-      (shuffle-up-args asm (1- nargs)))))
-
 (define-macro-assembler (standard-prelude asm nreq nlocals alternate)
   (cond
    (alternate
@@ -1085,8 +1257,7 @@ returned instead."
     (emit-assert-nargs-ee/locals asm nreq (- nlocals nreq)))
    (else
     (emit-assert-nargs-ee asm nreq)
-    (emit-alloc-frame asm nlocals)))
-  (shuffle-up-args asm nreq))
+    (emit-alloc-frame asm nlocals))))
 
 (define-macro-assembler (opt-prelude asm nreq nopt rest? nlocals alternate)
   (if alternate
@@ -1099,8 +1270,7 @@ returned instead."
     (emit-br-if-nargs-gt asm (+ nreq nopt) alternate))
    (else
     (emit-assert-nargs-le asm (+ nreq nopt))))
-  (emit-alloc-frame asm nlocals)
-  (shuffle-up-args asm (+ nreq nopt (if rest? 1 0))))
+  (emit-alloc-frame asm nlocals))
 
 (define-macro-assembler (kw-prelude asm nreq nopt rest? kw-indices
                                     allow-other-keys? nlocals alternate)
@@ -1121,8 +1291,7 @@ returned instead."
                       (+ nreq nopt)
                       ntotal
                       (intern-constant asm kw-indices))
-    (emit-alloc-frame asm nlocals)
-    (shuffle-up-args asm ntotal)))
+    (emit-alloc-frame asm nlocals)))
 
 (define-macro-assembler (label asm sym)
   (hashq-set! (asm-labels asm) sym (asm-start asm)))
@@ -1130,11 +1299,10 @@ returned instead."
 (define-macro-assembler (source asm source)
   (set-asm-sources! asm (acons (asm-start asm) source (asm-sources asm))))
 
-(define-macro-assembler (definition asm name slot)
+(define-macro-assembler (definition asm name slot representation)
   (let* ((arity (car (meta-arities (car (asm-meta asm)))))
-         (def (vector name
-                      slot
-                      (* (- (asm-start asm) (arity-low-pc arity)) 4))))
+         (def (vector name slot representation
+                      (- (asm-start asm) (arity-low-pc arity)))))
     (set-arity-definitions! arity (cons def (arity-definitions arity)))))
 
 (define-macro-assembler (cache-current-module! asm module scope)
@@ -1154,12 +1322,11 @@ returned instead."
          (cell-label (intern-cache-cell asm key sym)))
     (emit-module-box asm dst cell-label mod-name-label sym-label bound?)))
 
-(define-macro-assembler (dead-slot-map asm proc-slot dead-slot-map)
-  (unless (zero? dead-slot-map)
-    (set-asm-dead-slot-maps! asm
-                             (cons
-                              (cons* (asm-start asm) proc-slot dead-slot-map)
-                              (asm-dead-slot-maps asm)))))
+(define-macro-assembler (slot-map asm proc-slot slot-map)
+  (unless (zero? slot-map)
+    (set-asm-slot-maps! asm (cons
+                             (cons* (asm-start asm) proc-slot slot-map)
+                             (asm-slot-maps asm)))))
 
 
 
@@ -1191,13 +1358,15 @@ corresponding linker symbol for the start of the section."
 ;;; residualizes instructions to initialize constants at load time.
 ;;;
 
-(define (write-immediate asm buf pos x)
-  (let ((val (object-address x))
-        (endianness (asm-endianness asm)))
+(define (write-immediate asm buf pos bits)
+  (let ((endianness (asm-endianness asm)))
     (case (asm-word-size asm)
-      ((4) (bytevector-u32-set! buf pos val endianness))
-      ((8) (bytevector-u64-set! buf pos val endianness))
+      ((4) (bytevector-u32-set! buf pos bits endianness))
+      ((8) (bytevector-u64-set! buf pos bits endianness))
       (else (error "bad word size" asm)))))
+
+(define (write-placeholder asm buf pos)
+  (write-immediate asm buf pos (immediate-bits asm #f)))
 
 (define (emit-init-constants asm)
   "If there is writable data that needs initialization at runtime, emit
@@ -1210,8 +1379,8 @@ a procedure to do that and return its label.  Otherwise return
                       `((begin-program ,label ())
                         (assert-nargs-ee/locals 1 1)
                         ,@(reverse inits)
-                        (load-constant 1 ,*unspecified*)
-                        (return 1)
+                        (load-constant 0 ,*unspecified*)
+                        (return-values 2)
                         (end-program)))
            label))))
 
@@ -1223,19 +1392,27 @@ should be .data or .rodata), and return the resulting linker object.
     (+ address
        (modulo (- alignment (modulo address alignment)) alignment)))
 
-  (define tc7-vector 13)
-  (define stringbuf-shared-flag #x100)
+  (define tc7-vector #x0d)
+  (define vector-immutable-flag #x80)
+
+  (define tc7-string #x15)
+  (define string-read-only-flag #x200)
+
+  (define tc7-stringbuf #x27)
   (define stringbuf-wide-flag #x400)
-  (define tc7-stringbuf 39)
-  (define tc7-narrow-stringbuf
-    (+ tc7-stringbuf stringbuf-shared-flag))
-  (define tc7-wide-stringbuf
-    (+ tc7-stringbuf stringbuf-shared-flag stringbuf-wide-flag))
-  (define tc7-ro-string (+ 21 #x200))
-  (define tc7-program 69)
-  (define tc7-bytevector 77)
-  (define tc7-bitvector 95)
-  (define tc7-array 93)
+
+  (define tc7-syntax #x3d)
+
+  (define tc7-program #x45)
+
+  (define tc7-bytevector #x4d)
+  ;; This flag is intended to be left-shifted by 7 bits.
+  (define bytevector-immutable-flag #x200)
+
+  (define tc7-array #x5d)
+
+  (define tc7-bitvector #x5f)
+  (define bitvector-immutable-flag #x80)
 
   (let ((word-size (asm-word-size asm))
         (endianness (asm-endianness asm)))
@@ -1256,6 +1433,8 @@ should be .data or .rodata), and return the resulting linker object.
         (* 2 word-size))
        ((simple-vector? x)
         (* (1+ (vector-length x)) word-size))
+       ((syntax? x)
+        (* 4 word-size))
        ((simple-uniform-vector? x)
         (* 4 word-size))
        ((uniform-vector-backing-store? x)
@@ -1266,17 +1445,22 @@ should be .data or .rodata), and return the resulting linker object.
         word-size)))
 
     (define (write-constant-reference buf pos x)
-      ;; The asm-inits will fix up any reference to a non-immediate.
-      (write-immediate asm buf pos (if (immediate? x) x #f)))
+      (let ((bits (immediate-bits asm x)))
+        (if bits
+            (write-immediate asm buf pos bits)
+            ;; The asm-inits will fix up any reference to a
+            ;; non-immediate.
+            (write-placeholder asm buf pos))))
 
     (define (write buf pos obj)
       (cond
        ((stringbuf? obj)
         (let* ((x (stringbuf-string obj))
                (len (string-length x))
-               (tag (if (= (string-bytes-per-char x) 1)
-                        tc7-narrow-stringbuf
-                        tc7-wide-stringbuf)))
+               (tag (logior tc7-stringbuf
+                            (if (= (string-bytes-per-char x) 1)
+                                0
+                                stringbuf-wide-flag))))
           (case word-size
             ((4)
              (bytevector-u32-set! buf pos tag endianness)
@@ -1315,19 +1499,19 @@ should be .data or .rodata), and return the resulting linker object.
           (else (error "bad word size"))))
 
        ((cache-cell? obj)
-        (write-immediate asm buf pos #f))
+        (write-placeholder asm buf pos))
 
        ((string? obj)
-        (let ((tag (logior tc7-ro-string (ash (string-length obj) 8)))) ; FIXME: unused?
+        (let ((tag (logior tc7-string string-read-only-flag)))
           (case word-size
             ((4)
-             (bytevector-u32-set! buf pos tc7-ro-string endianness)
-             (write-immediate asm buf (+ pos 4) #f) ; stringbuf
+             (bytevector-u32-set! buf pos tag endianness)
+             (write-placeholder asm buf (+ pos 4)) ; stringbuf
              (bytevector-u32-set! buf (+ pos 8) 0 endianness)
              (bytevector-u32-set! buf (+ pos 12) (string-length obj) endianness))
             ((8)
-             (bytevector-u64-set! buf pos tc7-ro-string endianness)
-             (write-immediate asm buf (+ pos 8) #f) ; stringbuf
+             (bytevector-u64-set! buf pos tag endianness)
+             (write-placeholder asm buf (+ pos 8)) ; stringbuf
              (bytevector-u64-set! buf (+ pos 16) 0 endianness)
              (bytevector-u64-set! buf (+ pos 24) (string-length obj) endianness))
             (else (error "bad word size")))))
@@ -1338,7 +1522,7 @@ should be .data or .rodata), and return the resulting linker object.
 
        ((simple-vector? obj)
         (let* ((len (vector-length obj))
-               (tag (logior tc7-vector (ash len 8))))
+               (tag (logior tc7-vector vector-immutable-flag (ash len 8))))
           (case word-size
             ((4) (bytevector-u32-set! buf pos tag endianness))
             ((8) (bytevector-u64-set! buf pos tag endianness))
@@ -1351,19 +1535,36 @@ should be .data or .rodata), and return the resulting linker object.
                 (lp (1+ i)))))))
 
        ((symbol? obj)
-        (write-immediate asm buf pos #f))
+        (write-placeholder asm buf pos))
 
        ((keyword? obj)
-        (write-immediate asm buf pos #f))
+        (write-placeholder asm buf pos))
+
+       ((syntax? obj)
+        (case word-size
+          ((4) (bytevector-u32-set! buf pos tc7-syntax endianness))
+          ((8) (bytevector-u64-set! buf pos tc7-syntax endianness))
+          (else (error "bad word size")))
+        (write-constant-reference buf (+ pos (* 1 word-size))
+                                  (syntax-expression obj))
+        (write-constant-reference buf (+ pos (* 2 word-size))
+                                  (syntax-wrap obj))
+        (write-constant-reference buf (+ pos (* 3 word-size))
+                                  (syntax-module obj)))
 
        ((number? obj)
-        (write-immediate asm buf pos #f))
+        (write-placeholder asm buf pos))
 
        ((simple-uniform-vector? obj)
         (let ((tag (if (bitvector? obj)
-                       tc7-bitvector
-                       (let ((type-code (array-type-code obj)))
-                         (logior tc7-bytevector (ash type-code 7))))))
+                       (logior tc7-bitvector
+                               bitvector-immutable-flag)
+                       (logior tc7-bytevector
+                               ;; Bytevector immutable flag also shifted
+                               ;; left.
+                               (ash (logior bytevector-immutable-flag
+                                            (array-type-code obj))
+                                    7)))))
           (case word-size
             ((4)
              (bytevector-u32-set! buf pos tag endianness)
@@ -1373,7 +1574,7 @@ should be .data or .rodata), and return the resulting linker object.
                                       (bytevector-length obj))
                                   endianness)                 ; length
              (bytevector-u32-set! buf (+ pos 8) 0 endianness) ; pointer
-             (write-immediate asm buf (+ pos 12) #f))         ; owner
+             (write-placeholder asm buf (+ pos 12)))          ; owner
             ((8)
              (bytevector-u64-set! buf pos tag endianness)
              (bytevector-u64-set! buf (+ pos 8)
@@ -1382,16 +1583,19 @@ should be .data or .rodata), and return the resulting linker object.
                                       (bytevector-length obj))
                                   endianness)                  ; length
              (bytevector-u64-set! buf (+ pos 16) 0 endianness) ; pointer
-             (write-immediate asm buf (+ pos 24) #f))          ; owner
+             (write-placeholder asm buf (+ pos 24)))           ; owner
             (else (error "bad word size")))))
 
        ((uniform-vector-backing-store? obj)
         (let ((bv (uniform-vector-backing-store-bytes obj)))
           (bytevector-copy! bv 0 buf pos (bytevector-length bv))
-          (unless (or (= 1 (uniform-vector-backing-store-element-size obj))
-                      (eq? endianness (native-endianness)))
-            ;; Need to swap units of element-size bytes
-            (error "FIXME: Implement byte order swap"))))
+          (unless (eq? endianness (native-endianness))
+            (case (uniform-vector-backing-store-element-size obj)
+              ((1) #f) ;; Nothing to do.
+              ((2) (byte-swap/2! buf pos (+ pos (bytevector-length bv))))
+              ((4) (byte-swap/4! buf pos (+ pos (bytevector-length bv))))
+              ((8) (byte-swap/8! buf pos (+ pos (bytevector-length bv))))
+              (else (error "FIXME: Implement byte order swap"))))))
 
        ((array? obj)
         (let-values
@@ -1403,7 +1607,7 @@ should be .data or .rodata), and return the resulting linker object.
                 ((8) (values bytevector-u64-set! bytevector-s64-set!))
                 (else (error "bad word size")))))
           (bv-set! buf pos tag endianness)
-          (write-immediate asm buf (+ pos word-size) #f) ; root vector (fixed later)
+          (write-placeholder asm buf (+ pos word-size))      ; root vector (fixed later)
           (bv-set! buf (+ pos (* word-size 2)) 0 endianness) ; base
           (let lp ((pos (+ pos (* word-size 3)))
                    (bounds (array-shape obj))
@@ -1449,11 +1653,11 @@ these may be @code{#f}."
     (cond
      ((stringbuf? x) #t)
      ((pair? x)
-      (and (immediate? (car x)) (immediate? (cdr x))))
+      (and (immediate-bits asm (car x)) (immediate-bits asm (cdr x))))
      ((simple-vector? x)
       (let lp ((i 0))
         (or (= i (vector-length x))
-            (and (immediate? (vector-ref x i))
+            (and (immediate-bits asm (vector-ref x i))
                  (lp (1+ i))))))
      ((uniform-vector-backing-store? x) #t)
      (else #f)))
@@ -1484,23 +1688,29 @@ relocations for references to symbols defined outside the text section."
   (fold
    (lambda (reloc tail)
      (match reloc
-       ((type label base word)
+       ((type label base offset)
         (let ((abs (hashq-ref labels label))
-              (dst (+ base word)))
+              (dst (+ base offset)))
           (case type
             ((s32)
              (if abs
                  (let ((rel (- abs base)))
-                   (s32-set! buf dst rel)
+                   (unless (zero? (logand rel #x3))
+                     (error "reloc not in 32-bit units!"))
+                   (bytevector-s32-native-set! buf dst (ash rel -2))
                    tail)
-                 (cons (make-linker-reloc 'rel32/4 (* dst 4) word label)
+                 (cons (make-linker-reloc 'rel32/4 dst offset label)
                        tail)))
             ((x8-s24)
              (unless abs
                (error "unbound near relocation" reloc))
              (let ((rel (- abs base))
-                   (u32 (u32-ref buf dst)))
-               (u32-set! buf dst (pack-u8-s24 (logand u32 #xff) rel))
+                   (u32 (bytevector-u32-native-ref buf dst)))
+               (unless (zero? (logand rel #x3))
+                 (error "reloc not in 32-bit units!"))
+               (bytevector-u32-native-set! buf dst
+                                           (pack-u8-s24 (logand u32 #xff)
+                                                        (ash rel -2)))
                tail))
             (else (error "bad relocation kind" reloc)))))))
    '()
@@ -1510,41 +1720,21 @@ relocations for references to symbols defined outside the text section."
   "Define linker symbols for the label-offset map in @var{labels}.
 The offsets are expected to be expressed in words."
   (hash-map->list (lambda (label loc)
-                    (make-linker-symbol label (* loc 4)))
+                    (make-linker-symbol label loc))
                   labels))
-
-(define (swap-bytes! buf)
-  "Patch up the text buffer @var{buf}, swapping the endianness of each
-32-bit unit."
-  (unless (zero? (modulo (bytevector-length buf) 4))
-    (error "unexpected length"))
-  (let ((byte-len (bytevector-length buf)))
-    (let lp ((pos 0))
-      (unless (= pos byte-len)
-        (bytevector-u32-set!
-         buf pos
-         (bytevector-u32-ref buf pos (endianness big))
-         (endianness little))
-        (lp (+ pos 4))))))
 
 (define (link-text-object asm)
   "Link the .rtl-text section, swapping the endianness of the bytes if
 needed."
-  (let ((buf (make-u32vector (asm-pos asm))))
-    (let lp ((pos 0) (prev (reverse (asm-prev asm))))
-      (if (null? prev)
-          (let ((byte-size (* (asm-idx asm) 4)))
-            (bytevector-copy! (asm-cur asm) 0 buf pos byte-size)
-            (unless (eq? (asm-endianness asm) (native-endianness))
-              (swap-bytes! buf))
-            (make-object asm '.rtl-text
-                         buf
-                         (process-relocs buf (asm-relocs asm)
-                                         (asm-labels asm))
-                         (process-labels (asm-labels asm))))
-          (let ((len (* *block-size* 4)))
-            (bytevector-copy! (car prev) 0 buf pos len)
-            (lp (+ pos len) (cdr prev)))))))
+  (let ((buf (make-bytevector (asm-pos asm))))
+    (bytevector-copy! (asm-buf asm) 0 buf 0 (bytevector-length buf))
+    (unless (eq? (asm-endianness asm) (native-endianness))
+      (byte-swap/4! buf))
+    (make-object asm '.rtl-text
+                 buf
+                 (process-relocs buf (asm-relocs asm)
+                                 (asm-labels asm))
+                 (process-labels (asm-labels asm)))))
 
 
 
@@ -1572,7 +1762,7 @@ needed."
 
 (define (link-frame-maps asm)
   (define (map-byte-length proc-slot)
-    (ceiling-quotient (- proc-slot 2) 8))
+    (ceiling-quotient (* 2 (- proc-slot 2)) 8))
   (define (make-frame-maps maps count map-len)
     (let* ((endianness (asm-endianness asm))
            (header-pos frame-maps-prefix-len)
@@ -1586,7 +1776,7 @@ needed."
                         (list (make-linker-reloc 'abs32/1 0 0 '.rtl-text))
                         '() #:type SHT_PROGBITS #:flags SHF_ALLOC))
           (((pos proc-slot . map) . maps)
-           (bytevector-u32-set! bv header-pos (* pos 4) endianness)
+           (bytevector-u32-set! bv header-pos pos endianness)
            (bytevector-u32-set! bv (+ header-pos 4) map-pos endianness)
            (let write-bytes ((map-pos map-pos)
                              (map map)
@@ -1597,7 +1787,7 @@ needed."
                    (bytevector-u8-set! bv map-pos (logand map #xff))
                    (write-bytes (1+ map-pos) (ash map -8)
                                 (1- byte-length))))))))))
-  (match (asm-dead-slot-maps asm)
+  (match (asm-slot-maps asm)
     (() #f)
     (in
      (let lp ((in in) (out '()) (count 0) (map-len 0))
@@ -1617,7 +1807,7 @@ needed."
 
 ;; FIXME: Define these somewhere central, shared with C.
 (define *bytecode-major-version* #x0202)
-(define *bytecode-minor-version* 6)
+(define *bytecode-minor-version* (char->integer #\A))
 
 (define (link-dynamic-section asm text rw rw-init frame-maps)
   "Link the dynamic section for an ELF image with bytecode @var{text},
@@ -1693,9 +1883,9 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
                             #:name name
                             ;; Symbol value and size are measured in
                             ;; bytes, not u32s.
-                            #:value (* 4 (meta-low-pc meta))
-                            #:size (* 4 (- (meta-high-pc meta)
-                                           (meta-low-pc meta)))
+                            #:value (meta-low-pc meta)
+                            #:size (- (meta-high-pc meta)
+                                      (meta-low-pc meta))
                             #:type STT_FUNC
                             #:visibility STV_HIDDEN
                             #:shndx (elf-section-index text-section)))))
@@ -1810,8 +2000,8 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
   (define (write-header pos low-pc high-pc offset flags nreq nopt nlocals)
     (unless (<= (+ nreq nopt) nlocals)
       (error "forgot to emit definition instructions?"))
-    (bytevector-u32-set! headers pos (* low-pc 4) (asm-endianness asm))
-    (bytevector-u32-set! headers (+ pos 4) (* high-pc 4) (asm-endianness asm))
+    (bytevector-u32-set! headers pos low-pc (asm-endianness asm))
+    (bytevector-u32-set! headers (+ pos 4) high-pc (asm-endianness asm))
     (bytevector-u32-set! headers (+ pos 8) offset (asm-endianness asm))
     (bytevector-u32-set! headers (+ pos 12) flags (asm-endianness asm))
     (bytevector-u32-set! headers (+ pos 16) nreq (asm-endianness asm))
@@ -1845,7 +2035,7 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
       (let lp ((definitions (arity-definitions arity)))
         (match definitions
           (() relocs)
-          ((#(name slot def) . definitions)
+          ((#(name slot representation def) . definitions)
            (let ((sym (if (symbol? name)
                           (string-table-intern! strtab (symbol->string name))
                           0)))
@@ -1855,9 +2045,15 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
       (let lp ((definitions (arity-definitions arity)))
         (match definitions
           (() relocs)
-          ((#(name slot def) . definitions)
+          ((#(name slot representation def) . definitions)
            (put-uleb128 names-port def)
-           (put-uleb128 names-port slot)
+           (let ((tag (case representation
+                        ((scm) 0)
+                        ((f64) 1)
+                        ((u64) 2)
+                        ((s64) 3)
+                        (else (error "what!" representation)))))
+             (put-uleb128 names-port (logior (ash slot 2) tag)))
            (lp definitions))))))
   (let lp ((metas metas) (pos arities-prefix-len) (relocs '()))
     (match metas
@@ -1952,7 +2148,7 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
                     (and tail
                          (not (find-tail is-documentation? (cdr tail)))
                          (string? (cdar tail))
-                         (cons (* 4 (meta-low-pc meta)) (cdar tail)))))
+                         (cons (meta-low-pc meta) (cdar tail)))))
                 (reverse (asm-meta asm))))
   (let* ((endianness (asm-endianness asm))
          (docstrings (find-docstrings))
@@ -2018,7 +2214,7 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
     (filter-map (lambda (meta)
                   (let ((props (props-without-name-or-docstring meta)))
                     (and (pair? props)
-                         (cons (* 4 (meta-low-pc meta)) props))))
+                         (cons (meta-low-pc meta) props))))
                 (reverse (asm-meta asm))))
   (let* ((endianness (asm-endianness asm))
          (procprops (find-procprops))
@@ -2079,14 +2275,14 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
             (else
              '()))
          (low-pc ,(meta-label meta))
-         (high-pc ,(* 4 (- (meta-high-pc meta) (meta-low-pc meta)))))))
+         (high-pc ,(- (meta-high-pc meta) (meta-low-pc meta))))))
 
   (define (make-compile-unit-die asm)
     `(compile-unit
       (@ (producer ,(string-append "Guile " (version)))
          (language ,(asm-language asm))
          (low-pc .rtl-text)
-         (high-pc ,(* 4 (asm-pos asm)))
+         (high-pc ,(asm-pos asm))
          (stmt-list 0))
       ,@(map meta->subprogram-die (reverse (asm-meta asm)))))
 
@@ -2134,6 +2330,7 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
       ;; from 10 to 255, so 246 values.
       (define base -4)
       (define range 15)
+      (define min-inc 4) ; Minimum PC increment.
 
       (let lp ((sources (asm-sources asm)) (out '()))
         (match sources
@@ -2159,7 +2356,7 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
            (put-u32 line-port 0) ; Length; will patch later.
            (put-u16 line-port 2) ; DWARF 2 format.
            (put-u32 line-port 0) ; Prologue length; will patch later.
-           (put-u8 line-port 4) ; Minimum instruction length: 4 bytes.
+           (put-u8 line-port min-inc) ; Minimum instruction length: 4 bytes.
            (put-u8 line-port 1) ; Default is-stmt: true.
 
            (put-s8 line-port base) ; Line base.  See the DWARF standard.
@@ -2231,12 +2428,14 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
                   (add-reloc! 'abs64/1)
                   (put-u64 line-port 0))))
              (define (end-sequence pc)
-               (let ((pc-inc (- (asm-pos asm) pc)))
+               (let ((pc-inc (/ (- (asm-pos asm) pc) min-inc)))
                  (put-u8 line-port 2)   ; advance-pc
                  (put-uleb128 line-port pc-inc))
                (extended-op 1 0))
              (define (advance-pc pc-inc line-inc)
-               (let ((spec (+ (- line-inc base) (* pc-inc range) 10)))
+               (let ((spec (+ (- line-inc base)
+                              (* (/ pc-inc min-inc) range)
+                              10)))
                  (cond
                   ((or (< line-inc base) (>= line-inc (+ base range)))
                    (advance-line line-inc)
@@ -2245,11 +2444,11 @@ procedure with label @var{rw-init}.  @var{rw-init} may be false.  If
                    (put-u8 line-port spec))
                   ((< spec 500)
                    (put-u8 line-port 8) ; const-advance-pc
-                   (advance-pc (- pc-inc (floor/ (- 255 10) range))
+                   (advance-pc (- pc-inc (* (floor/ (- 255 10) range) min-inc))
                                line-inc))
                   (else
                    (put-u8 line-port 2) ; advance-pc
-                   (put-uleb128 line-port pc-inc)
+                   (put-uleb128 line-port (/ pc-inc min-inc))
                    (advance-pc 0 line-inc)))))
              (define (advance-line inc)
                (put-u8 line-port 3)

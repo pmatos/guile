@@ -1,7 +1,7 @@
 ;;;; i18n.test --- Exercise the i18n API.  -*- coding: utf-8; mode: scheme; -*-
 ;;;;
 ;;;; Copyright (C) 2006, 2007, 2009, 2010, 2011, 2012,
-;;;;   2013, 2014 Free Software Foundation, Inc.
+;;;;   2013, 2014, 2015, 2016, 2017 Free Software Foundation, Inc.
 ;;;; Ludovic Courtès
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
@@ -87,7 +87,7 @@
 (define %french-locale-name
   (if mingw?
       "fra_FRA.850"
-      "fr_FR.ISO-8859-1"))
+      "fr_FR.iso88591"))         ;"iso88591" is the "normalized codeset"
 
 ;; What we really want for the following locales is that they be Unicode
 ;; capable, not necessarily UTF-8, which Windows does not provide.
@@ -95,34 +95,34 @@
 (define %french-utf8-locale-name
   (if mingw?
       "fra_FRA.1252"
-      "fr_FR.UTF-8"))
+      "fr_FR.utf8"))                 ;"utf8" is the "normalized codeset"
 
 (define %turkish-utf8-locale-name
   (if mingw?
       "tur_TRK.1254"
-      "tr_TR.UTF-8"))
+      "tr_TR.utf8"))
 
 (define %german-utf8-locale-name
   (if mingw?
       "deu_DEU.1252"
-      "de_DE.UTF-8"))
+      "de_DE.utf8"))
 
 (define %greek-utf8-locale-name
   (if mingw?
       "grc_ELL.1253"
-      "el_GR.UTF-8"))
+      "el_GR.utf8"))
 
 (define %american-english-locale-name
-  "en_US")
+  "en_US.utf8")
 
 (define %french-locale
   (false-if-exception
-   (make-locale (list LC_CTYPE LC_COLLATE LC_NUMERIC LC_TIME)
+   (make-locale (list LC_CTYPE LC_COLLATE LC_NUMERIC LC_TIME LC_MONETARY)
                 %french-locale-name)))
 
 (define %french-utf8-locale
   (false-if-exception
-   (make-locale (list LC_CTYPE LC_COLLATE LC_NUMERIC LC_TIME)
+   (make-locale (list LC_CTYPE LC_COLLATE LC_NUMERIC LC_TIME LC_MONETARY)
                 %french-utf8-locale-name)))
 
 (define %german-utf8-locale
@@ -164,14 +164,15 @@
   (under-locale-or-unresolved %french-utf8-locale thunk))
 
 (define (under-turkish-utf8-locale-or-unresolved thunk)
-  ;; FreeBSD 8.2 and 9.1, Solaris 2.10, Darwin 8.11.0, and MinGW have
+  ;; FreeBSD 8.2 and 9.1, Solaris 2.10, Darwin 8.11.0, Cygwin, and MinGW have
   ;; a broken tr_TR locale where `i' is mapped to uppercase `I'
   ;; instead of `İ', so disable tests on that platform.
   (if (or (string-contains %host-type "freebsd8")
           (string-contains %host-type "freebsd9")
           (string-contains %host-type "solaris2.10")
           (string-contains %host-type "darwin8")
-          (string-contains %host-type "mingw32"))
+          (string-contains %host-type "mingw32")
+          (string-contains %host-type "cygwin"))
       (throw 'unresolved)
       (under-locale-or-unresolved %turkish-utf8-locale thunk)))
 
@@ -269,6 +270,23 @@
      (lambda ()
        (let ((gr (make-locale LC_ALL %greek-utf8-locale-name)))
          (string-locale-ci=? "ΧΑΟΣ" "χαος" gr))))))
+
+
+(with-test-prefix "text collation (Czech)"
+
+  (pass-if "string-locale<? for 'ch'"
+    (under-locale-or-unresolved
+     "cs_CZ.utf8"
+     (lambda ()
+       ;; Czech sorts digraph 'ch' between 'h' and 'i'.
+       ;;
+       ;; GNU libc 2.22 gets this wrong:
+       ;; <https://sourceware.org/bugzilla/show_bug.cgi?id=18589>.  For
+       ;; now, just skip it if it fails (XXX).
+       (or (and (string-locale>? "chxxx" "cxxx")
+                (string-locale>? "chxxx" "hxxx")
+                (string-locale<? "chxxxx" "ixxx"))
+           (throw 'unresolved))))))
 
 
 (with-test-prefix "character mapping"
@@ -464,7 +482,80 @@
                (and (string? result)
                     (string-ci=? result "Tuesday"))))
            (lambda ()
-             (setlocale LC_ALL "C")))))))
+             (setlocale LC_ALL "C"))))))
+
+  (pass-if "locale-am-string"
+    (not (not (member (locale-am-string)
+                      '("AM" "am" "A.M." "a.m.")))))
+
+  (pass-if "locale-am-string (greek)"
+    (under-greek-utf8-locale-or-unresolved
+     (lambda ()
+       (not (not (member (locale-am-string %greek-utf8-locale)
+                         '("ΠΜ" "πμ" "Π.Μ." "π.μ.")))))))
+
+  (pass-if "locale-pm-string"
+    (not (not (member (locale-pm-string)
+                      '("PM" "pm" "P.M." "p.m.")))))
+
+  (pass-if "locale-pm-string (Greek)"
+    (under-greek-utf8-locale-or-unresolved
+     (lambda ()
+       (not (not (member (locale-pm-string %greek-utf8-locale)
+                         '("ΜΜ" "μμ" "Μ.Μ." "μ.μ.")))))))
+
+  (pass-if "locale-digit-grouping"
+    ;; In the C locale, there is no rule for grouping.
+    (null? (locale-digit-grouping)))
+
+  (pass-if "locale-digit-grouping (French)"
+    (under-french-locale-or-unresolved
+     (lambda ()
+       ;; All systems that have a GROUPING nl_item should know
+       ;; that French numbers are grouped in 3 digit chunks.
+       ;; Those systems that have no GROUPING nl_item may use
+       ;; the hard-coded default of no grouping.
+       (let ((result (locale-digit-grouping %french-locale)))
+         (cond
+          ((null? result)
+           (throw 'unresolved))
+          ((eqv? 3 (false-if-exception (car result)))
+           #t)
+          (else
+           #f))))))
+
+  (pass-if "locale-positive-separated-by-space?"
+    ;; In any locale, this must be a boolean.
+    (let ((result (locale-positive-separated-by-space? #f)))
+      (or (eqv? #t result)
+          (eqv? #f result))))
+
+  (pass-if "locale-positive-separated-by-space? (international)"
+    ;; In any locale, this must be a boolean.
+    (let ((result (locale-positive-separated-by-space? #t)))
+      (or (eqv? #t result)
+          (eqv? #f result))))
+
+  (pass-if "locale-monetary-grouping"
+    ;; In the C locale, there is no rule for grouping of digits
+    ;; of monetary values.
+    (null? (locale-monetary-grouping)))
+
+  (pass-if "locale-monetary-grouping (French)"
+    (under-french-utf8-locale-or-unresolved
+     (lambda ()
+       ;; All systems that have a MON_GROUPING nl_item should know
+       ;; that French monetary values are grouped in 3 digit chunks.
+       ;; Those systems that have no MON_GROUPING nl_item may use the
+       ;; hard-coded default of no grouping.
+       (let ((result (locale-monetary-grouping %french-utf8-locale)))
+         (cond
+          ((null? result)
+           (throw 'unresolved))
+          ((eqv? 3 (false-if-exception (car result)))
+           #t)
+          (else
+           #f)))))))
 
 
 ;;;
@@ -477,40 +568,65 @@
 
   (with-test-prefix "C"
 
-    (pass-if "no thousand separator"
+    (pass-if-equal "no thousand separator"
+        ""
       ;; Unlike in English, the "C" locale has no thousand separator.
       ;; If this doesn't hold, the following tests will fail.
-      (string=? "" (locale-thousands-separator)))
+      (locale-thousands-separator))
 
-    (pass-if "integer"
-      (string=? "123456" (number->locale-string 123456)))
+    (pass-if-equal "integer"
+        "123456"
+      (number->locale-string 123456))
 
-    (pass-if "fraction"
-      (string=? "1234.567" (number->locale-string 1234.567)))
+    (pass-if-equal "fraction"
+        "1234.567"
+      (number->locale-string 1234.567))
 
-    (pass-if "fraction, 1 digit"
-      (string=? "1234.5" (number->locale-string 1234.567 1))))
+    (pass-if-equal "fraction, 1 digit"
+        "1234.6"
+      (number->locale-string 1234.567 1))
+
+    (pass-if-equal "fraction, 10 digits"
+        "0.0000300000"
+      (number->locale-string .00003 10))
+
+    (pass-if-equal "trailing zeros"
+        "-10.00000"
+      (number->locale-string -10.0 5))
+
+    (pass-if-equal "positive inexact zero, 1 digit"
+        "0.0"
+      (number->locale-string .0 1)))
 
   (with-test-prefix "French"
 
-    (pass-if "integer"
+    (pass-if-equal "integer"
+        "123 456"
       (under-french-locale-or-unresolved
        (lambda ()
          (let ((fr (make-locale LC_ALL %french-locale-name)))
-           (string=? "123 456" (number->locale-string 123456 #t fr))))))
+           (number->locale-string 123456 #t fr)))))
 
-    (pass-if "fraction"
+    (pass-if-equal "negative integer"
+        "-1 234 567"
       (under-french-locale-or-unresolved
        (lambda ()
          (let ((fr (make-locale LC_ALL %french-locale-name)))
-           (string=? "1 234,567" (number->locale-string 1234.567 #t fr))))))
+           (number->locale-string -1234567 #t fr)))))
 
-    (pass-if "fraction, 1 digit"
+    (pass-if-equal "fraction"
+        "1 234,567"
       (under-french-locale-or-unresolved
        (lambda ()
          (let ((fr (make-locale LC_ALL %french-locale-name)))
-           (string=? "1 234,5"
-                     (number->locale-string 1234.567 1 fr))))))))
+           (number->locale-string 1234.567 #t fr)))))
+
+    (pass-if-equal "fraction, 1 digit"
+        "1 234,6"
+      (under-french-locale-or-unresolved
+       (lambda ()
+         (let ((fr (make-locale LC_ALL %french-locale-name)))
+           (number->locale-string 1234.567 1 fr)))))))
 
 (with-test-prefix "format ~h"
 
@@ -520,39 +636,60 @@
 
   (with-test-prefix "French"
 
-    (pass-if "12345.5678"
+    (pass-if-equal "12345.678"
+        "12 345,678"
       (under-french-locale-or-unresolved
        (lambda ()
          (if (null? (locale-digit-grouping %french-locale))
              (throw 'unresolved)
-             (string=? "12 345,6789"
-                       (format #f "~:h" 12345.6789 %french-locale)))))))
+             (format #f "~:h" 12345.678 %french-locale))))))
 
   (with-test-prefix "English"
 
-    (pass-if "12345.5678"
+    (pass-if-equal "12345.678"
+        "12,345.678"
       (under-american-english-locale-or-unresolved
        (lambda ()
          (if (null? (locale-digit-grouping %american-english-locale))
              (throw 'unresolved)
-             (string=? "12,345.6789"
-                       (format #f "~:h" 12345.6789
-                               %american-english-locale))))))))
+             (format #f "~:h" 12345.678
+                     %american-english-locale)))))))
 
 (with-test-prefix "monetary-amount->locale-string"
 
   (with-test-prefix "French"
 
-    (pass-if "integer"
+    (pass-if-equal "integer"
+        "123 456,00 +EUR"
       (under-french-locale-or-unresolved
        (lambda ()
          (let ((fr (make-locale LC_ALL %french-locale-name)))
-           (string=? "123 456 +EUR"
-                     (monetary-amount->locale-string 123456 #f fr))))))
+           (monetary-amount->locale-string 123456 #f fr)))))
 
-    (pass-if "fraction"
+    (pass-if-equal "fraction"
+        "1 234,57 EUR "
       (under-french-locale-or-unresolved
        (lambda ()
          (let ((fr (make-locale LC_ALL %french-locale-name)))
-           (string=? "1 234,56 EUR "
-                     (monetary-amount->locale-string 1234.567 #t fr))))))))
+           (monetary-amount->locale-string 1234.567 #t fr)))))
+
+    (pass-if-equal "positive inexact zero"
+        "0,00 +EUR"
+      (under-french-locale-or-unresolved
+       (lambda ()
+         (let ((fr (make-locale LC_ALL %french-locale-name)))
+           (monetary-amount->locale-string 0. #f fr)))))
+
+    (pass-if-equal "one cent"
+        "0,01 EUR "
+      (under-french-locale-or-unresolved
+       (lambda ()
+         (let ((fr (make-locale LC_ALL %french-locale-name)))
+           (monetary-amount->locale-string .01 #t fr)))))
+
+    (pass-if-equal "very little money"
+        "0,00 EUR "
+      (under-french-locale-or-unresolved
+       (lambda ()
+         (let ((fr (make-locale LC_ALL %french-locale-name)))
+           (monetary-amount->locale-string .00003 #t fr)))))))

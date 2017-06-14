@@ -33,7 +33,6 @@
 #include "libguile/modules.h"
 #include "libguile/ports.h"
 #include "libguile/rdelim.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/strports.h"
 #include "libguile/validate.h"
@@ -79,13 +78,13 @@ SCM_DEFINE (scm_read_delimited_x, "%read-delimited!", 3, 3, 0,
     {  
       size_t k;
 
-      c = scm_getc_unlocked (port);
+      c = scm_getc (port);
       for (k = 0; k < num_delims; k++)
 	{
 	  if (scm_i_string_ref (delims, k) == c)
 	    {
 	      if (scm_is_false (gobble))
-		scm_ungetc_unlocked (c, port);
+		scm_ungetc (c, port);
 
 	      return scm_cons (SCM_MAKE_CHAR (c),
 			       scm_from_size_t (j - cstart));
@@ -149,7 +148,7 @@ SCM_DEFINE (scm_read_line, "%read-line", 0, 1, 0,
 	}
       else
 	{
-	  buf[index] = scm_getc_unlocked (port);
+	  buf[index] = scm_getc (port);
 	  switch (buf[index])
 	    {
 	    case EOF:

@@ -89,10 +89,6 @@ scm_list_n (SCM elt, ...)
   va_start (foo, elt);
   while (! SCM_UNBNDP (elt))
     {
-#if (SCM_DEBUG_CELL_ACCESSES == 1)
-      if (SCM_HEAP_OBJECT_P (elt))
-	SCM_VALIDATE_CELL(elt, 0);
-#endif      
       *pos = scm_cons (elt, SCM_EOL);
       pos = SCM_CDRLOC (*pos);
       elt = va_arg (foo, SCM);
@@ -395,14 +391,14 @@ SCM_DEFINE (scm_reverse_x, "reverse!", 1, 1, 0,
   while (scm_is_pair (lst))
     {
       SCM old_tail = SCM_CDR (lst);
-      SCM_SETCDR (lst, tail);
+      scm_set_cdr_x (lst, tail);
       tail = lst;
       lst = old_tail;
     }
 
   if (SCM_LIKELY (SCM_NULL_OR_NIL_P (lst)))
     {
-      SCM_SETCDR (old_lst, new_tail);
+      scm_set_cdr_x (old_lst, new_tail);
       return tail;
     }
 
@@ -458,7 +454,7 @@ SCM_DEFINE (scm_list_set_x, "list-set!", 3, 0, 0,
   unsigned long int i = scm_to_ulong (k);
   while (scm_is_pair (lst)) {
     if (i == 0) {
-      SCM_SETCAR (lst, val);
+      scm_set_car_x (lst, val);
       return val;
     } else {
       --i;
@@ -504,7 +500,7 @@ SCM_DEFINE (scm_list_cdr_set_x, "list-cdr-set!", 3, 0, 0,
   size_t i = scm_to_size_t (k);
   while (scm_is_pair (lst)) {
     if (i == 0) {
-      SCM_SETCDR (lst, val);
+      scm_set_cdr_x (lst, val);
       return val;
     } else {
       --i;

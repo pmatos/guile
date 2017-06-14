@@ -30,80 +30,59 @@
 
 (define-module (language cps elide-values)
   #:use-module (ice-9 match)
-  #:use-module (srfi srfi-26)
   #:use-module (language cps)
-  #:use-module (language cps dfg)
+  #:use-module (language cps utils)
+  #:use-module (language cps with-cps)
+  #:use-module (language cps intmap)
   #:export (elide-values))
 
-(define (elide-values* fun conts)
-  (define (visit-cont cont)
-    (rewrite-cps-cont cont
-      (($ $cont sym ($ $kargs names syms body))
-       (sym ($kargs names syms ,(visit-term body))))
-      (($ $cont sym ($ $kfun src meta self tail clause))
-       (sym ($kfun src meta self ,tail ,(and clause (visit-cont clause)))))
-      (($ $cont sym ($ $kclause arity body alternate))
-       (sym ($kclause ,arity ,(visit-cont body)
-                      ,(and alternate (visit-cont alternate)))))
-      (($ $cont)
-       ,cont)))
-  (define (visit-term term)
-    (rewrite-cps-term term
-      (($ $letk conts body)
-       ($letk ,(map visit-cont conts)
-         ,(visit-term body)))
-      (($ $continue k src ($ $primcall 'values vals))
-       ,(rewrite-cps-term (vector-ref conts k)
-          (($ $ktail)
-           ($continue k src ($values vals)))
-          (($ $kreceive ($ $arity req () rest () #f) kargs)
-           ,(cond
-             ((and (not rest) (= (length vals) (length req)))
-              (build-cps-term
-                ($continue kargs src ($values vals))))
-             ((and rest (>= (length vals) (length req)))
-              (let-fresh (krest) (rest)
-                (let ((vals* (append (list-head vals (length req))
-                                     (list rest))))
-                  (build-cps-term
-                    ($letk ((krest ($kargs ('rest) (rest)
-                                     ($continue kargs src
-                                       ($values vals*)))))
-                      ,(let lp ((tail (list-tail vals (length req)))
-                                (k krest))
-                         (match tail
-                           (()
-                            (build-cps-term ($continue k src
-                                              ($const '()))))
-                           ((v . tail)
-                            (let-fresh (krest) (rest)
-                              (build-cps-term
-                                ($letk ((krest ($kargs ('rest) (rest)
-                                                 ($continue k src
-                                                   ($primcall 'cons
-                                                              (v rest))))))
-                                  ,(lp tail krest))))))))))))
-             (else term)))
-          (($ $kargs args)
-           ,(if (< (length vals) (length args))
-                term
-                (let ((vals (list-head vals (length args))))
-                  (build-cps-term
-                    ($continue k src ($values vals))))))))
-      (($ $continue k src (and fun ($ $fun)))
-       ($continue k src ,(visit-fun fun)))
-      (($ $continue k src ($ $rec names syms funs))
-       ($continue k src ($rec names syms (map visit-fun funs))))
-      (($ $continue)
-       ,term)))
-  (define (visit-fun fun)
-    (rewrite-cps-exp fun
-      (($ $fun cont)
-       ($fun ,(visit-cont cont)))))
+(define (inline-values cps k src args)
+  (match (intmap-ref cps k)
+    (($ $ktail)
+     (with-cps cps
+       (build-term
+         ($continue k src ($values args)))))
+    (($ $kreceive ($ $arity req () rest () #f) kargs)
+     (cond
+      ((and (not rest) (= (length args) (length req)))
+       (with-cps cps
+         (build-term
+           ($continue kargs src ($values args)))))
+      ((and rest (>= (length args) (length req)))
+       (let ()
+         (define (build-rest cps k tail)
+           (match tail
+             (()
+              (with-cps cps
+                (build-term ($continue k src ($const '())))))
+             ((v . tail)
+              (with-cps cps
+                (letv rest)
+                (letk krest ($kargs ('rest) (rest)
+                              ($continue k src ($primcall 'cons (v rest)))))
+                ($ (build-rest krest tail))))))
+         (with-cps cps
+           (letv rest)
+           (letk krest ($kargs ('rest) (rest)
+                         ($continue kargs src
+                           ($values ,(append (list-head args (length req))
+                                             (list rest))))))
+           ($ (build-rest krest (list-tail args (length req)))))))
+      (else (with-cps cps #f))))))
 
-  (visit-cont fun))
-
-(define (elide-values fun)
-  (with-fresh-name-state fun
-    (let ((conts (build-cont-table fun)))
-      (elide-values* fun conts))))
+(define (elide-values conts)
+  (with-fresh-name-state conts
+    (persistent-intmap
+     (intmap-fold
+      (lambda (label cont out)
+        (match cont
+          (($ $kargs names vars ($ $continue k src ($ $primcall 'values args)))
+           (call-with-values (lambda () (inline-values out k src args))
+             (lambda (out term)
+               (if term
+                   (let ((cont (build-cont ($kargs names vars ,term))))
+                     (intmap-replace! out label cont))
+                   out))))
+          (_ out)))
+      conts
+      conts))))

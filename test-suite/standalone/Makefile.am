@@ -35,7 +35,7 @@ TESTS_ENVIRONMENT =						\
   srcdir="$(srcdir)"						\
   builddir="$(builddir)"					\
   @LOCALCHARSET_TESTS_ENVIRONMENT@				\
-  GUILE_AUTO_COMPILE=0 "${top_builddir}/meta/uninstalled-env"
+  GUILE_AUTO_COMPILE=0 "${top_builddir}/meta/build-env"
 
 ## Check for headers in $(srcdir) and build dir before $(CPPFLAGS), which
 ## may point us to an old, installed version of guile.
@@ -285,6 +285,12 @@ test_smob_mark_CFLAGS = ${test_cflags}
 test_smob_mark_LDADD = $(LIBGUILE_LDADD)
 check_PROGRAMS += test-smob-mark
 TESTS += test-smob-mark
+
+test_smob_mark_race_SOURCES = test-smob-mark-race.c
+test_smob_mark_race_CFLAGS = ${test_cflags}
+test_smob_mark_race_LDADD = $(LIBGUILE_LDADD)
+check_PROGRAMS += test-smob-mark-race
+TESTS += test-smob-mark-race
 
 check_SCRIPTS += test-stack-overflow
 TESTS += test-stack-overflow

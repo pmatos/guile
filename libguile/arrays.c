@@ -28,7 +28,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <assert.h>
 
 #include "verify.h"
 
@@ -39,7 +38,6 @@
 #include "libguile/eval.h"
 #include "libguile/fports.h"
 #include "libguile/feature.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/srfi-13.h"
 #include "libguile/srfi-4.h"
@@ -58,10 +56,25 @@
 #include "libguile/uniform.h"
 
 
-#define SCM_SET_ARRAY_CONTIGUOUS_FLAG(x) \
-  (SCM_SET_CELL_WORD_0 ((x), SCM_CELL_WORD_0 (x) | (SCM_I_ARRAY_FLAG_CONTIGUOUS << 16)))
-#define SCM_CLR_ARRAY_CONTIGUOUS_FLAG(x) \
-  (SCM_SET_CELL_WORD_0 ((x), SCM_CELL_WORD_0 (x) & ~(SCM_I_ARRAY_FLAG_CONTIGUOUS << 16)))
+size_t
+scm_c_array_rank (SCM array)
+{
+  if (SCM_I_ARRAYP (array))
+    return SCM_I_ARRAY_NDIM (array);
+  else if (scm_is_array (array))
+    return 1;
+  else
+    scm_wrong_type_arg_msg ("array-rank", SCM_ARG1, array, "array");
+}
+
+SCM_DEFINE (scm_array_rank, "array-rank", 1, 0, 0,
+           (SCM array),
+	    "Return the number of dimensions of the array @var{array.}\n")
+#define FUNC_NAME s_scm_array_rank
+{
+  return scm_from_size_t (scm_c_array_rank (array));
+}
+#undef FUNC_NAME
 
 
 SCM_DEFINE (scm_shared_array_root, "shared-array-root", 1, 0, 0,
@@ -71,10 +84,10 @@ SCM_DEFINE (scm_shared_array_root, "shared-array-root", 1, 0, 0,
 {
   if (SCM_I_ARRAYP (ra))
     return SCM_I_ARRAY_V (ra);
-  else if (!scm_is_array (ra))
-    scm_wrong_type_arg_msg (FUNC_NAME, SCM_ARG1, ra, "array");
-  else
+  else if (scm_is_array (ra))
     return ra;
+  else
+    scm_wrong_type_arg_msg (FUNC_NAME, SCM_ARG1, ra, "array");
 }
 #undef FUNC_NAME
 
@@ -84,13 +97,12 @@ SCM_DEFINE (scm_shared_array_offset, "shared-array-offset", 1, 0, 0,
 	    "Return the root vector index of the first element in the array.")
 #define FUNC_NAME s_scm_shared_array_offset
 {
-  scm_t_array_handle handle;
-  SCM res;
-
-  scm_array_get_handle (ra, &handle);
-  res = scm_from_size_t (handle.base);
-  scm_array_handle_release (&handle);
-  return res;
+  if (SCM_I_ARRAYP (ra))
+    return scm_from_size_t (SCM_I_ARRAY_BASE (ra));
+  else if (scm_is_array (ra))
+    return scm_from_size_t (0);
+  else
+    scm_wrong_type_arg_msg (FUNC_NAME, SCM_ARG1, ra, "array");
 }
 #undef FUNC_NAME
 
@@ -100,18 +112,19 @@ SCM_DEFINE (scm_shared_array_increments, "shared-array-increments", 1, 0, 0,
 	    "For each dimension, return the distance between elements in the root vector.")
 #define FUNC_NAME s_scm_shared_array_increments
 {
-  scm_t_array_handle handle;
-  SCM res = SCM_EOL;
-  size_t k;
-  scm_t_array_dim *s;
-
-  scm_array_get_handle (ra, &handle);
-  k = scm_array_handle_rank (&handle);
-  s = scm_array_handle_dims (&handle);
-  while (k--)
-    res = scm_cons (scm_from_ssize_t (s[k].inc), res);
-  scm_array_handle_release (&handle);
-  return res;
+  if (SCM_I_ARRAYP (ra))
+    {
+      size_t k = SCM_I_ARRAY_NDIM (ra);
+      SCM res = SCM_EOL;
+      scm_t_array_dim *dims = SCM_I_ARRAY_DIMS (ra);
+      while (k--)
+        res = scm_cons (scm_from_ssize_t (dims[k].inc), res);
+      return res;
+    }
+  else if (scm_is_array (ra))
+    return scm_list_1 (scm_from_ssize_t (1));
+  else
+    scm_wrong_type_arg_msg (FUNC_NAME, SCM_ARG1, ra, "array");
 }
 #undef FUNC_NAME
 
@@ -136,7 +149,7 @@ static char s_bad_spec[] = "Bad scm_array dimension";
 
 /* Increments will still need to be set. */
 
-static SCM
+SCM
 scm_i_shap2ra (SCM args)
 {
   scm_t_array_dim *s;
@@ -270,41 +283,6 @@ scm_from_contiguous_typed_array (SCM type, SCM bounds, const void *bytes,
 }
 #undef FUNC_NAME
 
-SCM
-scm_from_contiguous_array (SCM bounds, const SCM *elts, size_t len)
-#define FUNC_NAME "scm_from_contiguous_array"
-{
-  size_t k, rlen = 1;
-  scm_t_array_dim *s;
-  SCM ra;
-  scm_t_array_handle h;
-
-  ra = scm_i_shap2ra (bounds);
-  SCM_SET_ARRAY_CONTIGUOUS_FLAG (ra);
-  s = SCM_I_ARRAY_DIMS (ra);
-  k = SCM_I_ARRAY_NDIM (ra);
-
-  while (k--)
-    {
-      s[k].inc = rlen;
-      SCM_ASSERT_RANGE (1, bounds, s[k].lbnd <= s[k].ubnd + 1);
-      rlen = (s[k].ubnd - s[k].lbnd + 1) * s[k].inc;
-    }
-  if (rlen != len)
-    SCM_MISC_ERROR ("element length and dimensions do not match", SCM_EOL);
-
-  SCM_I_ARRAY_SET_V (ra, scm_c_make_vector (rlen, SCM_UNDEFINED));
-  scm_array_get_handle (ra, &h);
-  memcpy (h.writable_elements, elts, rlen * sizeof(SCM));
-  scm_array_handle_release (&h);
-
-  if (1 == SCM_I_ARRAY_NDIM (ra) && 0 == SCM_I_ARRAY_BASE (ra))
-    if (0 == s->lbnd)
-      return SCM_I_ARRAY_V (ra);
-  return ra;
-}
-#undef FUNC_NAME
-
 SCM_DEFINE (scm_make_array, "make-array", 1, 0, 1,
 	    (SCM fill, SCM bounds),
 	    "Create and return an array.")
@@ -314,6 +292,7 @@ SCM_DEFINE (scm_make_array, "make-array", 1, 0, 1,
 }
 #undef FUNC_NAME
 
+/* see scm_from_contiguous_array */
 static void
 scm_i_ra_set_contp (SCM ra)
 {
@@ -454,6 +433,178 @@ SCM_DEFINE (scm_make_shared_array, "make-shared-array", 2, 0, 1,
 #undef FUNC_NAME
 
 
+static void
+array_from_pos (scm_t_array_handle *handle, size_t *ndim, size_t *k, SCM *i, ssize_t *pos,
+                scm_t_array_dim **s, char const * FUNC_NAME, SCM error_args)
+{
+  *s = scm_array_handle_dims (handle);
+  *k = *ndim = scm_array_handle_rank (handle);
+  for (; *k>0 && scm_is_pair (*i); --*k, ++*s, *i=scm_cdr (*i))
+    {
+      ssize_t ik = scm_to_ssize_t (scm_car (*i));
+      if (ik<(*s)->lbnd || ik>(*s)->ubnd)
+        {
+          scm_array_handle_release (handle);
+          scm_misc_error (FUNC_NAME, "indices out of range", error_args);
+        }
+      *pos += (ik-(*s)->lbnd) * (*s)->inc;
+    }
+}
+
+static void
+array_from_get_o (scm_t_array_handle *handle, size_t k, scm_t_array_dim *s, ssize_t pos,
+                  SCM *o)
+{
+  scm_t_array_dim * os;
+  *o = scm_i_make_array (k);
+  SCM_I_ARRAY_SET_V (*o, handle->vector);
+  SCM_I_ARRAY_SET_BASE (*o, pos + handle->base);
+  os = SCM_I_ARRAY_DIMS (*o);
+  for (; k>0; --k, ++s, ++os)
+    {
+      os->ubnd = s->ubnd;
+      os->lbnd = s->lbnd;
+      os->inc = s->inc;
+    }
+}
+
+SCM_DEFINE (scm_array_slice, "array-slice", 1, 0, 1,
+           (SCM ra, SCM indices),
+            "Return the array slice @var{ra}[@var{indices} ..., ...]\n"
+            "The rank of @var{ra} must equal to the number of indices or larger.\n\n"
+            "See also @code{array-ref}, @code{array-cell-ref}, @code{array-cell-set!}.\n\n"
+            "@code{array-slice} may return a rank-0 array. For example:\n"
+            "@lisp\n"
+            "(array-slice #2((1 2 3) (4 5 6)) 1 1) @result{} #0(5)\n"
+            "(array-slice #2((1 2 3) (4 5 6)) 1) @result{} #(4 5 6)\n"
+            "(array-slice #2((1 2 3) (4 5 6))) @result{} #2((1 2 3) (4 5 6))\n"
+            "(array-slice #0(5) @result{} #0(5).\n"
+            "@end lisp")
+#define FUNC_NAME s_scm_array_slice
+{
+  SCM o, i = indices;
+  size_t ndim, k;
+  ssize_t pos = 0;
+  scm_t_array_handle handle;
+  scm_t_array_dim *s;
+  scm_array_get_handle (ra, &handle);
+  array_from_pos (&handle, &ndim, &k, &i, &pos, &s, FUNC_NAME, scm_list_2 (ra, indices));
+  if (k==ndim)
+    o = ra;
+  else if (scm_is_null (i))
+    {
+      array_from_get_o(&handle, k, s, pos, &o);
+    }
+  else
+    {
+      scm_array_handle_release (&handle);
+      scm_misc_error(FUNC_NAME, "too many indices", scm_list_2 (ra, indices));
+    }
+  scm_array_handle_release (&handle);
+  return o;
+}
+#undef FUNC_NAME
+
+
+SCM_DEFINE (scm_array_cell_ref, "array-cell-ref", 1, 0, 1,
+           (SCM ra, SCM indices),
+            "Return the element at the @code{(@var{indices} ...)} position\n"
+            "in array @var{ra}, or the array slice @var{ra}[@var{indices} ..., ...]\n"
+            "if the rank of @var{ra} is larger than the number of indices.\n\n"
+            "See also @code{array-ref}, @code{array-slice}, @code{array-cell-set!}.\n\n"
+            "@code{array-cell-ref} never returns a rank 0 array. For example:\n"
+            "@lisp\n"
+            "(array-cell-ref #2((1 2 3) (4 5 6)) 1 1) @result{} 5\n"
+            "(array-cell-ref #2((1 2 3) (4 5 6)) 1) @result{} #(4 5 6)\n"
+            "(array-cell-ref #2((1 2 3) (4 5 6))) @result{} #2((1 2 3) (4 5 6))\n"
+            "(array-cell-ref #0(5) @result{} 5.\n"
+            "@end lisp")
+#define FUNC_NAME s_scm_array_cell_ref
+{
+  SCM o, i = indices;
+  size_t ndim, k;
+  ssize_t pos = 0;
+  scm_t_array_handle handle;
+  scm_t_array_dim *s;
+  scm_array_get_handle (ra, &handle);
+  array_from_pos (&handle, &ndim, &k, &i, &pos, &s, FUNC_NAME, scm_list_2 (ra, indices));
+  if (k>0)
+    {
+      if (k==ndim)
+        o = ra;
+      else
+        array_from_get_o(&handle, k, s, pos, &o);
+    }
+  else if (scm_is_null(i))
+    o = scm_array_handle_ref (&handle, pos);
+  else
+    {
+      scm_array_handle_release (&handle);
+      scm_misc_error(FUNC_NAME, "too many indices", scm_list_2 (ra, indices));
+    }
+  scm_array_handle_release (&handle);
+  return o;
+}
+#undef FUNC_NAME
+
+
+SCM_DEFINE (scm_array_cell_set_x, "array-cell-set!", 2, 0, 1,
+            (SCM ra, SCM b, SCM indices),
+            "Set the array slice @var{ra}[@var{indices} ..., ...] to @var{b}\n."
+            "Equivalent to @code{(array-copy! @var{b} (apply array-cell-ref @var{ra} @var{indices}))}\n"
+            "if the number of indices is smaller than the rank of @var{ra}; otherwise\n"
+            "equivalent to @code{(apply array-set! @var{ra} @var{b} @var{indices})}.\n"
+            "This function returns the modified array @var{ra}.\n\n"
+            "See also @code{array-ref}, @code{array-cell-ref}, @code{array-slice}.\n\n"
+            "For example:\n"
+            "@lisp\n"
+            "(define A (list->array 2 '((1 2 3) (4 5 6))))\n"
+            "(array-cell-set! A #0(99) 1 1) @result{} #2((1 2 3) (4 #0(99) 6))\n"
+            "(array-cell-set! A 99 1 1) @result{} #2((1 2 3) (4 99 6))\n"
+            "(array-cell-set! A #(a b c) 0) @result{} #2((a b c) (4 99 6))\n"
+            "(array-cell-set! A #2((x y z) (9 8 7))) @result{} #2((x y z) (9 8 7))\n\n"
+            "(define B (make-array 0))\n"
+            "(array-cell-set! B 15) @result{} #0(15)\n"
+            "@end lisp")
+#define FUNC_NAME s_scm_array_cell_set_x
+{
+  SCM o, i = indices;
+  size_t ndim, k;
+  ssize_t pos = 0;
+  scm_t_array_handle handle;
+  scm_t_array_dim *s;
+  scm_array_get_handle (ra, &handle);
+  array_from_pos (&handle, &ndim, &k, &i, &pos, &s, FUNC_NAME, scm_list_3 (ra, b, indices));
+  if (k>0)
+    {
+      if (k==ndim)
+        o = ra;
+      else
+        array_from_get_o(&handle, k, s, pos, &o);
+      scm_array_handle_release(&handle);
+      /* an error is still possible here if o and b don't match. */
+      /* FIXME copying like this wastes the handle, and the bounds matching
+         behavior of array-copy! is not strict. */
+      scm_array_copy_x(b, o);
+    }
+  else if (scm_is_null(i))
+    {
+      scm_array_handle_set (&handle, pos, b);  /* ra may be non-ARRAYP */
+      scm_array_handle_release (&handle);
+    }
+  else
+    {
+      scm_array_handle_release (&handle);
+      scm_misc_error(FUNC_NAME, "too many indices", scm_list_3 (ra, b, indices));
+    }
+  return ra;
+}
+#undef FUNC_NAME
+
+
+#undef ARRAY_FROM_GET_O
+
+
 /* args are RA . DIMS */
 SCM_DEFINE (scm_transpose_array, "transpose-array", 1, 0, 1,
            (SCM ra, SCM args),
@@ -566,31 +717,38 @@ SCM_DEFINE (scm_array_contents, "array-contents", 1, 1, 0,
 	    "@code{make-array} and @code{make-uniform-array} may be unrolled,\n"
 	    "some arrays made by @code{make-shared-array} may not be.  If\n"
 	    "the optional argument @var{strict} is provided, a shared array\n"
-	    "will be returned only if its elements are stored internally\n"
-	    "contiguous in memory.")
+	    "will be returned only if its elements are stored contiguously\n"
+	    "in memory.")
 #define FUNC_NAME s_scm_array_contents
 {
-  if (!scm_is_array (ra))
-    scm_wrong_type_arg_msg (NULL, 0, ra, "array");
-  else if (SCM_I_ARRAYP (ra))
+  if (SCM_I_ARRAYP (ra))
     {
       SCM v;
-      size_t k, ndim = SCM_I_ARRAY_NDIM (ra), len = 1;
-      if (!SCM_I_ARRAY_CONTP (ra))
-	return SCM_BOOL_F;
-      for (k = 0; k < ndim; k++)
-	len *= SCM_I_ARRAY_DIMS (ra)[k].ubnd - SCM_I_ARRAY_DIMS (ra)[k].lbnd + 1;
+      size_t ndim = SCM_I_ARRAY_NDIM (ra);
+      scm_t_array_dim *s = SCM_I_ARRAY_DIMS (ra);
+      size_t k = ndim;
+      size_t len = 1;
+
+      if (k)
+        {
+          ssize_t last_inc = s[k - 1].inc;
+          while (k--)
+            {
+              if (len*last_inc != s[k].inc)
+                return SCM_BOOL_F;
+              len *= (s[k].ubnd - s[k].lbnd + 1);
+            }
+        }
+
       if (!SCM_UNBNDP (strict) && scm_is_true (strict))
 	{
-	  if (ndim && (1 != SCM_I_ARRAY_DIMS (ra)[ndim - 1].inc))
+	  if (ndim && (1 != s[ndim - 1].inc))
 	    return SCM_BOOL_F;
-	  if (scm_is_bitvector (SCM_I_ARRAY_V (ra)))
-	    {
-	      if (len != scm_c_bitvector_length (SCM_I_ARRAY_V (ra)) ||
-		  SCM_I_ARRAY_BASE (ra) % SCM_LONG_BIT ||
-		  len % SCM_LONG_BIT)
-		return SCM_BOOL_F;
-	    }
+	  if (scm_is_bitvector (SCM_I_ARRAY_V (ra))
+              && (len != scm_c_bitvector_length (SCM_I_ARRAY_V (ra)) ||
+                  SCM_I_ARRAY_BASE (ra) % SCM_LONG_BIT ||
+                  len % SCM_LONG_BIT))
+            return SCM_BOOL_F;
 	}
 
       v = SCM_I_ARRAY_V (ra);
@@ -607,8 +765,10 @@ SCM_DEFINE (scm_array_contents, "array-contents", 1, 1, 0,
           return sra;
         }
     }
-  else
+  else if (scm_is_array (ra))
     return ra;
+  else
+    scm_wrong_type_arg_msg (NULL, 0, ra, "array");
 }
 #undef FUNC_NAME
 
@@ -735,15 +895,15 @@ scm_i_print_array_dimension (scm_t_array_handle *h, int dim, int pos,
   else
     {
       ssize_t i;
-      scm_putc_unlocked ('(', port);
+      scm_putc ('(', port);
       for (i = h->dims[dim].lbnd; i <= h->dims[dim].ubnd;
            i++, pos += h->dims[dim].inc)
         {
           scm_i_print_array_dimension (h, dim+1, pos, port, pstate);
           if (i < h->dims[dim].ubnd)
-            scm_putc_unlocked (' ', port);
+            scm_putc (' ', port);
         }
-      scm_putc_unlocked (')', port);
+      scm_putc (')', port);
     }
   return 1;
 }
@@ -760,7 +920,7 @@ scm_i_print_array (SCM array, SCM port, scm_print_state *pstate)
 
   scm_array_get_handle (array, &h);
 
-  scm_putc_unlocked ('#', port);
+  scm_putc ('#', port);
   if (SCM_I_ARRAYP (array))
     scm_intprint (h.ndims, 10, port);
   if (h.element_type != SCM_ARRAY_ELEMENT_TYPE_SCM)
@@ -781,12 +941,12 @@ scm_i_print_array (SCM array, SCM port, scm_print_state *pstate)
       {
 	if (print_lbnds)
 	  {
-	    scm_putc_unlocked ('@', port);
+	    scm_putc ('@', port);
 	    scm_intprint (h.dims[i].lbnd, 10, port);
 	  }
 	if (print_lens)
 	  {
-	    scm_putc_unlocked (':', port);
+	    scm_putc (':', port);
 	    scm_intprint (h.dims[i].ubnd - h.dims[i].lbnd + 1,
 			  10, port);
 	  }
@@ -814,9 +974,9 @@ scm_i_print_array (SCM array, SCM port, scm_print_state *pstate)
          not really the same as Scheme values since they are boxed and
          can be modified with array-set!, say.
       */
-      scm_putc_unlocked ('(', port);
+      scm_putc ('(', port);
       scm_i_print_array_dimension (&h, 0, 0, port, pstate);
-      scm_putc_unlocked (')', port);
+      scm_putc (')', port);
       return 1;
     }
   else

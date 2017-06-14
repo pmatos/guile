@@ -40,6 +40,7 @@
 #include "libguile/macros.h"
 #include "libguile/modules.h"
 #include "libguile/ports.h"
+#include "libguile/ports-internal.h"
 #include "libguile/procprop.h"
 #include "libguile/programs.h"
 #include "libguile/smob.h"
@@ -49,11 +50,6 @@
 
 #include "libguile/validate.h"
 #include "libguile/goops.h"
-
-/* Port classes */
-#define SCM_IN_PCLASS_INDEX       0
-#define SCM_OUT_PCLASS_INDEX      SCM_I_MAX_PORT_TYPE_COUNT
-#define SCM_INOUT_PCLASS_INDEX    (2 * SCM_I_MAX_PORT_TYPE_COUNT)
 
 /* Objects have identity, so references to classes and instances are by
    value, not by reference.  Redefinition of a class or modification of
@@ -114,6 +110,8 @@ static SCM class_applicable_struct_class;
 static SCM class_applicable_struct_with_setter_class;
 static SCM class_number, class_list;
 static SCM class_keyword;
+static SCM class_syntax;
+static SCM class_atomic_box;
 static SCM class_port, class_input_output_port;
 static SCM class_input_port, class_output_port;
 static SCM class_foreign_slot;
@@ -128,7 +126,6 @@ static SCM class_hashtable;
 static SCM class_fluid;
 static SCM class_dynamic_state;
 static SCM class_frame;
-static SCM class_keyword;
 static SCM class_vm_cont;
 static SCM class_bytevector;
 static SCM class_uvec;
@@ -136,11 +133,6 @@ static SCM class_array;
 static SCM class_bitvector;
 
 static SCM vtable_class_map = SCM_BOOL_F;
-
-/* Port classes.  Allocate 3 times the maximum number of port types so that
-   input ports, output ports, and in/out ports can be stored at different
-   offsets.  See `SCM_IN_PCLASS_INDEX' et al.  */
-SCM scm_i_port_class[3 * SCM_I_MAX_PORT_TYPE_COUNT];
 
 /* SMOB classes.  */
 SCM scm_i_smob_class[SCM_I_MAX_SMOB_TYPE_COUNT];
@@ -236,6 +228,10 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	  return class_frame;
         case scm_tc7_keyword:
 	  return class_keyword;
+        case scm_tc7_syntax:
+	  return class_syntax;
+        case scm_tc7_atomic_box:
+	  return class_atomic_box;
         case scm_tc7_vm_cont:
 	  return class_vm_cont;
 	case scm_tc7_bytevector:
@@ -276,11 +272,16 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	    /* fall through to ports */
 	  }
 	case scm_tc7_port:
-	  return scm_i_port_class[(SCM_WRTNG & SCM_CELL_WORD_0 (x)
-                                   ? (SCM_RDNG & SCM_CELL_WORD_0 (x)
-                                      ? SCM_INOUT_PCLASS_INDEX | SCM_PTOBNUM (x)
-                                      : SCM_OUT_PCLASS_INDEX | SCM_PTOBNUM (x))
-                                   : SCM_IN_PCLASS_INDEX | SCM_PTOBNUM (x))];
+          {
+            scm_t_port_type *ptob = SCM_PORT_TYPE (x);
+            if (SCM_INPUT_PORT_P (x))
+              {
+                if (SCM_OUTPUT_PORT_P (x))
+                  return ptob->input_output_class;
+                return ptob->input_class;
+              }
+            return ptob->output_class;
+          }
 	case scm_tcs_struct:
 	  if (SCM_OBJ_CLASS_FLAGS (x) & SCM_CLASSF_GOOPS_VALID)
             /* A GOOPS object with a valid class.  */
@@ -477,6 +478,8 @@ SCM_DEFINE (scm_sys_clear_fields_x, "%clear-fields!", 2, 0, 0,
 
 
 
+static scm_i_pthread_mutex_t goops_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
+
 SCM_DEFINE (scm_sys_modify_instance, "%modify-instance", 2, 0, 0,
 	    (SCM old, SCM new),
 	    "Used by change-class to modify objects in place.")
@@ -489,7 +492,7 @@ SCM_DEFINE (scm_sys_modify_instance, "%modify-instance", 2, 0, 0,
    * scratch the old value with new to be correct with GC.
    * See "Class redefinition protocol above".
    */
-  SCM_CRITICAL_SECTION_START;
+  scm_i_pthread_mutex_lock (&goops_lock);
   {
     scm_t_bits word0, word1;
     word0 = SCM_CELL_WORD_0 (old);
@@ -499,7 +502,7 @@ SCM_DEFINE (scm_sys_modify_instance, "%modify-instance", 2, 0, 0,
     SCM_SET_CELL_WORD_0 (new, word0);
     SCM_SET_CELL_WORD_1 (new, word1);
   }
-  SCM_CRITICAL_SECTION_END;
+  scm_i_pthread_mutex_unlock (&goops_lock);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -512,7 +515,7 @@ SCM_DEFINE (scm_sys_modify_class, "%modify-class", 2, 0, 0,
   SCM_VALIDATE_CLASS (1, old);
   SCM_VALIDATE_CLASS (2, new);
 
-  SCM_CRITICAL_SECTION_START;
+  scm_i_pthread_mutex_lock (&goops_lock);
   {
     scm_t_bits word0, word1;
     word0 = SCM_CELL_WORD_0 (old);
@@ -524,7 +527,7 @@ SCM_DEFINE (scm_sys_modify_class, "%modify-class", 2, 0, 0,
     SCM_SET_CELL_WORD_1 (new, word1);
     SCM_STRUCT_DATA (new)[scm_vtable_index_self] = SCM_UNPACK (new);
   }
-  SCM_CRITICAL_SECTION_END;
+  scm_i_pthread_mutex_unlock (&goops_lock);
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -758,40 +761,67 @@ create_smob_classes (void)
                                                      scm_smobs[i].apply != 0);
 }
 
-void
-scm_make_port_classes (long ptobnum, char *type_name)
+struct pre_goops_port_type
+{
+  scm_t_port_type *ptob;
+  struct pre_goops_port_type *prev;
+};
+struct pre_goops_port_type *pre_goops_port_types;
+
+static void
+make_port_classes (scm_t_port_type *ptob)
 {
   SCM name, meta, super, supers;
 
   meta = class_class;
 
-  name = make_class_name ("<", type_name, "-port>");
+  name = make_class_name ("<", ptob->name, "-port>");
   supers = scm_list_1 (class_port);
   super = scm_make_standard_class (meta, name, supers, SCM_EOL);
 
-  name = make_class_name ("<", type_name, "-input-port>");
+  name = make_class_name ("<", ptob->name, "-input-port>");
   supers = scm_list_2 (super, class_input_port);
-  scm_i_port_class[SCM_IN_PCLASS_INDEX + ptobnum]
-    = scm_make_standard_class (meta, name, supers, SCM_EOL);
+  ptob->input_class = scm_make_standard_class (meta, name, supers, SCM_EOL);
 
-  name = make_class_name ("<", type_name, "-output-port>");
+  name = make_class_name ("<", ptob->name, "-output-port>");
   supers = scm_list_2 (super, class_output_port);
-  scm_i_port_class[SCM_OUT_PCLASS_INDEX + ptobnum]
-    = scm_make_standard_class (meta, name, supers, SCM_EOL);
+  ptob->output_class = scm_make_standard_class (meta, name, supers, SCM_EOL);
 
-  name = make_class_name ("<", type_name, "-input-output-port>");
+  name = make_class_name ("<", ptob->name, "-input-output-port>");
   supers = scm_list_2 (super, class_input_output_port);
-  scm_i_port_class[SCM_INOUT_PCLASS_INDEX + ptobnum]
-    = scm_make_standard_class (meta, name, supers, SCM_EOL);
+  ptob->input_output_class =
+    scm_make_standard_class (meta, name, supers, SCM_EOL);
+}
+
+void
+scm_make_port_classes (scm_t_port_type *ptob)
+{
+  ptob->input_class = SCM_BOOL_F;
+  ptob->output_class = SCM_BOOL_F;
+  ptob->input_output_class = SCM_BOOL_F;
+
+  if (!goops_loaded_p)
+    {
+      /* Not really a pair.  */
+      struct pre_goops_port_type *link;
+      link = scm_gc_typed_calloc (struct pre_goops_port_type);
+      link->ptob = ptob;
+      link->prev = pre_goops_port_types;
+      pre_goops_port_types = link;
+      return;
+    }
+
+  make_port_classes (ptob);
 }
 
 static void
 create_port_classes (void)
 {
-  long i;
-
-  for (i = scm_c_num_port_types () - 1; i >= 0; i--)
-    scm_make_port_classes (i, SCM_PTOBNAME (i));
+  while (pre_goops_port_types)
+    {
+      make_port_classes (pre_goops_port_types->ptob);
+      pre_goops_port_types = pre_goops_port_types->prev;
+    }
 }
 
 SCM
@@ -842,7 +872,7 @@ scm_i_define_class_for_vtable (SCM vtable)
               supers = scm_list_1 (class_top);
             }
 
-          return scm_make_standard_class (meta, name, supers, SCM_EOL);
+          class = scm_make_standard_class (meta, name, supers, SCM_EOL);
         }
       else
         /* `create_struct_classes' will fill this in later.  */
@@ -975,6 +1005,8 @@ SCM_DEFINE (scm_sys_goops_early_init, "%goops-early-init", 0, 0, 0,
   class_dynamic_state = scm_variable_ref (scm_c_lookup ("<dynamic-state>"));
   class_frame = scm_variable_ref (scm_c_lookup ("<frame>"));
   class_keyword = scm_variable_ref (scm_c_lookup ("<keyword>"));
+  class_syntax = scm_variable_ref (scm_c_lookup ("<syntax>"));
+  class_atomic_box = scm_variable_ref (scm_c_lookup ("<atomic-box>"));
   class_vm_cont = scm_variable_ref (scm_c_lookup ("<vm-continuation>"));
   class_bytevector = scm_variable_ref (scm_c_lookup ("<bytevector>"));
   class_uvec = scm_variable_ref (scm_c_lookup ("<uvec>"));
@@ -985,7 +1017,6 @@ SCM_DEFINE (scm_sys_goops_early_init, "%goops-early-init", 0, 0, 0,
   class_real = scm_variable_ref (scm_c_lookup ("<real>"));
   class_integer = scm_variable_ref (scm_c_lookup ("<integer>"));
   class_fraction = scm_variable_ref (scm_c_lookup ("<fraction>"));
-  class_keyword = scm_variable_ref (scm_c_lookup ("<keyword>"));
   class_unknown = scm_variable_ref (scm_c_lookup ("<unknown>"));
   class_procedure = scm_variable_ref (scm_c_lookup ("<procedure>"));
   class_primitive_generic = scm_variable_ref (scm_c_lookup ("<primitive-generic>"));

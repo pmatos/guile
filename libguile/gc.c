@@ -1,5 +1,5 @@
 /* Copyright (C) 1995,1996,1997,1998,1999,2000,2001, 2002, 2003, 2006,
- *   2008, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+ *   2008, 2009, 2010, 2011, 2012, 2013, 2014, 2016 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -45,7 +45,6 @@ extern unsigned long * __libc_ia64_register_backing_store_base;
 #include "libguile/arrays.h"
 #include "libguile/async.h"
 #include "libguile/ports.h"
-#include "libguile/root.h"
 #include "libguile/simpos.h"
 #include "libguile/strings.h"
 #include "libguile/vectors.h"
@@ -89,108 +88,6 @@ int scm_debug_cells_gc_interval = 0;
 static SCM scm_protects;
 
 
-#if (SCM_DEBUG_CELL_ACCESSES == 1)
-
-
-/*
-  
-  Assert that the given object is a valid reference to a valid cell.  This
-  test involves to determine whether the object is a cell pointer, whether
-  this pointer actually points into a heap segment and whether the cell
-  pointed to is not a free cell.  Further, additional garbage collections may
-  get executed after a user defined number of cell accesses.  This helps to
-  find places in the C code where references are dropped for extremely short
-  periods.
-
-*/
-void
-scm_i_expensive_validation_check (SCM cell)
-{
-  /* If desired, perform additional garbage collections after a user
-   * defined number of cell accesses.
-   */
-  if (scm_debug_cells_gc_interval)
-    {
-      static unsigned int counter = 0;
-
-      if (counter != 0)
-	{
-	  --counter;
-	}
-      else
-	{
-	  counter = scm_debug_cells_gc_interval;
-	  scm_gc ();
-	}
-    }
-}
-
-/* Whether cell validation is already running.  */
-static int scm_i_cell_validation_already_running = 0;
-
-void
-scm_assert_cell_valid (SCM cell)
-{
-  if (!scm_i_cell_validation_already_running && scm_debug_cell_accesses_p)
-    {
-      scm_i_cell_validation_already_running = 1;  /* set to avoid recursion */
-
-      /*
-	During GC, no user-code should be run, and the guile core
-	should use non-protected accessors.
-      */
-      if (scm_gc_running_p)
-	return;
-
-      /*
-	Only scm_in_heap_p and rescanning the heap is wildly
-	expensive.
-      */
-      if (scm_expensive_debug_cell_accesses_p)
-	scm_i_expensive_validation_check (cell);
-
-      scm_i_cell_validation_already_running = 0;  /* re-enable */
-    }
-}
-
-
-
-SCM_DEFINE (scm_set_debug_cell_accesses_x, "set-debug-cell-accesses!", 1, 0, 0,
-	    (SCM flag),
-	    "If @var{flag} is @code{#f}, cell access checking is disabled.\n"
-	    "If @var{flag} is @code{#t}, cheap cell access checking is enabled,\n"
-	    "but no additional calls to garbage collection are issued.\n"
-	    "If @var{flag} is a number, strict cell access checking is enabled,\n"
-	    "with an additional garbage collection after the given\n"
-	    "number of cell accesses.\n"
-	    "This procedure only exists when the compile-time flag\n"
-	    "@code{SCM_DEBUG_CELL_ACCESSES} was set to 1.")
-#define FUNC_NAME s_scm_set_debug_cell_accesses_x
-{
-  if (scm_is_false (flag))
-    {
-      scm_debug_cell_accesses_p = 0;
-    }
-  else if (scm_is_eq (flag, SCM_BOOL_T))
-    {
-      scm_debug_cells_gc_interval = 0;
-      scm_debug_cell_accesses_p = 1;
-      scm_expensive_debug_cell_accesses_p = 0;
-    }
-  else
-    {
-      scm_debug_cells_gc_interval = scm_to_signed_integer (flag, 0, INT_MAX);
-      scm_debug_cell_accesses_p = 1;
-      scm_expensive_debug_cell_accesses_p = 1;
-    }
-  return SCM_UNSPECIFIED;
-}
-#undef FUNC_NAME
-
-
-#endif  /* SCM_DEBUG_CELL_ACCESSES == 1 */
-
-
 
 
 static int needs_gc_after_nonlocal_exit = 0;
@@ -208,37 +105,9 @@ scm_oom_fn (size_t nbytes)
 static void
 scm_gc_warn_proc (char *fmt, GC_word arg)
 {
-  SCM port;
-  FILE *stream = NULL;
-
-  port = scm_current_warning_port ();
-  if (!SCM_OPPORTP (port))
-    return;
-
-  if (SCM_FPORTP (port))
-    {
-      int fd;
-      scm_force_output (port);
-      if (!SCM_OPPORTP (port))
-        return;
-      fd = dup (SCM_FPORT_FDES (port));
-      if (fd == -1)
-        perror ("Failed to dup warning port fd");
-      else
-        {
-          stream = fdopen (fd, "a");
-          if (!stream)
-            {
-              perror ("Failed to open stream for warning port");
-              close (fd);
-            }
-        }
-    }
-
-  fprintf (stream ? stream : stderr, fmt, arg);
-
-  if (stream)
-    fclose (stream);
+  /* avoid scm_current_warning_port() b/c the GC lock is already taken
+     and the fluid ref might require it */
+  fprintf (stderr, fmt, arg);
 }
 
 void
@@ -496,22 +365,21 @@ scm_permanent_object (SCM obj)
 
 
 
+static scm_i_pthread_mutex_t gc_protect_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
+
 SCM
 scm_gc_protect_object (SCM obj)
 {
   SCM handle;
 
-  /* This critical section barrier will be replaced by a mutex. */
-  /* njrev: Indeed; if my comment above is correct, there is the same
-     critsec/mutex inconsistency here. */
-  SCM_CRITICAL_SECTION_START;
+  scm_dynwind_begin (0);
+  scm_i_dynwind_pthread_mutex_lock (&gc_protect_lock);
 
   handle = scm_hashq_create_handle_x (scm_protects, obj, scm_from_int (0));
   SCM_SETCDR (handle, scm_sum (SCM_CDR (handle), scm_from_int (1)));
-
   protected_obj_count ++;
-  
-  SCM_CRITICAL_SECTION_END;
+
+  scm_dynwind_end ();
 
   return obj;
 }
@@ -526,18 +394,10 @@ scm_gc_unprotect_object (SCM obj)
 {
   SCM handle;
 
-  /* This critical section barrier will be replaced by a mutex. */
-  /* njrev: and again. */
-  SCM_CRITICAL_SECTION_START;
+  scm_dynwind_begin (0);
+  scm_i_dynwind_pthread_mutex_lock (&gc_protect_lock);
 
-  if (scm_gc_running_p)
-    {
-      fprintf (stderr, "scm_unprotect_object called during GC.\n");
-      abort ();
-    }
- 
   handle = scm_hashq_get_handle (scm_protects, obj);
-
   if (scm_is_false (handle))
     {
       fprintf (stderr, "scm_unprotect_object called on unprotected object\n");
@@ -553,7 +413,7 @@ scm_gc_unprotect_object (SCM obj)
     }
   protected_obj_count --;
 
-  SCM_CRITICAL_SECTION_END;
+  scm_dynwind_end ();
 
   return obj;
 }
@@ -605,6 +465,12 @@ scm_storage_prehistory ()
   /* BDW-GC 7.4.0 has a bug making it loop indefinitely when using more
      than one marker thread: <https://github.com/ivmai/bdwgc/pull/30>.
      Work around it by asking for one marker thread.  */
+  setenv ("GC_MARKERS", "1", 1);
+#endif
+
+#if SCM_I_GSC_USE_NULL_THREADS
+  /* If we have disabled threads in Guile, ensure that the GC doesn't
+     spawn any marker threads.  */
   setenv ("GC_MARKERS", "1", 1);
 #endif
 
@@ -679,46 +545,15 @@ after_gc_async_thunk (void)
  */
 static void *
 queue_after_gc_hook (void * hook_data SCM_UNUSED,
-                      void *fn_data SCM_UNUSED,
-                      void *data SCM_UNUSED)
+                     void *fn_data SCM_UNUSED,
+                     void *data SCM_UNUSED)
 {
-  /* If cell access debugging is enabled, the user may choose to perform
-   * additional garbage collections after an arbitrary number of cell
-   * accesses.  We don't want the scheme level after-gc-hook to be performed
-   * for each of these garbage collections for the following reason: The
-   * execution of the after-gc-hook causes cell accesses itself.  Thus, if the
-   * after-gc-hook was performed with every gc, and if the gc was performed
-   * after a very small number of cell accesses, then the number of cell
-   * accesses during the execution of the after-gc-hook will suffice to cause
-   * the execution of the next gc.  Then, guile would keep executing the
-   * after-gc-hook over and over again, and would never come to do other
-   * things.
-   *
-   * To overcome this problem, if cell access debugging with additional
-   * garbage collections is enabled, the after-gc-hook is never run by the
-   * garbage collecter.  When running guile with cell access debugging and the
-   * execution of the after-gc-hook is desired, then it is necessary to run
-   * the hook explicitly from the user code.  This has the effect, that from
-   * the scheme level point of view it seems that garbage collection is
-   * performed with a much lower frequency than it actually is.  Obviously,
-   * this will not work for code that depends on a fixed one to one
-   * relationship between the execution counts of the C level garbage
-   * collection hooks and the execution count of the scheme level
-   * after-gc-hook.
-   */
+  scm_i_thread *t = SCM_I_CURRENT_THREAD;
 
-#if (SCM_DEBUG_CELL_ACCESSES == 1)
-  if (scm_debug_cells_gc_interval == 0)
-#endif
+  if (scm_is_false (SCM_CDR (after_gc_async_cell)))
     {
-      scm_i_thread *t = SCM_I_CURRENT_THREAD;
-
-      if (scm_is_false (SCM_CDR (after_gc_async_cell)))
-        {
-          SCM_SETCDR (after_gc_async_cell, t->active_asyncs);
-          t->active_asyncs = after_gc_async_cell;
-          t->pending_asyncs = 1;
-        }
+      SCM_SETCDR (after_gc_async_cell, t->pending_asyncs);
+      t->pending_asyncs = after_gc_async_cell;
     }
 
   return NULL;

@@ -18,346 +18,346 @@
 
 ;;; Commentary:
 ;;;
-;;; Various optimizations can inline calls from one continuation to some
-;;; other continuation, usually in response to information about the
-;;; return arity of the call.  That leaves us with dangling
-;;; continuations that aren't reachable any more from the procedure
-;;; entry.  This pass will remove them.
-;;;
-;;; This pass also kills dead expressions: code that has no side
-;;; effects, and whose value is unused.  It does so by marking all live
-;;; values, and then discarding other values as dead.  This happens
-;;; recursively through procedures, so it should be possible to elide
-;;; dead procedures as well.
+;;; This pass kills dead expressions: code that has no side effects, and
+;;; whose value is unused.  It does so by marking all live values, and
+;;; then discarding other values as dead.  This happens recursively
+;;; through procedures, so it should be possible to elide dead
+;;; procedures as well.
 ;;;
 ;;; Code:
 
 (define-module (language cps dce)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-1)
-  #:use-module (srfi srfi-9)
   #:use-module (language cps)
-  #:use-module (language cps dfg)
   #:use-module (language cps effects-analysis)
   #:use-module (language cps renumber)
-  #:use-module (language cps types)
+  #:use-module (language cps type-checks)
+  #:use-module (language cps utils)
+  #:use-module (language cps intmap)
+  #:use-module (language cps intset)
   #:export (eliminate-dead-code))
 
-(define-record-type $fun-data
-  (make-fun-data min-label effects live-conts defs)
-  fun-data?
-  (min-label fun-data-min-label)
-  (effects fun-data-effects)
-  (live-conts fun-data-live-conts)
-  (defs fun-data-defs))
+(define (fold-local-conts proc conts label seed)
+  (match (intmap-ref conts label)
+    (($ $kfun src meta self tail clause)
+     (let lp ((label label) (seed seed))
+       (if (<= label tail)
+           (lp (1+ label) (proc label (intmap-ref conts label) seed))
+           seed)))))
 
-(define (compute-defs dfg min-label label-count)
-  (define (cont-defs k)
-    (match (lookup-cont k dfg)
-      (($ $kargs names vars) vars)
-      (_ #f)))
-  (define (idx->label idx) (+ idx min-label))
-  (let ((defs (make-vector label-count #f)))
-    (let lp ((n 0))
-      (when (< n label-count)
-        (vector-set!
-         defs
-         n
-         (match (lookup-cont (idx->label n) dfg)
-           (($ $kargs _ _ body)
-            (match (find-call body)
-              (($ $continue k src exp)
-               (match exp
-                 (($ $branch) #f)
-                 (_ (cont-defs k))))))
-           (($ $kreceive arity kargs)
-            (cont-defs kargs))
-           (($ $kclause arity ($ $cont kargs ($ $kargs names syms)))
-            syms)
-           (($ $kfun src meta self) (list self))
-           (($ $ktail) #f)))
-        (lp (1+ n))))
-    defs))
+(define (postorder-fold-local-conts2 proc conts label seed0 seed1)
+  (match (intmap-ref conts label)
+    (($ $kfun src meta self tail clause)
+     (let ((start label))
+       (let lp ((label tail) (seed0 seed0) (seed1 seed1))
+         (if (<= start label)
+             (let ((cont (intmap-ref conts label)))
+               (call-with-values (lambda () (proc label cont seed0 seed1))
+                 (lambda (seed0 seed1)
+                   (lp (1- label) seed0 seed1))))
+             (values seed0 seed1)))))))
 
-(define (elide-type-checks! fun dfg effects min-label label-count)
-  (match fun
-    (($ $cont kfun ($ $kfun src meta min-var))
-     (let ((typev (infer-types fun dfg)))
-       (define (idx->label idx) (+ idx min-label))
-       (define (var->idx var) (- var min-var))
-       (define (visit-primcall lidx fx name args)
-         (when (primcall-types-check? typev (idx->label lidx) name args)
-           (vector-set! effects lidx
-                        (logand fx (lognot &type-check)))))
-       (let lp ((lidx 0))
-         (when (< lidx label-count)
-           (let ((fx (vector-ref effects lidx)))
-             (unless (causes-all-effects? fx)
-               (when (causes-effect? fx &type-check)
-                 (match (lookup-cont (idx->label lidx) dfg)
-                   (($ $kargs _ _ term)
-                    (match (find-call term)
-                      (($ $continue k src ($ $primcall name args))
-                       (visit-primcall lidx fx name args))
-                      (($ $continue k src ($ $branch _ ($primcall name args)))
-                       (visit-primcall lidx fx name args))
-                      (_ #f)))
-                   (_ #f)))))
-           (lp (1+ lidx))))))))
+(define (compute-known-allocations conts effects)
+  "Compute the variables bound in CONTS that have known allocation
+sites."
+  ;; Compute the set of conts that are called with freshly allocated
+  ;; values, and subtract from that set the conts that might be called
+  ;; with values with unknown allocation sites.  Then convert that set
+  ;; of conts into a set of bound variables.
+  (call-with-values
+      (lambda ()
+        (intmap-fold (lambda (label cont known unknown)
+                       ;; Note that we only need to add labels to the
+                       ;; known/unknown sets if the labels can bind
+                       ;; values.  So there's no need to add tail,
+                       ;; clause, branch alternate, or prompt handler
+                       ;; labels, as they bind no values.
+                       (match cont
+                         (($ $kargs _ _ ($ $continue k))
+                          (let ((fx (intmap-ref effects label)))
+                            (if (and (not (causes-all-effects? fx))
+                                     (causes-effect? fx &allocation))
+                                (values (intset-add! known k) unknown)
+                                (values known (intset-add! unknown k)))))
+                         (($ $kreceive arity kargs)
+                          (values known (intset-add! unknown kargs)))
+                         (($ $kfun src meta self tail clause)
+                          (values known unknown))
+                         (($ $kclause arity body alt)
+                          (values known (intset-add! unknown body)))
+                         (($ $ktail)
+                          (values known unknown))))
+                     conts
+                     empty-intset
+                     empty-intset))
+    (lambda (known unknown)
+      (persistent-intset
+       (intset-fold (lambda (label vars)
+                      (match (intmap-ref conts label)
+                        (($ $kargs (_) (var)) (intset-add! vars var))
+                        (_ vars)))
+                    (intset-subtract (persistent-intset known)
+                                     (persistent-intset unknown))
+                    empty-intset)))))
 
-(define (compute-live-code fun)
-  (let* ((fun-data-table (make-hash-table))
-         (dfg (compute-dfg fun #:global? #t))
-         (live-vars (make-bitvector (dfg-var-count dfg) #f))
-         (changed? #f))
-    (define (mark-live! var)
-      (unless (value-live? var)
-        (set! changed? #t)
-        (bitvector-set! live-vars var #t)))
-    (define (value-live? var)
-      (bitvector-ref live-vars var))
-    (define (ensure-fun-data fun)
-      (or (hashq-ref fun-data-table fun)
-          (call-with-values (lambda ()
-                              ((make-local-cont-folder label-count max-label)
-                               (lambda (k cont label-count max-label)
-                                 (values (1+ label-count) (max k max-label)))
-                               fun 0 -1))
-            (lambda (label-count max-label)
-              (let* ((min-label (- (1+ max-label) label-count))
-                     (effects (compute-effects dfg min-label label-count))
-                     (live-conts (make-bitvector label-count #f))
-                     (defs (compute-defs dfg min-label label-count))
-                     (fun-data (make-fun-data
-                                min-label effects live-conts defs)))
-                (elide-type-checks! fun dfg effects min-label label-count)
-                (hashq-set! fun-data-table fun fun-data)
-                (set! changed? #t)
-                fun-data)))))
-    (define (visit-fun fun)
-      (match (ensure-fun-data fun)
-        (($ $fun-data min-label effects live-conts defs)
-         (define (idx->label idx) (+ idx min-label))
-         (define (label->idx label) (- label min-label))
-         (define (known-allocation? var dfg)
-           (match (lookup-predecessors (lookup-def var dfg) dfg)
-             ((def-exp-k)
-              (match (lookup-cont def-exp-k dfg)
-                (($ $kargs _ _ term)
-                 (match (find-call term)
-                   (($ $continue k src ($ $values (var)))
-                    (known-allocation? var dfg))
-                   (($ $continue k src ($ $primcall))
-                    (let ((kidx (label->idx def-exp-k)))
-                      (and (>= kidx 0)
-                           (causes-effect? (vector-ref effects kidx)
-                                           &allocation))))
-                   (_ #f)))
-                (_ #f)))
-             (_ #f)))
-         (define (visit-grey-exp n exp)
-           (let ((defs (vector-ref defs n))
-                 (fx (vector-ref effects n)))
-             (or
-              ;; No defs; perhaps continuation is $ktail.
-              (not defs)
-              ;; Do we have a live def?
-              (or-map value-live? defs)
-              ;; Does this expression cause all effects?  If so, it's
-              ;; definitely live.
-              (causes-all-effects? fx)
-              ;; Does it cause a type check, but we weren't able to
-              ;; prove that the types check?
-              (causes-effect? fx &type-check)
-              ;; We might have a setter.  If the object being assigned
-              ;; to is live or was not created by us, then this
-              ;; expression is live.  Otherwise the value is still dead.
-              (and (causes-effect? fx &write)
-                   (match exp
-                     (($ $primcall
-                         (or 'vector-set! 'vector-set!/immediate
-                             'set-car! 'set-cdr!
-                             'box-set!)
-                         (obj . _))
-                      (or (value-live? obj)
-                          (not (known-allocation? obj dfg))))
-                     (_ #t))))))
-         (let lp ((n (1- (vector-length effects))))
-           (unless (< n 0)
-             (let ((cont (lookup-cont (idx->label n) dfg)))
-               (match cont
-                 (($ $kargs _ _ body)
-                  (let lp ((body body))
-                    (match body
-                      (($ $letk conts body) (lp body))
-                      (($ $continue k src exp)
-                       (unless (bitvector-ref live-conts n)
-                         (when (visit-grey-exp n exp)
-                           (set! changed? #t)
-                           (bitvector-set! live-conts n #t)))
-                       (when (bitvector-ref live-conts n)
-                         (match exp
-                           ((or ($ $const) ($ $prim))
-                            #f)
-                           (($ $fun body)
-                            (visit-fun body))
-                           (($ $rec names syms funs)
-                            (for-each (lambda (sym fun)
-                                        (when (value-live? sym)
-                                          (match fun
-                                            (($ $fun body)
-                                             (visit-fun body)))))
-                                      syms funs))
-                           (($ $prompt escape? tag handler)
-                            (mark-live! tag))
-                           (($ $call proc args)
-                            (mark-live! proc)
-                            (for-each mark-live! args))
-                           (($ $callk k proc args)
-                            (mark-live! proc)
-                            (for-each mark-live! args))
-                           (($ $primcall name args)
-                            (for-each mark-live! args))
-                           (($ $branch k ($ $primcall name args))
-                            (for-each mark-live! args))
-                           (($ $branch k ($ $values (arg)))
-                            (mark-live! arg))
-                           (($ $values args)
-                            (match (vector-ref defs n)
-                              (#f (for-each mark-live! args))
-                              (defs (for-each (lambda (use def)
-                                                (when (value-live? def)
-                                                  (mark-live! use)))
-                                              args defs))))))))))
-                 (($ $kreceive arity kargs) #f)
-                 (($ $kclause arity ($ $cont kargs ($ $kargs names syms body)))
-                  (for-each mark-live! syms))
-                 (($ $kfun src meta self)
-                  (mark-live! self))
-                 (($ $ktail) #f))
-               (lp (1- n))))))))
-    (unless (= (dfg-var-count dfg) (var-counter))
-      (error "internal error" (dfg-var-count dfg) (var-counter)))
-    (let lp ()
-      (set! changed? #f)
-      (visit-fun fun)
-      (when changed? (lp)))
-    (values fun-data-table live-vars)))
+(define (compute-live-code conts)
+  (let* ((effects (compute-effects/elide-type-checks conts))
+         (known-allocations (compute-known-allocations conts effects)))
+    (define (adjoin-var var set)
+      (intset-add set var))
+    (define (adjoin-vars vars set)
+      (match vars
+        (() set)
+        ((var . vars) (adjoin-vars vars (adjoin-var var set)))))
+    (define (var-live? var live-vars)
+      (intset-ref live-vars var))
+    (define (any-var-live? vars live-vars)
+      (match vars
+        (() #f)
+        ((var . vars)
+         (or (var-live? var live-vars)
+             (any-var-live? vars live-vars)))))
+    (define (cont-defs k)
+      (match (intmap-ref conts k)
+        (($ $kargs _ vars) vars)
+        (_ #f)))
 
-(define (process-eliminations fun fun-data-table live-vars)
-  (define (value-live? var)
-    (bitvector-ref live-vars var))
-  (define (make-adaptor name k defs)
-    (let* ((names (map (lambda (_) 'tmp) defs))
-           (syms (map (lambda (_) (fresh-var)) defs))
-           (live (filter-map (lambda (def sym)
-                               (and (value-live? def)
-                                    sym))
-                             defs syms)))
-      (build-cps-cont
-        (name ($kargs names syms
-                ($continue k #f ($values live)))))))
-  (define (visit-fun fun)
-    (match (hashq-ref fun-data-table fun)
-      (($ $fun-data min-label effects live-conts defs)
-       (define (label->idx label) (- label min-label))
-       (define (visit-cont cont)
-         (match (visit-cont* cont)
-           ((cont) cont)))
-       (define (visit-cont* cont)
-         (match cont
-           (($ $cont label cont)
-            (match cont
-              (($ $kargs names syms body)
-               (match (filter-map (lambda (name sym)
-                                    (and (value-live? sym)
-                                         (cons name sym)))
-                                  names syms)
-                 (((names . syms) ...)
-                  (list
-                   (build-cps-cont
-                     (label ($kargs names syms
-                              ,(visit-term body label))))))))
-              (($ $kfun src meta self tail clause)
-               (list
-                (build-cps-cont
-                  (label ($kfun src meta self ,tail
-                           ,(and clause (visit-cont clause)))))))
-              (($ $kclause arity body alternate)
-               (list
-                (build-cps-cont
-                  (label ($kclause ,arity
-                           ,(visit-cont body)
-                           ,(and alternate
-                                 (visit-cont alternate)))))))
-              (($ $kreceive ($ $arity req () rest () #f) kargs)
-               (let ((defs (vector-ref defs (label->idx label))))
-                 (if (and-map value-live? defs)
-                     (list (build-cps-cont (label ,cont)))
-                     (let-fresh (adapt) ()
-                       (list (make-adaptor adapt kargs defs)
-                             (build-cps-cont
-                               (label ($kreceive req rest adapt))))))))
-              (_ (list (build-cps-cont (label ,cont))))))))
-       (define (visit-conts conts)
-         (append-map visit-cont* conts))
-       (define (visit-term term term-k)
-         (match term
-           (($ $letk conts body)
-            (let ((body (visit-term body term-k)))
-              (match (visit-conts conts)
-                (() body)
-                (conts (build-cps-term ($letk ,conts ,body))))))
-           (($ $continue k src ($ $values args))
-            (match (vector-ref defs (label->idx term-k))
-              (#f term)
-              (defs
-                (let ((args (filter-map (lambda (use def)
-                                          (and (value-live? def) use))
-                                        args defs)))
-                  (build-cps-term
-                    ($continue k src ($values args)))))))
-           (($ $continue k src exp)
-            (if (bitvector-ref live-conts (label->idx term-k))
+    (define (visit-live-exp label k exp live-labels live-vars)
+      (match exp
+        ((or ($ $const) ($ $prim))
+         (values live-labels live-vars))
+        (($ $fun body)
+         (values (intset-add live-labels body) live-vars))
+        (($ $closure body)
+         (values (intset-add live-labels body) live-vars))
+        (($ $rec names vars (($ $fun kfuns) ...))
+         (let lp ((vars vars) (kfuns kfuns)
+                  (live-labels live-labels) (live-vars live-vars))
+           (match (vector vars kfuns)
+             (#(() ()) (values live-labels live-vars))
+             (#((var . vars) (kfun . kfuns))
+              (lp vars kfuns
+                  (if (var-live? var live-vars)
+                      (intset-add live-labels kfun)
+                      live-labels)
+                  live-vars)))))
+        (($ $prompt escape? tag handler)
+         (values live-labels (adjoin-var tag live-vars)))
+        (($ $call proc args)
+         (values live-labels (adjoin-vars args (adjoin-var proc live-vars))))
+        (($ $callk kfun proc args)
+         (values (intset-add live-labels kfun)
+                 (adjoin-vars args (adjoin-var proc live-vars))))
+        (($ $primcall name args)
+         (values live-labels (adjoin-vars args live-vars)))
+        (($ $branch k ($ $primcall name args))
+         (values live-labels (adjoin-vars args live-vars)))
+        (($ $branch k ($ $values (arg)))
+         (values live-labels (adjoin-var arg live-vars)))
+        (($ $values args)
+         (values live-labels
+                 (match (cont-defs k)
+                   (#f (adjoin-vars args live-vars))
+                   (defs (fold (lambda (use def live-vars)
+                                 (if (var-live? def live-vars)
+                                     (adjoin-var use live-vars)
+                                     live-vars))
+                               live-vars args defs)))))))
+            
+    (define (visit-exp label k exp live-labels live-vars)
+      (cond
+       ((intset-ref live-labels label)
+        ;; Expression live already.
+        (visit-live-exp label k exp live-labels live-vars))
+       ((let ((defs (cont-defs k))
+              (fx (intmap-ref effects label)))
+          (or
+           ;; No defs; perhaps continuation is $ktail.
+           (not defs)
+           ;; We don't remove branches.
+           (match exp (($ $branch) #t) (_ #f))
+           ;; Do we have a live def?
+           (any-var-live? defs live-vars)
+           ;; Does this expression cause all effects?  If so, it's
+           ;; definitely live.
+           (causes-all-effects? fx)
+           ;; Does it cause a type check, but we weren't able to prove
+           ;; that the types check?
+           (causes-effect? fx &type-check)
+           ;; We might have a setter.  If the object being assigned to
+           ;; is live or was not created by us, then this expression is
+           ;; live.  Otherwise the value is still dead.
+           (and (causes-effect? fx &write)
                 (match exp
-                  (($ $fun body)
-                   (build-cps-term
-                     ($continue k src ($fun ,(visit-fun body)))))
-                  (($ $rec names syms funs)
-                   (rewrite-cps-term
-                       (filter-map
-                        (lambda (name sym fun)
-                          (and (value-live? sym)
-                               (match fun
-                                 (($ $fun body)
-                                  (list name
-                                        sym
-                                        (build-cps-exp
-                                          ($fun ,(visit-fun body))))))))
-                        names syms funs)
-                     (()
-                      ($continue k src ($values ())))
-                     (((names syms funs) ...)
-                      ($continue k src ($rec names syms funs)))))
-                  (_
-                   (match (vector-ref defs (label->idx term-k))
-                     ((or #f ((? value-live?) ...))
-                      (build-cps-term
-                        ($continue k src ,exp)))
-                     (syms
-                      (let-fresh (adapt) ()
-                        (build-cps-term
-                          ($letk (,(make-adaptor adapt k syms))
-                            ($continue adapt src ,exp))))))))
-                (build-cps-term ($continue k src ($values ())))))))
-       (visit-cont fun))))
-  (visit-fun fun))
+                  (($ $primcall
+                      (or 'vector-set! 'vector-set!/immediate
+                          'set-car! 'set-cdr!
+                          'box-set!)
+                      (obj . _))
+                   (or (var-live? obj live-vars)
+                       (not (intset-ref known-allocations obj))))
+                  (_ #t)))))
+        ;; Mark expression as live and visit.
+        (visit-live-exp label k exp (intset-add live-labels label) live-vars))
+       (else
+        ;; Still dead.
+        (values live-labels live-vars))))
 
-(define (eliminate-dead-code fun)
-  (call-with-values (lambda () (renumber fun))
-    (lambda (fun nlabels nvars)
-      (parameterize ((label-counter nlabels)
-                     (var-counter nvars))
-        (call-with-values (lambda () (compute-live-code fun))
-          (lambda (fun-data-table live-vars)
-            (process-eliminations fun fun-data-table live-vars)))))))
+    (define (visit-fun label live-labels live-vars)
+      ;; Visit uses before definitions.
+      (postorder-fold-local-conts2
+       (lambda (label cont live-labels live-vars)
+         (match cont
+           (($ $kargs _ _ ($ $continue k src exp))
+            (visit-exp label k exp live-labels live-vars))
+           (($ $kreceive arity kargs)
+            (values live-labels live-vars))
+           (($ $kclause arity kargs kalt)
+            (values live-labels (adjoin-vars (cont-defs kargs) live-vars)))
+           (($ $kfun src meta self)
+            (values live-labels (adjoin-var self live-vars)))
+           (($ $ktail)
+            (values live-labels live-vars))))
+       conts label live-labels live-vars))
+       
+    (fixpoint (lambda (live-labels live-vars)
+                (let lp ((label 0)
+                         (live-labels live-labels)
+                         (live-vars live-vars))
+                  (match (intset-next live-labels label)
+                    (#f (values live-labels live-vars))
+                    (label
+                     (call-with-values
+                         (lambda ()
+                           (match (intmap-ref conts label)
+                             (($ $kfun)
+                              (visit-fun label live-labels live-vars))
+                             (_ (values live-labels live-vars))))
+                       (lambda (live-labels live-vars)
+                         (lp (1+ label) live-labels live-vars)))))))
+              (intset 0)
+              empty-intset)))
+
+(define-syntax adjoin-conts
+  (syntax-rules ()
+    ((_ (exp ...) clause ...)
+     (let ((cps (exp ...)))
+       (adjoin-conts cps clause ...)))
+    ((_ cps (label cont) clause ...)
+     (adjoin-conts (intmap-add! cps label (build-cont cont))
+       clause ...))
+    ((_ cps)
+     cps)))
+
+(define (process-eliminations conts live-labels live-vars)
+  (define (label-live? label)
+    (intset-ref live-labels label))
+  (define (value-live? var)
+    (intset-ref live-vars var))
+  (define (make-adaptor k src defs)
+    (let* ((names (map (lambda (_) 'tmp) defs))
+           (vars (map (lambda (_) (fresh-var)) defs))
+           (live (filter-map (lambda (def var)
+                               (and (value-live? def) var))
+                             defs vars)))
+      (build-cont
+        ($kargs names vars
+          ($continue k src ($values live))))))
+  (define (visit-term label term cps)
+    (match term
+      (($ $continue k src exp)
+       (if (label-live? label)
+           (match exp
+             (($ $fun body)
+              (values cps
+                      term))
+             (($ $closure body nfree)
+              (values cps
+                      term))
+             (($ $rec names vars funs)
+              (match (filter-map (lambda (name var fun)
+                                   (and (value-live? var)
+                                        (list name var fun)))
+                                 names vars funs)
+                (()
+                 (values cps
+                         (build-term ($continue k src ($values ())))))
+                (((names vars funs) ...)
+                 (values cps
+                         (build-term ($continue k src
+                                       ($rec names vars funs)))))))
+             (_
+              (match (intmap-ref conts k)
+                (($ $kargs ())
+                 (values cps term))
+                (($ $kargs names ((? value-live?) ...))
+                 (values cps term))
+                (($ $kargs names vars)
+                 (match exp
+                   (($ $values args)
+                    (let ((args (filter-map (lambda (use def)
+                                              (and (value-live? def) use))
+                                            args vars)))
+                      (values cps
+                              (build-term
+                                ($continue k src ($values args))))))
+                   (_
+                    (let-fresh (adapt) ()
+                      (values (adjoin-conts cps
+                                (adapt ,(make-adaptor k src vars)))
+                              (build-term
+                                ($continue adapt src ,exp)))))))
+                (_
+                 (values cps term)))))
+           (values cps
+                   (build-term
+                     ($continue k src ($values ()))))))))
+  (define (visit-cont label cont cps)
+    (match cont
+      (($ $kargs names vars term)
+       (match (filter-map (lambda (name var)
+                            (and (value-live? var)
+                                 (cons name var)))
+                          names vars)
+         (((names . vars) ...)
+          (call-with-values (lambda () (visit-term label term cps))
+            (lambda (cps term)
+              (adjoin-conts cps
+                (label ($kargs names vars ,term))))))))
+      (($ $kreceive ($ $arity req () rest () #f) kargs)
+       (let ((defs (match (intmap-ref conts kargs)
+                     (($ $kargs names vars) vars))))
+         (if (and-map value-live? defs)
+             (adjoin-conts cps (label ,cont))
+             (let-fresh (adapt) ()
+               (adjoin-conts cps
+                 (adapt ,(make-adaptor kargs #f defs))
+                 (label ($kreceive req rest adapt)))))))
+      (_
+       (adjoin-conts cps (label ,cont)))))
+  (with-fresh-name-state conts
+    (persistent-intmap
+     (intmap-fold (lambda (label cont cps)
+                    (match cont
+                      (($ $kfun)
+                       (if (label-live? label)
+                           (fold-local-conts visit-cont conts label cps)
+                           cps))
+                      (_ cps)))
+                  conts
+                  empty-intmap))))
+
+(define (eliminate-dead-code conts)
+  ;; We work on a renumbered program so that we can easily visit uses
+  ;; before definitions just by visiting higher-numbered labels before
+  ;; lower-numbered labels.  Renumbering is also a precondition for type
+  ;; inference.
+  (let ((conts (renumber conts)))
+    (call-with-values (lambda () (compute-live-code conts))
+      (lambda (live-labels live-vars)
+        (process-eliminations conts live-labels live-vars)))))
+
+;;; Local Variables:
+;;; eval: (put 'adjoin-conts 'scheme-indent-function 1)
+;;; End:

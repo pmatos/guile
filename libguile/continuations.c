@@ -1,4 +1,4 @@
-/* Copyright (C) 1995,1996,1998,2000,2001,2004, 2006, 2008, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 1995,1996,1998,2000,2001,2004, 2006, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2017 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -30,7 +30,6 @@
 
 #include "libguile/async.h"
 #include "libguile/debug.h"
-#include "libguile/root.h"
 #include "libguile/stackchk.h"
 #include "libguile/smob.h"
 #include "libguile/ports.h"
@@ -92,11 +91,11 @@ continuation_print (SCM obj, SCM port, scm_print_state *state SCM_UNUSED)
 {
   scm_t_contregs *continuation = SCM_CONTREGS (obj);
 
-  scm_puts_unlocked ("#<continuation ", port);
+  scm_puts ("#<continuation ", port);
   scm_intprint (continuation->num_stack_items, 10, port);
-  scm_puts_unlocked (" @ ", port);
+  scm_puts (" @ ", port);
   scm_uintprint (SCM_SMOB_DATA_1 (obj), 16, port);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return 1;
 }
 
@@ -122,6 +121,7 @@ scm_i_make_continuation (int *first, struct scm_vm *vp, SCM vm_cont)
   SCM cont;
   scm_t_contregs *continuation;
   long stack_size;
+  const void *saved_cookie;
   SCM_STACKITEM * src;
 
   SCM_FLUSH_REGISTER_WINDOWS;
@@ -139,6 +139,7 @@ scm_i_make_continuation (int *first, struct scm_vm *vp, SCM vm_cont)
   memcpy (continuation->stack, src, sizeof (SCM_STACKITEM) * stack_size);
   continuation->vp = vp;
   continuation->vm_cont = vm_cont;
+  saved_cookie = vp->resumable_prompt_cookie;
 
   SCM_NEWSMOB (cont, tc16_continuation, continuation);
 
@@ -162,6 +163,7 @@ scm_i_make_continuation (int *first, struct scm_vm *vp, SCM vm_cont)
     }
   else
     {
+      vp->resumable_prompt_cookie = saved_cookie;
       scm_gc_after_nonlocal_exit ();
       return SCM_UNDEFINED;
     }
@@ -182,8 +184,8 @@ scm_i_continuation_to_frame (SCM continuation, struct scm_frame *frame)
       struct scm_vm_cont *data = SCM_VM_CONT_DATA (cont->vm_cont);
 
       frame->stack_holder = data;
-      frame->fp_offset = (data->fp + data->reloc) - data->stack_base;
-      frame->sp_offset = (data->sp + data->reloc) - data->stack_base;
+      frame->fp_offset = data->fp_offset;
+      frame->sp_offset = data->stack_size;
       frame->ip = data->ra;
 
       return 1;
@@ -298,12 +300,6 @@ scm_dynthrow (SCM cont)
   SCM_STACKITEM *dst = thread->continuation_base;
   SCM_STACKITEM stack_top_element;
 
-  if (thread->critical_section_level)
-    {
-      fprintf (stderr, "continuation invoked from within critical section.\n");
-      abort ();
-    }
-
 #if SCM_STACK_GROWS_UP
   if (dst + continuation->num_stack_items >= &stack_top_element)
     grow_stack (cont);
@@ -401,7 +397,7 @@ print_exception_and_backtrace (SCM port, SCM tag, SCM args)
 
   if (should_print_backtrace (tag, stack))
     {
-      scm_puts_unlocked ("Backtrace:\n", port);
+      scm_puts ("Backtrace:\n", port);
       scm_display_backtrace_with_highlights (stack, port,
                                              SCM_BOOL_F, SCM_BOOL_F,
                                              SCM_EOL);

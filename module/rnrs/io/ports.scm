@@ -36,6 +36,9 @@
           transcoder-error-handling-mode native-transcoder
           latin-1-codec utf-8-codec utf-16-codec
            
+          ;; transcoding bytevectors
+          bytevector->string string->bytevector
+
           ;; input & output ports
           port? input-port? output-port?
           port-eof?
@@ -63,10 +66,12 @@
           call-with-bytevector-output-port
           call-with-string-output-port
           make-custom-textual-output-port
+          output-port-buffer-mode
           flush-output-port
 
           ;; input/output ports
           open-file-input/output-port
+          make-custom-binary-input/output-port
 
           ;; binary output
           put-u8 put-bytevector
@@ -100,12 +105,16 @@
           make-i/o-file-does-not-exist-error
           &i/o-port i/o-port-error? make-i/o-port-error
           i/o-error-port
-          &i/o-decoding-error i/o-decoding-error?
+          &i/o-decoding i/o-decoding-error?
           make-i/o-decoding-error
-          &i/o-encoding-error i/o-encoding-error?
+          &i/o-encoding i/o-encoding-error?
           make-i/o-encoding-error i/o-encoding-error-char)
   (import (ice-9 binary-ports)
           (only (rnrs base) assertion-violation)
+          (only (ice-9 ports internal)
+                port-write-buffer port-buffer-bytevector port-line-buffered?)
+          (only (rnrs bytevectors) bytevector-length)
+          (prefix (ice-9 iconv) iconv:)
           (rnrs enums)
           (rnrs records syntactic)
           (rnrs exceptions)
@@ -166,6 +175,33 @@
 
 (define (utf-16-codec)
   "UTF-16")
+
+
+;;;
+;;; Transcoding bytevectors
+;;;
+
+(define (string->bytevector str transcoder)
+  "Encode @var{str} using @var{transcoder}, returning a bytevector."
+  (iconv:string->bytevector
+   str
+   (transcoder-codec transcoder)
+   (case (transcoder-error-handling-mode transcoder)
+     ((raise) 'error)
+     ((replace) 'substitute)
+     (else (error "unsupported error handling mode"
+                  (transcoder-error-handling-mode transcoder))))))
+
+(define (bytevector->string bv transcoder)
+  "Decode @var{bv} using @var{transcoder}, returning a string."
+  (iconv:bytevector->string
+   bv
+   (transcoder-codec transcoder)
+   (case (transcoder-error-handling-mode transcoder)
+     ((raise) 'error)
+     ((replace) 'substitute)
+     (else (error "unsupported error handling mode"
+                  (transcoder-error-handling-mode transcoder))))))
 
 
 ;;;
@@ -310,8 +346,9 @@ read from/written to in @var{port}."
                 (lambda ()
                   (with-fluids ((%default-port-encoding #f))
                     (open filename mode))))))
-    (cond (transcoder
-           (set-port-encoding! port (transcoder-codec transcoder))))
+    (setvbuf port buffer-mode)
+    (when transcoder
+      (set-port-encoding! port (transcoder-codec transcoder)))
     port))
 
 (define (file-options->mode file-options base-mode)
@@ -350,7 +387,11 @@ read from/written to in @var{port}."
 as a string, and a thunk to retrieve the characters associated with that port."
   (let ((port (open-output-string)))
     (values port
-            (lambda () (get-output-string port)))))
+            (lambda ()
+              (let ((s (get-output-string port)))
+                (seek port 0 SEEK_SET)
+                (truncate-file port 0)
+                s)))))
 
 (define* (open-file-output-port filename
                                 #:optional
@@ -382,6 +423,16 @@ return the characters accumulated in that port."
                           close)
                   "w"))
 
+(define (output-port-buffer-mode port)
+  "Return @code{none} if @var{port} is unbuffered, @code{line} if it is
+line buffered, or @code{block} otherwise."
+  (let ((buffering (bytevector-length
+                    (port-buffer-bytevector (port-write-buffer port)))))
+    (cond
+     ((= buffering 1) 'none)
+     ((port-line-buffered? port) 'line)
+     (else 'block))))
+
 (define (flush-output-port port)
   (force-output port))
 
@@ -396,7 +447,7 @@ return the characters accumulated in that port."
 
 (define-syntax with-i/o-encoding-error
   (syntax-rules ()
-    "Convert Guile throws to `encoding-error' to `&i/o-encoding-error'."
+    "Convert Guile throws to `encoding-error' to `&i/o-encoding'."
     ((_ body ...)
      ;; XXX: This is heavyweight for small functions like `put-char'.
      (with-throw-handler 'encoding-error
@@ -437,7 +488,7 @@ return the characters accumulated in that port."
 
 (define-syntax with-i/o-decoding-error
   (syntax-rules ()
-    "Convert Guile throws to `decoding-error' to `&i/o-decoding-error'."
+    "Convert Guile throws to `decoding-error' to `&i/o-decoding'."
     ((_ body ...)
      ;; XXX: This is heavyweight for small functions like `get-char' and
      ;; `lookahead-char'.

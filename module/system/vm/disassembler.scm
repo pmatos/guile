@@ -39,6 +39,7 @@
             instruction-length
             instruction-has-fallthrough?
             instruction-relative-jump-targets
+            instruction-stack-size-after
             instruction-slot-clobbers))
 
 (define-syntax-rule (u32-ref buf n)
@@ -80,70 +81,58 @@
     (define (parse-first-word word type)
       (with-syntax ((word word))
         (case type
-          ((U8_X24)
+          ((X32)
            #'())
-          ((U8_U24)
+          ((X8_S24 X8_F24 X8_C24)
            #'((ash word -8)))
-          ((U8_L24)
+          ((X8_L24)
            #'((unpack-s24 (ash word -8))))
-          ((U8_U8_I16)
+          ((X8_S8_I16)
            #'((logand (ash word -8) #xff)
               (ash word -16)))
-          ((U8_U12_U12)
+          ((X8_S12_S12
+            X8_S12_C12
+            X8_C12_C12
+            X8_F12_F12)
            #'((logand (ash word -8) #xfff)
               (ash word -20)))
-          ((U8_U8_U8_U8)
+          ((X8_S8_S8_S8
+            X8_S8_S8_C8
+            X8_S8_C8_S8)
            #'((logand (ash word -8) #xff)
               (logand (ash word -16) #xff)
               (ash word -24)))
           (else
-           (error "bad kind" type)))))
+           (error "bad head kind" type)))))
 
     (define (parse-tail-word word type)
       (with-syntax ((word word))
         (case type
-          ((U8_X24)
-           #'((logand word #ff)))
-          ((U8_U24)
+          ((C32 I32 A32 B32 AU32 BU32 AS32 BS32 AF32 BF32)
+           #'(word))
+          ((N32 R32 L32 LO32)
+           #'((unpack-s32 word)))
+          ((C8_C24)
            #'((logand word #xff)
               (ash word -8)))
-          ((U8_L24)
-           #'((logand word #xff)
-              (unpack-s24 (ash word -8))))
-          ((U32)
-           #'(word))
-          ((I32)
-           #'(word))
-          ((A32)
-           #'(word))
-          ((B32)
-           #'(word))
-          ((N32)
-           #'((unpack-s32 word)))
-          ((S32)
-           #'((unpack-s32 word)))
-          ((L32)
-           #'((unpack-s32 word)))
-          ((LO32)
-           #'((unpack-s32 word)))
-          ((X8_U24)
-           #'((ash word -8)))
-          ((X8_L24)
-           #'((unpack-s24 (ash word -8))))
-          ((B1_X7_L24)
-           #'((not (zero? (logand word #x1)))
-              (unpack-s24 (ash word -8))))
-          ((B1_U7_L24)
+          ((B1_C7_L24)
            #'((not (zero? (logand word #x1)))
               (logand (ash word -1) #x7f)
               (unpack-s24 (ash word -8))))
-          ((B1_X31)
-           #'((not (zero? (logand word #x1)))))
-          ((B1_X7_U24)
+          ((B1_X7_S24 B1_X7_F24 B1_X7_C24)
            #'((not (zero? (logand word #x1)))
               (ash word -8)))
+          ((B1_X7_L24)
+           #'((not (zero? (logand word #x1)))
+              (unpack-s24 (ash word -8))))
+          ((B1_X31)
+           #'((not (zero? (logand word #x1)))))
+          ((X8_S24 X8_F24 X8_C24)
+           #'((ash word -8)))
+          ((X8_L24)
+           #'((unpack-s24 (ash word -8))))
           (else
-           (error "bad kind" type)))))
+           (error "bad tail kind" type)))))
 
     (syntax-case x ()
       ((_ name opcode word0 word* ...)
@@ -204,8 +193,13 @@ address of that offset."
     (((or 'br
           'br-if-nargs-ne 'br-if-nargs-lt 'br-if-nargs-gt
           'br-if-true 'br-if-null 'br-if-nil 'br-if-pair 'br-if-struct
-          'br-if-char 'br-if-eq 'br-if-eqv 'br-if-equal
+          'br-if-char 'br-if-eq 'br-if-eqv
           'br-if-= 'br-if-< 'br-if-<= 'br-if-> 'br-if->=
+          'br-if-u64-= 'br-if-u64-< 'br-if-u64-<=
+          'br-if-u64-<-scm 'br-if-u64-<=-scm 'br-if-u64-=-scm
+          'br-if-u64->-scm 'br-if-u64->=-scm
+          'br-if-f64-= 'br-if-f64-< 'br-if-f64-<=
+          'br-if-f64-> 'br-if-f64->=
           'br-if-logtest) _ ... target)
      (list "-> ~A" (vector-ref labels (- (+ offset target) start))))
     (('br-if-tc7 slot invert? tc7 target)
@@ -216,6 +210,7 @@ address of that offset."
                         ((13) "vector?")
                         ((15) "string?")
                         ((53) "keyword?")
+                        ((#x3d) "syntax?")
                         ((77) "bytevector?")
                         ((95) "bitvector?")
                         (else (number->string tc7)))))
@@ -230,7 +225,17 @@ address of that offset."
      (list "~S" (unpack-scm (logior (ash high 32) low))))
     (('assert-nargs-ee/locals nargs locals)
      ;; The nargs includes the procedure.
-     (list "~a arg~:p, ~a local~:p" (1- nargs) locals))
+     (list "~a slot~:p (~a arg~:p)" (+ locals nargs) (1- nargs)))
+    (('alloc-frame nlocals)
+     (list "~a slot~:p" nlocals))
+    (('reset-frame nlocals)
+     (list "~a slot~:p" nlocals))
+    (('return-values nlocals)
+     (if (zero? nlocals)
+         (list "all values")
+         (list "~a value~:p" (1- nlocals))))
+    (('bind-rest dst)
+     (list "~a slot~:p" (1+ dst)))
     (('tail-call nargs proc)
      (list "~a arg~:p" nargs))
     (('make-closure dst target nfree)
@@ -296,8 +301,11 @@ address of that offset."
                  ((br
                    br-if-nargs-ne br-if-nargs-lt br-if-nargs-gt
                    br-if-true br-if-null br-if-nil br-if-pair br-if-struct
-                   br-if-char br-if-tc7 br-if-eq br-if-eqv br-if-equal
-                   br-if-= br-if-< br-if-<= br-if-> br-if->= br-if-logtest)
+                   br-if-char br-if-tc7 br-if-eq br-if-eqv
+                   br-if-= br-if-< br-if-<= br-if-> br-if->= br-if-logtest
+                   br-if-u64-= br-if-u64-< br-if-u64-<=
+                   br-if-u64-<-scm br-if-u64-<=-scm br-if-u64-=-scm
+                   br-if-u64->-scm br-if-u64->=-scm)
                   (match arg
                     ((_ ... target)
                      (add-label! (+ offset target) "L"))))
@@ -515,7 +523,7 @@ address of that offset."
   (define non-fallthrough-set
     (static-opcode-set halt
                        tail-call tail-call-label tail-call/shuffle
-                       return return-values
+                       return-values
                        subr-call foreign-call continuation-call
                        tail-apply
                        br))
@@ -548,15 +556,70 @@ address of that offset."
   (let ((opcode (logand (bytevector-u32-native-ref code pos) #xff)))
     ((vector-ref jump-parsers opcode) code pos)))
 
+(define-syntax define-stack-effect-parser
+  (lambda (x)
+    (define (stack-effect-parser name)
+      (case name
+        ((push)
+         #'(lambda (code pos size) (+ size 1)))
+        ((pop)
+         #'(lambda (code pos size) (- size 1)))
+        ((drop)
+         #'(lambda (code pos size)
+             (let ((count (ash (bytevector-u32-native-ref code pos) -8)))
+               (- size count))))
+        ((alloc-frame reset-frame)
+         #'(lambda (code pos size)
+             (let ((nlocals (ash (bytevector-u32-native-ref code pos) -8)))
+               nlocals)))
+        ((receive)
+         #'(lambda (code pos size)
+             (let ((nlocals (ash (bytevector-u32-native-ref code (+ pos 4))
+                                 -8)))
+               nlocals)))
+        ((bind-kwargs)
+         #'(lambda (code pos size)
+             (let ((ntotal (ash (bytevector-u32-native-ref code (+ pos 8)) -8)))
+               ntotal)))
+        ((bind-rest)
+         #'(lambda (code pos size)
+             (let ((dst (ash (bytevector-u32-native-ref code pos) -8)))
+               (+ dst 1))))
+        ((assert-nargs-ee/locals)
+         #'(lambda (code pos size)
+             (let ((nargs (logand (ash (bytevector-u32-native-ref code pos) -8)
+                                  #xfff))
+                   (nlocals (ash (bytevector-u32-native-ref code pos) -20)))
+               (+ nargs nlocals))))
+        ((call call-label)
+         #'(lambda (code pos size) #f))
+        ((tail-call tail-call-label tail-call/shuffle tail-apply)
+         #'(lambda (code pos size) #f))
+        (else
+         #f)))
+    (syntax-case x ()
+      ((_ name opcode kind word0 word* ...)
+       (let ((parser (stack-effect-parser (syntax->datum #'name))))
+         (if parser
+             #`(vector-set! stack-effect-parsers opcode #,parser)
+             #'(begin)))))))
+
+(define stack-effect-parsers (make-vector 256 (lambda (code pos size) size)))
+(visit-opcodes define-stack-effect-parser)
+
+(define (instruction-stack-size-after code pos size)
+  (let ((opcode (logand (bytevector-u32-native-ref code pos) #xff)))
+    ((vector-ref stack-effect-parsers opcode) code pos size)))
+
 (define-syntax define-clobber-parser
   (lambda (x)
     (syntax-case x ()
-      ((_ name opcode kind arg ...)
+      ((_ name opcode kind arg0 arg* ...)
        (case (syntax->datum #'kind)
          ((!)
           (case (syntax->datum #'name)
             ((call call-label)
-             #'(let ((parse (lambda (code pos nslots)
+             #'(let ((parse (lambda (code pos nslots-in nslots-out)
                               (call-with-values
                                   (lambda ()
                                     (disassemble-one code (/ pos 4)))
@@ -564,26 +627,32 @@ address of that offset."
                                   (match elt
                                     ((_ proc . _)
                                      (let lp ((slot (- proc 2)))
-                                       (if (< slot nslots)
+                                       (if (< slot nslots-in)
                                            (cons slot (lp (1+ slot)))
                                            '())))))))))
                  (vector-set! clobber-parsers opcode parse)))
             (else
              #'(begin))))
          ((<-)
-          #'(let ((parse (lambda (code pos nslots)
+          #`(let ((parse (lambda (code pos nslots-in nslots-out)
                            (call-with-values
                                (lambda ()
                                  (disassemble-one code (/ pos 4)))
                              (lambda (len elt)
                                (match elt
-                                 ((_ dst . _) (list dst))))))))
+                                 ((_ dst . _)
+                                  #,(case (syntax->datum #'arg0)
+                                      ((X8_F24 X8_F12_F12)
+                                       #'(list dst))
+                                      (else
+                                       #'(list (- nslots-out 1 dst)))))))))))
               (vector-set! clobber-parsers opcode parse)))
          (else (error "unexpected instruction kind" #'kind)))))))
 
-(define clobber-parsers (make-vector 256 (lambda (code pos nslots) '())))
+(define clobber-parsers
+  (make-vector 256 (lambda (code pos nslots-in nslots-out) '())))
 (visit-opcodes define-clobber-parser)
 
-(define (instruction-slot-clobbers code pos nslots)
+(define (instruction-slot-clobbers code pos nslots-in nslots-out)
   (let ((opcode (logand (bytevector-u32-native-ref code pos) #xff)))
-    ((vector-ref clobber-parsers opcode) code pos nslots)))
+    ((vector-ref clobber-parsers opcode) code pos nslots-in nslots-out)))

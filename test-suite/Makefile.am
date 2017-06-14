@@ -23,10 +23,10 @@
 SUBDIRS = standalone vm
 
 SCM_TESTS = tests/00-initial-env.test		\
+	    tests/00-repl-server.test		\
 	    tests/00-socket.test		\
             tests/alist.test			\
 	    tests/and-let-star.test		\
-	    tests/arbiters.test			\
 	    tests/arrays.test			\
 	    tests/bit-operations.test		\
 	    tests/bitvectors.test		\
@@ -54,6 +54,7 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/eval.test			\
 	    tests/eval-string.test		\
 	    tests/exceptions.test		\
+	    tests/fdes-finalizers.test		\
 	    tests/filesys.test			\
 	    tests/fluids.test			\
 	    tests/foreign.test			\
@@ -115,7 +116,7 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/r6rs-records-syntactic.test	\
 	    tests/r6rs-unicode.test		\
 	    tests/rnrs-libraries.test		\
-	    tests/ramap.test			\
+	    tests/array-map.test		\
 	    tests/random.test			\
 	    tests/rdelim.test			\
 	    tests/reader.test			\
@@ -124,11 +125,13 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/regexp.test			\
 	    tests/rtl.test			\
 	    tests/rtl-compilation.test		\
+	    tests/sandbox.test			\
 	    tests/session.test			\
 	    tests/signals.test			\
 	    tests/sort.test			\
 	    tests/srcprop.test			\
 	    tests/srfi-1.test			\
+	    tests/srfi-2.test			\
 	    tests/srfi-6.test			\
 	    tests/srfi-10.test			\
 	    tests/srfi-11.test			\
@@ -163,6 +166,7 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/streams.test			\
 	    tests/strings.test			\
 	    tests/structs.test			\
+	    tests/suspendable-ports.test	\
 	    tests/sxml.fold.test		\
 	    tests/sxml.match.test		\
 	    tests/sxml.simple.test		\
@@ -174,6 +178,7 @@ SCM_TESTS = tests/00-initial-env.test		\
 	    tests/syntax.test			\
 	    tests/texinfo.test			\
 	    tests/texinfo.docbook.test		\
+	    tests/texinfo.html.test		\
 	    tests/texinfo.serialize.test	\
 	    tests/texinfo.string-utils.test	\
 	    tests/threads.test			\

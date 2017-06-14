@@ -240,6 +240,11 @@
 #define SCM_VALIDATE_CONS(pos, scm) \
   SCM_I_MAKE_VALIDATE_MSG2 (pos, scm, scm_is_pair, "pair")
 
+#ifdef BUILDING_LIBGUILE
+#define SCM_VALIDATE_MUTABLE_PAIR(pos, scm) \
+  SCM_I_MAKE_VALIDATE_MSG2 (pos, scm, scm_is_mutable_pair, "mutable pair")
+#endif /* BUILDING_LIBGUILE */
+
 #define SCM_VALIDATE_LIST(pos, lst) \
   do { \
     SCM_ASSERT (scm_ilength (lst) >= 0, lst, pos, FUNC_NAME); \
@@ -299,6 +304,12 @@
   } while (0)
 
 #define SCM_VALIDATE_VARIABLE(pos, var) SCM_MAKE_VALIDATE_MSG (pos, var, VARIABLEP, "variable")
+
+#define SCM_VALIDATE_ATOMIC_BOX(pos, var) \
+  do { \
+    SCM_ASSERT_TYPE (scm_is_atomic_box (var), var, pos, FUNC_NAME, \
+                     "atomic box");                                \
+  } while (0)
 
 #define SCM_VALIDATE_PROC(pos, proc) \
   do { \

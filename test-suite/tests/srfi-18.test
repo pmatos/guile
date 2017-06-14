@@ -18,6 +18,7 @@
 ;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 (define-module (test-suite test-srfi-18)
+  #:use-module ((ice-9 threads) #:prefix threads:)
   #:use-module (test-suite lib))
 
 ;; two expressions so that the srfi-18 import is in effect for expansion
@@ -43,9 +44,9 @@
   (with-test-prefix "make-thread"
 
     (pass-if "make-thread creates new thread"
-      (let* ((n (length (all-threads)))
+      (let* ((n (length (threads:all-threads)))
              (t (make-thread (lambda () 'foo) 'make-thread-1))
-             (r (> (length (all-threads)) n)))
+             (r (> (length (threads:all-threads)) n)))
         (thread-terminate! t) r)))
 
   (with-test-prefix "thread-name"
@@ -110,7 +111,7 @@
   
     (pass-if "termination destroys non-started thread"
       (let ((t (make-thread (lambda () 'nothing) 'thread-terminate-1))
-            (num-threads (length (all-threads)))
+            (num-threads (length (threads:all-threads)))
             (success #f))
         (thread-terminate! t)
         (with-exception-handler 
@@ -301,6 +302,41 @@
         (thread-join! t)
         (eq? (mutex-state m) 'not-abandoned)))
 
+    (pass-if "recursive lock waits"
+      (let* ((m (make-mutex 'mutex-unlock-2))
+             (t (make-thread (lambda ()
+                               (mutex-lock! m)
+                               (let ((now (time->seconds (current-time))))
+                                 (mutex-lock! m (+ now 0.1)))
+                               (mutex-unlock! m))
+                             'mutex-unlock-2)))
+        (thread-start! t)
+        (thread-join! t)
+        (eq? (mutex-state m) 'not-abandoned)))
+
+    (pass-if "recursive lock unblocked by second thread"
+      (let* ((m1 (make-mutex))
+             (m2 (make-mutex))
+             (c (make-condition-variable)))
+        (mutex-lock! m1)
+        (let ((t (make-thread (lambda ()
+                                (mutex-lock! m1)
+                                (mutex-lock! m2)
+                                (condition-variable-signal! c)
+                                (mutex-unlock! m1)
+                                (mutex-lock! m2)
+                                (mutex-unlock! m2)))))
+          (thread-start! t)
+          (mutex-unlock! m1 c)
+          ;; At this point the thread signalled that it has both m1 and
+          ;; m2, and it will go to try to lock m2 again.  We wait for it
+          ;; to block trying to acquire m2 by sleeping a little bit and
+          ;; then unblock it by unlocking m2 from here.
+          (usleep #e1e5)
+          (mutex-unlock! m2)
+          (thread-join! t)
+          (eq? (mutex-state m2) 'not-abandoned))))
+
     (pass-if "mutex unlock is true when condition is signalled"
       (let* ((m (make-mutex 'mutex-unlock-3))
              (c (make-condition-variable 'mutex-unlock-3))
@@ -375,7 +411,9 @@
                          (mutex-unlock! m1)))
              (dec-sem! (lambda ()
                          (mutex-lock! m1)
-                         (while (eqv? sem 0) (wait-condition-variable c1 m1))
+                         (while (eqv? sem 0)
+                           (mutex-unlock! m1 c1)
+                           (mutex-lock! m1))
                          (set! sem (- sem 1))
                          (mutex-unlock! m1)))
              (t1 (make-thread (lambda () 
@@ -449,13 +487,15 @@
                                 h2 (lambda () 
                                      (mutex-lock! m) 
                                      (condition-variable-signal! c) 
-                                     (wait-condition-variable c m)
+                                     (mutex-unlock! m c)
+                                     (mutex-lock! m)
                                      (and (eq? (current-exception-handler) h2)
                                           (mutex-unlock! m)))))
                              'current-exception-handler-4)))
         (mutex-lock! m)
         (thread-start! t)
-        (wait-condition-variable c m)
+        (mutex-unlock! m c)
+        (mutex-lock! m)
         (and (eq? (current-exception-handler) h1)
              (condition-variable-signal! c)
              (mutex-unlock! m)
@@ -482,7 +522,7 @@
         (with-exception-handler
          (lambda (obj)
            (and (uncaught-exception? obj)
-                (eq? (uncaught-exception-reason obj) 'foo)
+                (equal? (uncaught-exception-reason obj) '(foo))
                 (set! success #t)))
          (lambda () (thread-join! t)))
         success)))))

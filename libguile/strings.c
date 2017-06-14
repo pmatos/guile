@@ -1,4 +1,5 @@
-/* Copyright (C) 1995,1996,1998,2000,2001, 2004, 2006, 2008, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+/* Copyright (C) 1995, 1996, 1998, 2000, 2001, 2004, 2006,
+ *   2008-2016 Free Software Foundation, Inc.
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -35,7 +36,6 @@
 
 #include "libguile/_scm.h"
 #include "libguile/chars.h"
-#include "libguile/root.h"
 #include "libguile/strings.h"
 #include "libguile/ports.h"
 #include "libguile/ports-internal.h"
@@ -50,41 +50,42 @@
 /* {Strings}
  */
 
+SCM_SYMBOL (sym_UTF_8, "UTF-8");
+SCM_SYMBOL (sym_ISO_8859_1, "ISO-8859-1");
+SCM_SYMBOL (sym_error, "error");
 
-/* Stringbufs 
- *
- * XXX - keeping an accurate refcount during GC seems to be quite
- * tricky, so we just keep score of whether a stringbuf might be
- * shared, not whether it definitely is.  
- *
- * The scheme I (mvo) tried to keep an accurate reference count would
- * recount all strings that point to a stringbuf during the mark-phase
- * of the GC.  This was done since one cannot access the stringbuf of
- * a string when that string is freed (in order to decrease the
- * reference count).  The memory of the stringbuf might have been
- * reused already for something completely different.
- *
- * This recounted worked for a small number of threads beating on
- * cow-strings, but it failed randomly with more than 10 threads, say.
- * I couldn't figure out what went wrong, so I used the conservative
- * approach implemented below.
- *
- * There are 2 storage strategies for stringbufs: 8-bit and wide.  8-bit
- * strings are ISO-8859-1-encoded strings; wide strings are 32-bit (UCS-4)
- * strings.
- */
+/* A stringbuf is a linear buffer of characters.  Every string has a
+   stringbuf.  Strings may reference just a slice of a stringbuf; that's
+   often the case for strings made by the "substring" function.
+
+   Stringbufs may hold either 8-bit characters or 32-bit characters.  In
+   either case the characters are Unicode codepoints.  "Narrow"
+   stringbufs thus have the ISO-8859-1 (Latin-1) encoding, and "wide"
+   stringbufs have the UTF-32 (UCS-4) encoding.
+
+   By default, stringbufs are immutable.  This enables an O(1)
+   "substring" operation with no synchronization.  A string-set! will
+   first ensure that the string's stringbuf is mutable, copying the
+   stringbuf if necessary.  This is therefore a copy-on-write
+   representation.  However, taking a substring of a mutable stringbuf
+   is an O(n) operation as it has to create a new immutable stringbuf.
+   There are also mutation-sharing substrings as well.  */
 
 /* The size in words of the stringbuf header (type tag + size).  */
 #define STRINGBUF_HEADER_SIZE   2U
 
 #define STRINGBUF_HEADER_BYTES  (STRINGBUF_HEADER_SIZE * sizeof (SCM))
 
-#define STRINGBUF_F_SHARED      SCM_I_STRINGBUF_F_SHARED
 #define STRINGBUF_F_WIDE        SCM_I_STRINGBUF_F_WIDE
+#define STRINGBUF_F_MUTABLE     SCM_I_STRINGBUF_F_MUTABLE
 
 #define STRINGBUF_TAG           scm_tc7_stringbuf
-#define STRINGBUF_SHARED(buf)   (SCM_CELL_WORD_0(buf) & STRINGBUF_F_SHARED)
 #define STRINGBUF_WIDE(buf)     (SCM_CELL_WORD_0(buf) & STRINGBUF_F_WIDE)
+#define STRINGBUF_MUTABLE(buf)  (SCM_CELL_WORD_0(buf) & STRINGBUF_F_MUTABLE)
+
+
+#define STRINGBUF_SET_MUTABLE(buf) \
+  SCM_SET_CELL_WORD_0 (buf, SCM_CELL_WORD_0 (buf) | STRINGBUF_F_MUTABLE)
 
 #define STRINGBUF_CONTENTS(buf) ((void *)				\
                                  SCM_CELL_OBJECT_LOC (buf,		\
@@ -93,16 +94,6 @@
 #define STRINGBUF_WIDE_CHARS(buf) ((scm_t_wchar *) STRINGBUF_CONTENTS (buf))
 
 #define STRINGBUF_LENGTH(buf)   (SCM_CELL_WORD_1 (buf))
-
-#define SET_STRINGBUF_SHARED(buf)					\
-  do									\
-    {									\
-      /* Don't modify BUF if it's already marked as shared since it might be \
-	 a read-only, statically allocated stringbuf.  */		\
-      if (SCM_LIKELY (!STRINGBUF_SHARED (buf)))				\
-	SCM_SET_CELL_WORD_0 ((buf), SCM_CELL_WORD_0 (buf) | STRINGBUF_F_SHARED); \
-    }									\
-  while (0)
 
 #ifdef SCM_STRING_LENGTH_HISTOGRAM
 static size_t lenhist[1001];
@@ -228,8 +219,6 @@ narrow_stringbuf (SCM buf)
   return new_buf;
 }
 
-scm_i_pthread_mutex_t stringbuf_write_mutex = SCM_I_PTHREAD_MUTEX_INITIALIZER;
-
 
 /* Copy-on-write strings.
  */
@@ -264,15 +253,8 @@ scm_i_pthread_mutex_t stringbuf_write_mutex = SCM_I_PTHREAD_MUTEX_INITIALIZER;
 void
 scm_i_print_stringbuf (SCM exp, SCM port, scm_print_state *pstate) 
 {
-  SCM str;
-
-  scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-  SET_STRINGBUF_SHARED (exp);
-  scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
-
-  str =  scm_double_cell (RO_STRING_TAG, SCM_UNPACK(exp),
-                          0, STRINGBUF_LENGTH (exp));
-
+  SCM str = scm_double_cell (STRING_TAG, SCM_UNPACK(exp), 0,
+                             STRINGBUF_LENGTH (exp));
   scm_puts ("#<stringbuf ", port);
   scm_iprin1 (str, port, pstate);
   scm_puts (">", port);
@@ -286,7 +268,6 @@ static void
 init_null_stringbuf (void)
 {
   null_stringbuf = make_stringbuf (0);
-  SET_STRINGBUF_SHARED (null_stringbuf);
 }
 
 /* Create a scheme string with space for LEN 8-bit Latin-1-encoded
@@ -356,77 +337,109 @@ get_str_buf_start (SCM *str, SCM *buf, size_t *start)
   *buf = STRING_STRINGBUF (*str);
 }
 
+static SCM
+substring_with_immutable_stringbuf (SCM str, size_t start, size_t end,
+                                    int force_copy_p, int read_only_p)
+{
+  SCM buf;
+  size_t str_start, len;
+  scm_t_bits tag = read_only_p ? RO_STRING_TAG : STRING_TAG;
+
+  get_str_buf_start (&str, &buf, &str_start);
+  len = end - start;
+  start += str_start;
+
+  if (len == 0)
+    return scm_i_make_string (0, NULL, read_only_p);
+  else if (!force_copy_p && SCM_LIKELY (!STRINGBUF_MUTABLE (buf)))
+    return scm_double_cell (tag, SCM_UNPACK (buf), start, len);
+  else
+    {
+      SCM new_buf, new_str;
+
+      if (STRINGBUF_WIDE (buf))
+        {
+          new_buf = make_wide_stringbuf (len);
+          u32_cpy ((scm_t_uint32 *) STRINGBUF_WIDE_CHARS (new_buf),
+                   (scm_t_uint32 *) (STRINGBUF_WIDE_CHARS (buf) + start), len);
+          new_str = scm_double_cell (tag, SCM_UNPACK (new_buf), 0, len);
+          scm_i_try_narrow_string (new_str);
+        }
+      else
+        {
+          new_buf = make_stringbuf (len);
+          memcpy (STRINGBUF_CHARS (new_buf),
+                  STRINGBUF_CHARS (buf) + start, len);
+          new_str = scm_double_cell (tag, SCM_UNPACK (new_buf), 0, len);
+        }
+
+      return new_str;
+    }
+}
+
 SCM
 scm_i_substring (SCM str, size_t start, size_t end)
 {
-  if (start == end)
-    return scm_i_make_string (0, NULL, 0);
-  else
-    {
-      SCM buf;
-      size_t str_start;
-      get_str_buf_start (&str, &buf, &str_start);
-      scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-      SET_STRINGBUF_SHARED (buf);
-      scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
-      return scm_double_cell (STRING_TAG, SCM_UNPACK(buf),
-                              (scm_t_bits)str_start + start,
-                              (scm_t_bits) end - start);
-    }
+  return substring_with_immutable_stringbuf (str, start, end, 0, 0);
 }
 
 SCM
 scm_i_substring_read_only (SCM str, size_t start, size_t end)
 {
-  if (start == end)
-    return scm_i_make_string (0, NULL, 1);
-  else
-    {
-      SCM buf;
-      size_t str_start;
-      get_str_buf_start (&str, &buf, &str_start);
-      scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-      SET_STRINGBUF_SHARED (buf);
-      scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
-      return scm_double_cell (RO_STRING_TAG, SCM_UNPACK(buf),
-                              (scm_t_bits)str_start + start,
-                              (scm_t_bits) end - start);
-    }
+  return substring_with_immutable_stringbuf (str, start, end, 0, 1);
 }
 
 SCM
 scm_i_substring_copy (SCM str, size_t start, size_t end)
 {
-  if (start == end)
-    return scm_i_make_string (0, NULL, 0);
-  else
+  return substring_with_immutable_stringbuf (str, start, end, 1, 0);
+}
+
+static void
+scm_i_string_ensure_mutable_x (SCM str)
+{
+  SCM buf;
+
+  if (IS_SH_STRING (str))
     {
-      size_t len = end - start;
-      SCM buf, my_buf, substr;
-      size_t str_start;
-      int wide = 0;
-      get_str_buf_start (&str, &buf, &str_start);
-      if (scm_i_is_narrow_string (str))
-        {
-          my_buf = make_stringbuf (len);
-          memcpy (STRINGBUF_CHARS (my_buf),
-                  STRINGBUF_CHARS (buf) + str_start + start, len);
-        }
-      else
-        {
-          my_buf = make_wide_stringbuf (len);
-          u32_cpy ((scm_t_uint32 *) STRINGBUF_WIDE_CHARS (my_buf),
-                   (scm_t_uint32 *) (STRINGBUF_WIDE_CHARS (buf) + str_start 
-                                     + start), len);
-          wide = 1;
-        }
-      scm_remember_upto_here_1 (buf);
-      substr = scm_double_cell (STRING_TAG, SCM_UNPACK (my_buf),
-                                (scm_t_bits) 0, (scm_t_bits) len);
-      if (wide)
-        scm_i_try_narrow_string (substr);
-      return substr;
+      /* Shared-mutation strings always have mutable stringbufs.  */
+      buf = STRING_STRINGBUF (SH_STRING_STRING (str));
+      if (!STRINGBUF_MUTABLE (buf))
+        abort ();
+      return;
     }
+
+  if (IS_RO_STRING (str))
+    scm_misc_error (NULL, "string is read-only: ~s", scm_list_1 (str));
+
+  buf = STRING_STRINGBUF (str);
+
+  if (STRINGBUF_MUTABLE (buf))
+    return;
+
+  /* Otherwise copy and mark the fresh stringbuf as mutable.  Note that
+     we copy the whole stringbuf so that the start/len offsets from the
+     original string keep working, so that concurrent accessors on this
+     string don't see things in an inconsistent state.  */
+  {
+    SCM new_buf;
+    size_t len = STRINGBUF_LENGTH (buf);
+
+    if (STRINGBUF_WIDE (buf))
+      {
+        new_buf = make_wide_stringbuf (len);
+        u32_cpy ((scm_t_uint32 *) STRINGBUF_WIDE_CHARS (new_buf),
+                 (scm_t_uint32 *) STRINGBUF_WIDE_CHARS (buf), len);
+      }
+    else
+      {
+        new_buf = make_stringbuf (len);
+        memcpy (STRINGBUF_CHARS (new_buf), STRINGBUF_CHARS (buf), len);
+      }
+
+    STRINGBUF_SET_MUTABLE (new_buf);
+    SET_STRING_STRINGBUF (str, new_buf);
+  }
 }
 
 SCM
@@ -436,6 +449,8 @@ scm_i_substring_shared (SCM str, size_t start, size_t end)
     return str;
   else if (start == end)
     return scm_i_make_string (0, NULL, 0);
+  else if (IS_RO_STRING (str))
+    return scm_i_substring_read_only (str, start, end);
   else
     {
       size_t len = end - start;
@@ -444,6 +459,9 @@ scm_i_substring_shared (SCM str, size_t start, size_t end)
 	  start += STRING_START (str);
 	  str = SH_STRING_STRING (str);
 	}
+
+      scm_i_string_ensure_mutable_x (str);
+
       return scm_double_cell (SH_STRING_TAG, SCM_UNPACK(str),
 			      (scm_t_bits)start, (scm_t_bits) len);
     }
@@ -487,6 +505,12 @@ size_t
 scm_i_string_length (SCM str)
 {
   return STRING_LENGTH (str);
+}
+
+int
+scm_i_string_is_mutable (SCM str)
+{
+  return !IS_RO_STRING (str);
 }
 
 /* True if the string is 'narrow', meaning it has a 8-bit Latin-1
@@ -565,60 +589,13 @@ scm_i_string_wide_chars (SCM str)
                     scm_list_1 (str));
 }
 
-/* If the buffer in ORIG_STR is shared, copy ORIG_STR's characters to
+/* If the buffer in ORIG_STR is immutable, copy ORIG_STR's characters to
    a new string buffer, so that it can be modified without modifying
-   other strings.  Also, lock the string mutex.  Later, one must call
-   scm_i_string_stop_writing to unlock the mutex.  */
+   other strings.  */
 SCM
 scm_i_string_start_writing (SCM orig_str)
 {
-  SCM buf, str = orig_str;
-  size_t start;
-
-  get_str_buf_start (&str, &buf, &start);
-  if (IS_RO_STRING (str))
-    scm_misc_error (NULL, "string is read-only: ~s", scm_list_1 (orig_str));
-
-  scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-  if (STRINGBUF_SHARED (buf))
-    {
-      /* Clone the stringbuf.  */
-      size_t len = STRING_LENGTH (str);
-      SCM new_buf;
-
-      scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
-
-      if (scm_i_is_narrow_string (str))
-        {
-          new_buf = make_stringbuf (len);
-          memcpy (STRINGBUF_CHARS (new_buf),
-                  STRINGBUF_CHARS (buf) + STRING_START (str), len);
-
-        }
-      else
-        {
-          new_buf = make_wide_stringbuf (len);
-          u32_cpy ((scm_t_uint32 *) STRINGBUF_WIDE_CHARS (new_buf),
-                   (scm_t_uint32 *) (STRINGBUF_WIDE_CHARS (buf) 
-                                     + STRING_START (str)), len);
-        }
-
-      SET_STRING_STRINGBUF (str, new_buf);
-      start -= STRING_START (str);
-
-      /* FIXME: The following operations are not atomic, so other threads
-	 looking at STR may see an inconsistent state.  Nevertheless it can't
-	 hurt much since (i) accessing STR while it is being mutated can't
-	 yield a crash, and (ii) concurrent accesses to STR should be
-	 protected by a mutex at the application level.  The latter may not
-	 apply when STR != ORIG_STR, though.  */
-      SET_STRING_START (str, 0);
-      SET_STRING_STRINGBUF (str, new_buf);
-
-      buf = new_buf;
-
-      scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-    }
+  scm_i_string_ensure_mutable_x (orig_str);
   return orig_str;
 }
 
@@ -658,7 +635,6 @@ scm_i_string_writable_wide_chars (SCM str)
 void
 scm_i_string_stop_writing (void)
 {
-  scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
 }
 
 /* Return the Xth character of STR as a UCS-4 codepoint.  */
@@ -765,42 +741,10 @@ scm_i_make_symbol (SCM name, scm_t_bits flags,
 		   unsigned long hash, SCM props)
 {
   SCM buf;
-  size_t start = STRING_START (name);
   size_t length = STRING_LENGTH (name);
 
-  if (IS_SH_STRING (name))
-    {
-      name = SH_STRING_STRING (name);
-      start += STRING_START (name);
-    }
+  name = scm_i_substring_copy (name, 0, length);
   buf = STRING_STRINGBUF (name);
-
-  if (start == 0 && length == STRINGBUF_LENGTH (buf))
-    {
-      /* reuse buf. */
-      scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-      SET_STRINGBUF_SHARED (buf);
-      scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
-    }
-  else
-    {
-      /* make new buf. */
-      if (scm_i_is_narrow_string (name))
-        {
-          SCM new_buf = make_stringbuf (length);
-          memcpy (STRINGBUF_CHARS (new_buf),
-                  STRINGBUF_CHARS (buf) + start, length);
-          buf = new_buf;
-        }
-      else
-        {
-          SCM new_buf = make_wide_stringbuf (length);
-          u32_cpy ((scm_t_uint32 *) STRINGBUF_WIDE_CHARS (new_buf),
-                   (scm_t_uint32 *) STRINGBUF_WIDE_CHARS (buf) + start,
-                   length);
-          buf = new_buf;
-        }
-    }
   return scm_double_cell (scm_tc7_symbol | flags, SCM_UNPACK (buf),
 			  (scm_t_bits) hash, SCM_UNPACK (props));
 }
@@ -879,9 +823,6 @@ SCM
 scm_i_symbol_substring (SCM sym, size_t start, size_t end)
 {
   SCM buf = SYMBOL_STRINGBUF (sym);
-  scm_i_pthread_mutex_lock (&stringbuf_write_mutex);
-  SET_STRINGBUF_SHARED (buf);
-  scm_i_pthread_mutex_unlock (&stringbuf_write_mutex);
   return scm_double_cell (RO_STRING_TAG, SCM_UNPACK (buf),
 			  (scm_t_bits)start, (scm_t_bits) end - start);
 }
@@ -918,8 +859,8 @@ SCM_DEFINE (scm_sys_string_dump, "%string-dump", 1, 0, 0, (SCM str),
             "A new string containing this string's stringbuf's characters\n"
             "@item stringbuf-length\n"
             "The number of characters in this stringbuf\n"
-            "@item stringbuf-shared\n"
-            "@code{#t} if this stringbuf is shared\n"
+            "@item stringbuf-mutable\n"
+            "@code{#t} if this stringbuf is mutable\n"
             "@item stringbuf-wide\n"
             "@code{#t} if this stringbuf's characters are stored in a\n"
             "32-bit buffer, or @code{#f} if they are stored in an 8-bit\n"
@@ -981,11 +922,11 @@ SCM_DEFINE (scm_sys_string_dump, "%string-dump", 1, 0, 0, (SCM str),
     }
   e7 = scm_cons (scm_from_latin1_symbol ("stringbuf-length"), 
                  scm_from_size_t (STRINGBUF_LENGTH (buf)));
-  if (STRINGBUF_SHARED (buf))
-    e8 = scm_cons (scm_from_latin1_symbol ("stringbuf-shared"), 
+  if (STRINGBUF_MUTABLE (buf))
+    e8 = scm_cons (scm_from_latin1_symbol ("stringbuf-mutable"),
                    SCM_BOOL_T);
   else
-    e8 = scm_cons (scm_from_latin1_symbol ("stringbuf-shared"), 
+    e8 = scm_cons (scm_from_latin1_symbol ("stringbuf-mutable"),
                    SCM_BOOL_F);
   if (STRINGBUF_WIDE (buf))
     e9 = scm_cons (scm_from_latin1_symbol ("stringbuf-wide"),
@@ -1012,8 +953,8 @@ SCM_DEFINE (scm_sys_symbol_dump, "%symbol-dump", 1, 0, 0, (SCM sym),
             "A new string containing this symbols's stringbuf's characters\n"
             "@item stringbuf-length\n"
             "The number of characters in this stringbuf\n"
-            "@item stringbuf-shared\n"
-            "@code{#t} if this stringbuf is shared\n"
+            "@item stringbuf-mutable\n"
+            "@code{#t} if this stringbuf is mutable\n"
             "@item stringbuf-wide\n"
             "@code{#t} if this stringbuf's characters are stored in a\n"
             "32-bit buffer, or @code{#f} if they are stored in an 8-bit\n"
@@ -1054,11 +995,11 @@ SCM_DEFINE (scm_sys_symbol_dump, "%symbol-dump", 1, 0, 0, (SCM sym),
     }
   e5 = scm_cons (scm_from_latin1_symbol ("stringbuf-length"), 
                  scm_from_size_t (STRINGBUF_LENGTH (buf)));
-  if (STRINGBUF_SHARED (buf))
-    e6 = scm_cons (scm_from_latin1_symbol ("stringbuf-shared"), 
+  if (STRINGBUF_MUTABLE (buf))
+    e6 = scm_cons (scm_from_latin1_symbol ("stringbuf-mutable"),
                    SCM_BOOL_T);
   else
-    e6 = scm_cons (scm_from_latin1_symbol ("stringbuf-shared"), 
+    e6 = scm_cons (scm_from_latin1_symbol ("stringbuf-mutable"),
                    SCM_BOOL_F);
   if (STRINGBUF_WIDE (buf))
     e7 = scm_cons (scm_from_latin1_symbol ("stringbuf-wide"),
@@ -1142,7 +1083,6 @@ SCM_DEFINE (scm_string, "string", 0, 0, 1,
       char *buf;
 
       result = scm_i_make_string (len, NULL, 0);
-      result = scm_i_string_start_writing (result);
       buf = scm_i_string_writable_chars (result);
       while (len > 0 && scm_is_pair (rest))
         {
@@ -1159,7 +1099,6 @@ SCM_DEFINE (scm_string, "string", 0, 0, 1,
       scm_t_wchar *buf;
 
       result = scm_i_make_wide_string (len, NULL, 0);
-      result = scm_i_string_start_writing (result);
       buf = scm_i_string_writable_wide_chars (result);
       while (len > 0 && scm_is_pair (rest))
         {
@@ -1171,7 +1110,6 @@ SCM_DEFINE (scm_string, "string", 0, 0, 1,
           scm_remember_upto_here_1 (elt);
         }
     }
-  scm_i_string_stop_writing ();
 
   if (len > 0)
     scm_misc_error (NULL, "list changed while constructing string", SCM_EOL);
@@ -1190,7 +1128,12 @@ SCM_DEFINE (scm_make_string, "make-string", 1, 1, 0,
 	    "of the string are all set to @code{#\nul}.")
 #define FUNC_NAME s_scm_make_string
 {
-  return scm_c_make_string (scm_to_size_t (k), chr);
+  SCM ret = scm_c_make_string (scm_to_size_t (k), chr);
+  /* Given that make-string is mostly used by Scheme to prepare a
+     mutable string buffer, let's go ahead and mark this as mutable to
+     avoid a copy when this buffer is next written to.  */
+  STRINGBUF_SET_MUTABLE (STRING_STRINGBUF (ret));
+  return ret;
 }
 #undef FUNC_NAME
 
@@ -1208,10 +1151,8 @@ scm_c_make_string (size_t len, SCM chr)
   else
     {
       SCM_VALIDATE_CHAR (0, chr);
-      res = scm_i_string_start_writing (res);
       for (p = 0; p < len; p++)
         scm_i_string_set_x (res, p, SCM_CHAR (chr));
-      scm_i_string_stop_writing ();
     }
 
   return res;
@@ -1610,11 +1551,18 @@ scm_from_locale_string (const char *str)
   return scm_from_locale_stringn (str, -1);
 }
 
+scm_t_string_failed_conversion_handler
+scm_i_default_string_failed_conversion_handler (void)
+{
+  return scm_i_string_failed_conversion_handler
+    (scm_i_default_port_conversion_strategy ());
+}
+
 SCM
 scm_from_locale_stringn (const char *str, size_t len)
 {
   return scm_from_stringn (str, len, locale_charset (),
-                           scm_i_default_port_conversion_handler ());
+                           scm_i_default_string_failed_conversion_handler ());
 }
 
 SCM
@@ -1673,9 +1621,9 @@ scm_from_utf8_stringn (const char *str, size_t len)
 
           ascii = 0;
 
-          nbytes = u8_mbtouc (&c, ustr + i, len - i);
+          nbytes = u8_mbtoucr (&c, ustr + i, len - i);
 
-          if (c == 0xfffd)
+          if (nbytes < 0)
             /* Bad UTF-8.  */
             decoding_error (__func__, errno, str, len);
 
@@ -1756,17 +1704,18 @@ scm_from_port_string (const char *str, SCM port)
 SCM
 scm_from_port_stringn (const char *str, size_t len, SCM port)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
+  scm_t_port *pt = SCM_PORT (port);
 
-  if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1)
+  if (scm_is_eq (pt->encoding, sym_ISO_8859_1))
     return scm_from_latin1_stringn (str, len);
-  else if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_UTF8
-           && (pt->ilseq_handler == SCM_FAILED_CONVERSION_ERROR
+  else if (scm_is_eq (pt->encoding, sym_UTF_8)
+           && (scm_is_eq (pt->conversion_strategy, sym_error)
                || (u8_check ((uint8_t *) str, len) == NULL)))
     return scm_from_utf8_stringn (str, len);
   else
-    return scm_from_stringn (str, len, pt->encoding, pt->ilseq_handler);
+    return scm_from_stringn (str, len, scm_i_symbol_chars (pt->encoding),
+                             scm_i_string_failed_conversion_handler
+                             (SCM_PORT (port)->conversion_strategy));
 }
 
 /* Create a new scheme string from the C string STR.  The memory of
@@ -1937,7 +1886,7 @@ scm_to_locale_stringn (SCM str, size_t *lenp)
 {
   return scm_to_stringn (str, lenp,
                          locale_charset (),
-                         scm_i_default_port_conversion_handler ());
+                         scm_i_default_string_failed_conversion_handler ());
 }
 
 char *
@@ -2053,6 +2002,38 @@ u32_u8_length_in_bytes (const scm_t_uint32 *str, size_t len)
   return ret;
 }
 
+static size_t
+utf8_length (SCM str)
+{
+  if (scm_i_is_narrow_string (str))
+    return latin1_u8_strlen ((scm_t_uint8 *) scm_i_string_chars (str),
+                             scm_i_string_length (str));
+  else
+    return u32_u8_length_in_bytes
+      ((scm_t_uint32 *) scm_i_string_wide_chars (str),
+       scm_i_string_length (str));
+}
+
+size_t
+scm_c_string_utf8_length (SCM string)
+#define FUNC_NAME "scm_c_string_utf8_length"
+{
+  SCM_VALIDATE_STRING (1, string);
+  return utf8_length (string);
+}
+#undef FUNC_NAME
+
+SCM_DEFINE (scm_string_utf8_length, "string-utf8-length", 1, 0, 0,
+	    (SCM string),
+	    "Returns the number of bytes in the UTF-8 representation of "
+            "@var{string}.")
+#define FUNC_NAME s_scm_string_utf8_length
+{
+  SCM_VALIDATE_STRING (1, string);
+  return scm_from_size_t (utf8_length (string));
+}
+#undef FUNC_NAME
+
 char *
 scm_to_utf8_stringn (SCM str, size_t *lenp)
 #define FUNC_NAME "scm_to_utf8_stringn"
@@ -2163,16 +2144,17 @@ scm_to_port_string (SCM str, SCM port)
 char *
 scm_to_port_stringn (SCM str, size_t *lenp, SCM port)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_port_internal *pti = SCM_PORT_GET_INTERNAL (port);
+  scm_t_port *pt = SCM_PORT (port);
 
-  if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_LATIN1
-      && pt->ilseq_handler == SCM_FAILED_CONVERSION_ERROR)
+  if (scm_is_eq (pt->encoding, sym_ISO_8859_1)
+      && scm_is_eq (pt->conversion_strategy, sym_error))
     return scm_to_latin1_stringn (str, lenp);
-  else if (pti->encoding_mode == SCM_PORT_ENCODING_MODE_UTF8)
+  else if (scm_is_eq (pt->encoding, sym_UTF_8))
     return scm_to_utf8_stringn (str, lenp);
   else
-    return scm_to_stringn (str, lenp, pt->encoding, pt->ilseq_handler);
+    return scm_to_stringn (str, lenp, scm_i_symbol_chars (pt->encoding),
+                           scm_i_string_failed_conversion_handler
+                           (SCM_PORT (port)->conversion_strategy));
 }
 
 /* Return a malloc(3)-allocated buffer containing the contents of STR encoded

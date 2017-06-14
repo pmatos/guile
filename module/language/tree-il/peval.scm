@@ -92,7 +92,6 @@
 (define (singly-valued-expression? exp)
   (match exp
     (($ <const>) #t)
-    (($ <lexical-ref>) #t)
     (($ <void>) #t)
     (($ <lexical-ref>) #t)
     (($ <primitive-ref>) #t)
@@ -511,7 +510,15 @@ top-level bindings from ENV and return the resulting expression."
         (lambda ()
           (call-with-values
               (lambda ()
-                (apply (module-ref the-scm-module name) args))
+                (case name
+                  ((eq? eqv?)
+                   ;; Constants will be deduplicated later, but eq?
+                   ;; folding can happen now.  Anticipate the
+                   ;; deduplication by using equal? instead of eq?.
+                   ;; Same for eqv?.
+                   (apply equal? args))
+                  (else
+                   (apply (module-ref the-scm-module name) args))))
             (lambda results
               (values #t results))))
         (lambda _
@@ -944,26 +951,35 @@ top-level bindings from ENV and return the resulting expression."
                                         (map lookup-alias vals)))
               (env (fold extend-env env gensyms ops))
               (body (loop body env counter ctx)))
-         (cond
-          ((const? body)
-           (for-tail (list->seq src (append vals (list body)))))
-          ((and (lexical-ref? body)
-                (memq (lexical-ref-gensym body) new))
-           (let ((sym (lexical-ref-gensym body))
-                 (pairs (map cons new vals)))
-             ;; (let ((x foo) (y bar) ...) x) => (begin bar ... foo)
-             (for-tail
-              (list->seq
-               src
-               (append (map cdr (alist-delete sym pairs eq?))
-                       (list (assq-ref pairs sym)))))))
-          (else
-           ;; Only include bindings for which lexical references
-           ;; have been residualized.
-           (prune-bindings ops #f body counter ctx
-                           (lambda (names gensyms vals body)
-                             (if (null? names) (error "what!" names))
-                             (make-let src names gensyms vals body)))))))
+         (match body
+           (($ <const>)
+            (for-tail (list->seq src (append vals (list body)))))
+           (($ <lexical-ref> _ _ (? (lambda (sym) (memq sym new)) sym))
+            (let ((pairs (map cons new vals)))
+              ;; (let ((x foo) (y bar) ...) x) => (begin bar ... foo)
+              (for-tail
+               (list->seq
+                src
+                (append (map cdr (alist-delete sym pairs eq?))
+                        (list (assq-ref pairs sym)))))))
+           ((and ($ <conditional> src*
+                    ($ <lexical-ref> _ _ sym) ($ <lexical-ref> _ _ sym) alt)
+                 (? (lambda (_)
+                      (case ctx
+                        ((test effect)
+                         (and (equal? (list sym) new)
+                              (= (lexical-refcount sym) 2)))
+                        (else #f)))))
+            ;; (let ((x EXP)) (if x x ALT)) -> (if EXP #t ALT) in test context
+            (make-conditional src* (visit-operand (car ops) counter 'test)
+                              (make-const src* #t) alt))
+           (_
+            ;; Only include bindings for which lexical references
+            ;; have been residualized.
+            (prune-bindings ops #f body counter ctx
+                            (lambda (names gensyms vals body)
+                              (if (null? names) (error "what!" names))
+                              (make-let src names gensyms vals body)))))))
       (($ <letrec> src in-order? names gensyms vals body)
        ;; Note the difference from the `let' case: here we use letrec*
        ;; so that the `visit' procedure for the new operands closes over
@@ -1005,10 +1021,6 @@ top-level bindings from ENV and return the resulting expression."
        ;; reconstruct the let-values, pevaling the consumer.
        (let ((producer (for-values producer)))
          (or (match consumer
-               (($ <lambda-case> src (req-name) #f #f #f () (req-sym) body #f)
-                (for-tail
-                 (make-let src (list req-name) (list req-sym) (list producer)
-                           body)))
                ((and ($ <lambda-case> src () #f rest #f () (rest-sym) body #f)
                      (? (lambda _ (singly-valued-expression? producer))))
                 (let ((tmp (gensym "tmp ")))
@@ -1084,6 +1096,30 @@ top-level bindings from ENV and return the resulting expression."
                subsequent alternate)
             (simplify-conditional
              (make-conditional src pred alternate subsequent)))
+           ;; In the following four cases, we try to expose the test to
+           ;; the conditional.  This will let the CPS conversion avoid
+           ;; reifying boolean literals in some cases.
+           (($ <conditional> src ($ <let> src* names vars vals body)
+               subsequent alternate)
+            (make-let src* names vars vals
+                      (simplify-conditional
+                       (make-conditional src body subsequent alternate))))
+           (($ <conditional> src
+               ($ <letrec> src* in-order? names vars vals body)
+               subsequent alternate)
+            (make-letrec src* in-order? names vars vals
+                         (simplify-conditional
+                          (make-conditional src body subsequent alternate))))
+           (($ <conditional> src ($ <fix> src* names vars vals body)
+               subsequent alternate)
+            (make-fix src* names vars vals
+                      (simplify-conditional
+                       (make-conditional src body subsequent alternate))))
+           (($ <conditional> src ($ <seq> src* head tail)
+               subsequent alternate)
+            (make-seq src* head
+                      (simplify-conditional
+                       (make-conditional src tail subsequent alternate))))
            ;; Special cases for common tests in the predicates of chains
            ;; of if expressions.
            (($ <conditional> src
@@ -1182,6 +1218,19 @@ top-level bindings from ENV and return the resulting expression."
                      (make-begin0 src
                                   (make-call src thunk '())
                                   (make-primcall src 'pop-fluid '()))))))))
+
+      (($ <primcall> src 'with-dynamic-state (state thunk))
+       (for-tail
+        (with-temporaries
+         src (list state thunk) 1 constant-expression?
+         (match-lambda
+          ((state thunk)
+           (make-seq src
+                     (make-primcall src 'push-dynamic-state (list state))
+                     (make-begin0 src
+                                  (make-call src thunk '())
+                                  (make-primcall src 'pop-dynamic-state
+                                                 '()))))))))
 
       (($ <primcall> src 'values exps)
        (cond
@@ -1357,7 +1406,8 @@ top-level bindings from ENV and return the resulting expression."
        (let revisit-proc ((proc (visit orig-proc 'operator)))
          (match proc
            (($ <primitive-ref> _ name)
-            (for-tail (make-primcall src name orig-args)))
+            (for-tail
+             (expand-primcall (make-primcall src name orig-args))))
            (($ <lambda> _ _
                ($ <lambda-case> _ req opt rest #f inits gensyms body #f))
             ;; Simple case: no keyword arguments.

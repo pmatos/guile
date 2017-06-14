@@ -1,6 +1,7 @@
 ;;;; i18n.scm --- internationalization support    -*- coding: utf-8 -*-
 
-;;;;	Copyright (C) 2006, 2007, 2009, 2010, 2012 Free Software Foundation, Inc.
+;;;;	Copyright (C) 2006, 2007, 2009, 2010, 2012,
+;;;;      2017 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -80,7 +81,10 @@
            number->locale-string
 
            ;; miscellaneous
-           locale-yes-regexp locale-no-regexp))
+           locale-yes-regexp locale-no-regexp
+
+           ;; debugging
+           %locale-dump))
 
 
 (eval-when (expand load eval)
@@ -211,7 +215,7 @@
   MON_DECIMAL_POINT    "")
 (define-simple-langinfo-mapping locale-monetary-thousands-separator
   MON_THOUSANDS_SEP    "")
-(define-simple-langinfo-mapping locale-monetary-digit-grouping
+(define-simple-langinfo-mapping locale-monetary-grouping
   MON_GROUPING         '())
 
 (define-monetary-langinfo-mapping locale-currency-symbol-precedes-positive?
@@ -244,6 +248,52 @@
   N_SIGN_POSN         INT_N_SIGN_POSN
   'unspecified        'unspecified)
 
+
+(define (integer->string number)
+  "Return a string representing NUMBER, an integer, written in base 10."
+  (define (digit->char digit)
+    (integer->char (+ digit (char->integer #\0))))
+
+  (if (zero? number)
+      "0"
+      (let loop ((number number)
+                 (digits '()))
+        (if (zero? number)
+            (list->string digits)
+            (loop (quotient number 10)
+                  (cons (digit->char (modulo number 10))
+                        digits))))))
+
+(define (number-decimal-string number digit-count)
+  "Return a string representing the decimal part of NUMBER.  When
+DIGIT-COUNT is an integer, return exactly DIGIT-COUNT digits; when
+DIGIT-COUNT is #t, return as many decimals as necessary, up to an
+arbitrary limit."
+  (define max-decimals
+    5)
+
+  ;; XXX: This is brute-force and could be improved by following one of
+  ;; the "Printing Floating-Point Numbers Quickly and Accurately"
+  ;; papers.
+  (if (integer? digit-count)
+      (let ((number (* (expt 10 digit-count)
+                       (- number (floor number)))))
+        (string-pad (integer->string (round (inexact->exact number)))
+                    digit-count
+                    #\0))
+      (let loop ((decimals 0))
+        (let ((number' (* number (expt 10 decimals))))
+          (if (or (= number' (floor number'))
+                  (>= decimals max-decimals))
+              (let* ((fraction (- number'
+                                  (* (floor number)
+                                     (expt 10 decimals))))
+                     (str      (integer->string
+                                (round (inexact->exact fraction)))))
+                (if (zero? fraction)
+                    ""
+                    str))
+              (loop (+ decimals 1)))))))
 
 (define (%number-integer-part int grouping separator)
   ;; Process INT (a string denoting a number's integer part) and return a new
@@ -335,13 +385,12 @@ locale is used."
                                    (substring dec 0 fraction-digits)
                                    dec)))))
 
-         (external-repr (number->string (if (> amount 0) amount (- amount))))
-         (int+dec   (string-split external-repr #\.))
-         (int       (car int+dec))
-         (dec       (decimal-part (if (null? (cdr int+dec))
-                                      ""
-                                      (cadr int+dec))))
-         (grouping  (locale-monetary-digit-grouping locale))
+         (int       (integer->string (inexact->exact
+                                      (floor (abs amount)))))
+         (dec       (decimal-part
+                     (number-decimal-string (abs amount)
+                                            fraction-digits)))
+         (grouping  (locale-monetary-grouping locale))
          (separator (locale-monetary-thousands-separator locale)))
 
       (add-monetary-sign+currency amount
@@ -369,6 +418,7 @@ locale is used."
                                            (locale %global-locale))
   "Convert @var{number} (an inexact) into a string according to the cultural
 conventions of either @var{locale} (a locale object) or the current locale.
+By default, print as many fractional digits as necessary, up to an upper bound.
 Optionally, @var{fraction-digits} may be bound to an integer specifying the
 number of fractional digits to be displayed."
 
@@ -387,14 +437,11 @@ number of fractional digits to be displayed."
                                    (substring dec 0 fraction-digits)
                                    dec))))))
 
-    (let* ((external-repr (number->string (if (> number 0)
-                                              number
-                                              (- number))))
-           (int+dec   (string-split external-repr #\.))
-           (int       (car int+dec))
-           (dec       (decimal-part (if (null? (cdr int+dec))
-                                        ""
-                                        (cadr int+dec))))
+    (let* ((int       (integer->string (inexact->exact
+                                        (floor (abs number)))))
+           (dec       (decimal-part
+                       (number-decimal-string (abs number)
+                                              fraction-digits)))
            (grouping  (locale-digit-grouping locale))
            (separator (locale-thousands-separator locale)))
 
@@ -414,4 +461,71 @@ number of fractional digits to be displayed."
 
 ;; `YESSTR' and `NOSTR' are considered deprecated so we don't provide them.
 
+
+;;;
+;;; Debugging
+;;;
+
+(define (%locale-dump loc)
+  "Given a locale, display an association list containing all the locale
+information.
+
+This procedure is intended for debugging locale problems, and should
+not be used in production code."
+  (when (locale? loc)
+    (list
+     (cons 'encoding (locale-encoding loc))
+     (cons 'day-short
+           (map (lambda (n) (locale-day-short (1+ n) loc)) (iota 7)))
+     (cons 'day
+           (map (lambda (n) (locale-day (1+ n) loc)) (iota 7)))
+     (cons 'month-short
+           (map (lambda (n) (locale-month-short (1+ n) loc)) (iota 12)))
+     (cons 'month
+           (map (lambda (n) (locale-month (1+ n) loc)) (iota 12)))
+     (cons 'am-string (locale-am-string loc))
+     (cons 'pm-string (locale-pm-string loc))
+     (cons 'date+time-format (locale-date+time-format loc))
+     (cons 'date-format (locale-date-format loc))
+     (cons 'time-format (locale-time-format loc))
+     (cons 'time+am/pm-format (locale-time+am/pm-format loc))
+     (cons 'era (locale-era loc))
+     (cons 'era-year (locale-era-year loc))
+     (cons 'era-date-format (locale-era-date-format loc))
+     (cons 'era-date+time-format (locale-era-date+time-format loc))
+     (cons 'era-time-format (locale-era-time-format loc))
+     (cons 'currency-symbol
+           (list (locale-currency-symbol #t loc)
+                 (locale-currency-symbol #f loc)))
+     (cons 'monetary-decimal-point (locale-monetary-decimal-point loc))
+     (cons 'monetary-thousands-separator (locale-monetary-thousands-separator loc))
+     (cons 'monetary-grouping (locale-monetary-grouping loc))
+     (cons 'monetary-fractional-digits
+           (list (locale-monetary-fractional-digits #t loc)
+                 (locale-monetary-fractional-digits #f loc)))
+     (cons 'currency-symbol-precedes-positive?
+           (list (locale-currency-symbol-precedes-positive? #t loc)
+                 (locale-currency-symbol-precedes-positive? #f loc)))
+     (cons 'currency-symbol-precedes-negative?
+           (list (locale-currency-symbol-precedes-negative? #t loc)
+                 (locale-currency-symbol-precedes-negative? #f loc)))
+     (cons 'positive-separated-by-space?
+           (list (locale-positive-separated-by-space? #t loc)
+                 (locale-positive-separated-by-space? #f loc)))
+     (cons 'negative-separated-by-space?
+           (list (locale-negative-separated-by-space? #t loc)
+                 (locale-negative-separated-by-space? #f loc)))
+     (cons 'monetary-positive-sign (locale-monetary-positive-sign loc))
+     (cons 'monetary-negative-sign (locale-monetary-negative-sign loc))
+     (cons 'positive-sign-position
+           (list (locale-positive-sign-position #t loc)
+                 (locale-negative-sign-position #f loc)))
+     (cons 'negative-sign-position
+           (list (locale-negative-sign-position #t loc)
+                 (locale-negative-sign-position #f loc)))
+     (cons 'digit-grouping (locale-digit-grouping loc))
+     (cons 'decimal-point (locale-decimal-point loc))
+     (cons 'thousands-separator (locale-thousands-separator loc))
+     (cons 'locale-yes-regexp (locale-yes-regexp loc))
+     (cons 'no-regexp (locale-no-regexp loc)))))
 ;;; i18n.scm ends here

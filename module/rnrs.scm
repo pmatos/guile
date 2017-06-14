@@ -160,11 +160,17 @@
 
 	  ;; (rnrs io ports)
 
-	  file-options buffer-mode buffer-mode?
+          &i/o-decoding i/o-decoding-error?
+          make-i/o-decoding-error
+          &i/o-encoding i/o-encoding-error-char i/o-encoding-error?
+          make-i/o-encoding-error
+
+          file-options buffer-mode buffer-mode?
 	  eol-style native-eol-style error-handling-mode
 	  make-transcoder transcoder-codec transcoder-eol-style
           transcoder-error-handling-mode native-transcoder
 	  latin-1-codec utf-8-codec utf-16-codec
+          string->bytevector bytevector->string
 	  
 	  eof-object? port? input-port? output-port? eof-object port-eof?
 	  port-transcoder
@@ -183,7 +189,7 @@
           open-file-input-port open-file-output-port open-file-input/output-port
           make-custom-textual-output-port
           call-with-string-output-port
-	  flush-output-port put-string
+	  output-port-buffer-mode flush-output-port put-string
           get-char get-datum get-line get-string-all get-string-n get-string-n!
           lookahead-char
           put-char put-datum put-string

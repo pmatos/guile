@@ -248,15 +248,6 @@
 #define SCM_DEBUG 0
 #endif
 
-/* If SCM_DEBUG_CELL_ACCESSES is set to 1, cell accesses will perform
- * exhaustive parameter checking:  It will be verified that cell parameters
- * actually point to a valid heap cell.  Note:  If this option is enabled,
- * guile will run about ten times slower than normally.
- */
-#ifndef SCM_DEBUG_CELL_ACCESSES
-#define SCM_DEBUG_CELL_ACCESSES SCM_DEBUG
-#endif
-
 /* If SCM_DEBUG_PAIR_ACCESSES is set to 1, accesses to cons cells will be
  * exhaustively checked.  Note:  If this option is enabled, guile will run
  * slower than normally.
@@ -421,6 +412,10 @@ typedef void *scm_t_subr;
 
 
 
+typedef struct scm_dynamic_state scm_t_dynamic_state;
+
+
+
 /* scm_i_jmp_buf
  *
  * The corresponding SCM_I_SETJMP and SCM_I_LONGJMP are defined in the
@@ -474,11 +469,7 @@ typedef long SCM_STACKITEM;
 #define SCM_STACK_PTR(ptr) ((SCM_STACKITEM *) (void *) (ptr))
 
 
-#ifdef BUILDING_LIBGUILE
-#define SCM_TICK SCM_ASYNC_TICK
-#else
 #define SCM_TICK scm_async_tick ()
-#endif
 
 
 

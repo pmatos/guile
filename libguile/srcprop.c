@@ -33,7 +33,6 @@
 #include "libguile/hashtab.h"
 #include "libguile/hash.h"
 #include "libguile/ports.h"
-#include "libguile/root.h"
 #include "libguile/gc.h"
 
 #include "libguile/validate.h"
@@ -104,11 +103,11 @@ static int
 srcprops_print (SCM obj, SCM port, scm_print_state *pstate)
 {
   int writingp = SCM_WRITINGP (pstate);
-  scm_puts_unlocked ("#<srcprops ", port);
+  scm_puts ("#<srcprops ", port);
   SCM_SET_WRITINGP (pstate, 1);
   scm_iprin1 (scm_srcprops_to_alist (obj), port, pstate);
   SCM_SET_WRITINGP (pstate, writingp);
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return 1;
 }
 
@@ -144,7 +143,7 @@ scm_make_srcprops (long line, int col, SCM filename, SCM copy, SCM alist)
 	{
 	  alist = scm_acons (scm_sym_filename, filename, alist);
 	  if (scm_is_null (old_alist))
-	    SCM_SETCDR (scm_last_alist_filename, alist);
+	    scm_set_cdr_x (scm_last_alist_filename, alist);
 	}
     }
   

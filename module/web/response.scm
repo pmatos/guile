@@ -1,6 +1,6 @@
 ;;; HTTP response objects
 
-;; Copyright (C) 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+;; Copyright (C) 2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
 
 ;; This library is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU Lesser General Public
@@ -22,6 +22,7 @@
 (define-module (web response)
   #:use-module (rnrs bytevectors)
   #:use-module (ice-9 binary-ports)
+  #:use-module (ice-9 textual-ports)
   #:use-module (ice-9 rdelim)
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-9)
@@ -220,7 +221,7 @@ on PORT, perhaps using some transfer encoding."
   (write-response-line (response-version r) (response-code r)
                        (response-reason-phrase r) port)
   (write-headers (response-headers r) port)
-  (display "\r\n" port)
+  (put-string port "\r\n")
   (if (eq? port (response-port r))
       r
       (make-response (response-version r) (response-code r)
@@ -265,7 +266,7 @@ closes PORT, unless KEEP-ALIVE? is true."
   (define close
     (and (not keep-alive?)
          (lambda ()
-           (close port))))
+           (close-port port))))
 
   (make-custom-binary-input-port "delimited input port" read! #f #f close))
 

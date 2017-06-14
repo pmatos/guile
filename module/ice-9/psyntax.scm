@@ -1,7 +1,7 @@
 ;;;; -*-scheme-*-
 ;;;;
 ;;;; Copyright (C) 2001, 2003, 2006, 2009, 2010, 2011,
-;;;;   2012, 2013, 2015 Free Software Foundation, Inc.
+;;;;   2012, 2013, 2015, 2016 Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -165,7 +165,12 @@
 (eval-when (compile)
   (set-current-module (resolve-module '(guile))))
 
-(let ()
+(let ((syntax? (module-ref (current-module) 'syntax?))
+      (make-syntax (module-ref (current-module) 'make-syntax))
+      (syntax-expression (module-ref (current-module) 'syntax-expression))
+      (syntax-wrap (module-ref (current-module) 'syntax-wrap))
+      (syntax-module (module-ref (current-module) 'syntax-module)))
+
   (define-syntax define-expansion-constructors
     (lambda (x)
       (syntax-case x ()
@@ -461,11 +466,31 @@
               (make-letrec src in-order? ids vars val-exps body-exp)))))
 
 
-    ;; FIXME: use a faster gensym
     (define-syntax-rule (build-lexical-var src id)
-      (gensym (string-append (symbol->string id) "-")))
+      ;; Use a per-module counter instead of the global counter of
+      ;; 'gensym' so that the generated identifier is reproducible.
+      (module-gensym (symbol->string id)))
 
-    (define-structure (syntax-object expression wrap module))
+    (define (syntax-object? x)
+      (or (syntax? x)
+          (and (allow-legacy-syntax-objects?)
+               (vector? x)
+               (= (vector-length x) 4)
+               (eqv? (vector-ref x 0) 'syntax-object))))
+    (define (make-syntax-object expression wrap module)
+      (make-syntax expression wrap module))
+    (define (syntax-object-expression obj)
+      (if (syntax? obj)
+          (syntax-expression obj)
+          (vector-ref obj 1)))
+    (define (syntax-object-wrap obj)
+      (if (syntax? obj)
+          (syntax-wrap obj)
+          (vector-ref obj 2)))
+    (define (syntax-object-module obj)
+      (if (syntax? obj)
+          (syntax-module obj)
+          (vector-ref obj 3)))
 
     (define-syntax no-source (identifier-syntax #f))
 
@@ -632,7 +657,7 @@
     ;; labels must be comparable with "eq?", have read-write invariance,
     ;; and distinct from symbols.
     (define (gen-label)
-      (string-append "l-" (session-id) (symbol->string (gensym "-"))))
+      (symbol->string (module-gensym "l")))
 
     (define gen-labels
       (lambda (ls)
@@ -661,7 +686,7 @@
                    (cons 'shift (wrap-subst w)))))
 
     (define-syntax-rule (new-mark)
-      (gensym (string-append "m-" (session-id) "-")))
+      (module-gensym "m"))
 
     ;; make-empty-ribcage and extend-ribcage maintain list-based ribcages for
     ;; internal definitions, in which the ribcages are built incrementally
@@ -1087,9 +1112,18 @@
                       (append (parse1 (car body) r w s m esew mod)
                               exps)))))
           (define (parse1 x r w s m esew mod)
+            (define (current-module-for-expansion mod)
+              (case (car mod)
+                ;; If the module was just put in place for hygiene, in a
+                ;; top-level `begin' always recapture the current
+                ;; module.  If a user wants to override, then we need to
+                ;; use @@ or similar.
+                ((hygiene) (cons 'hygiene (module-name (current-module))))
+                (else mod)))
             (call-with-values
                 (lambda ()
-                  (syntax-type x r w (source-annotation x) ribcage mod #f))
+                  (let ((mod (current-module-for-expansion mod)))
+                    (syntax-type x r w (source-annotation x) ribcage mod #f)))
               (lambda (type value form e w s mod)
                 (case type
                   ((define-form)
@@ -2708,7 +2742,9 @@
           (lambda (ls)
             (arg-check list? ls 'generate-temporaries)
             (let ((mod (cons 'hygiene (module-name (current-module)))))
-              (map (lambda (x) (wrap (gensym "t-") top-wrap mod)) ls))))
+              (map (lambda (x)
+                     (wrap (module-gensym "t") top-wrap mod))
+                   ls))))
 
     (set! free-identifier=?
           (lambda (x y)
@@ -2734,7 +2770,7 @@
                    (and subform (strip subform empty-wrap)))))
 
     (let ()
-      (define (syntax-module id)
+      (define (%syntax-module id)
         (arg-check nonsymbol-id? id 'syntax-module)
         (let ((mod (syntax-object-module id)))
           (and (not (equal? mod '(primitive)))
@@ -2785,7 +2821,7 @@
       ;; compile-time, after the variables are stolen away into (system
       ;; syntax).  See the end of boot-9.scm.
       ;;
-      (define! 'syntax-module syntax-module)
+      (define! '%syntax-module %syntax-module)
       (define! 'syntax-local-binding syntax-local-binding)
       (define! 'syntax-locally-bound-identifiers syntax-locally-bound-identifiers))
     
@@ -2849,7 +2885,8 @@
                            (match (car e) (car y-pat) w r mod)))
                       (values #f #f #f)))))
              ((syntax-object? e)
-              (f (syntax-object-expression e) (join-wraps w e)))
+              (f (syntax-object-expression e)
+                 (join-wraps w (syntax-object-wrap e))))
              (else
               (values '() y-pat (match e z-pat w r mod)))))))
 
@@ -3183,7 +3220,7 @@
                   (result '()))
             (if (eof-object? x)
                 (begin
-                  (close-input-port p)
+                  (close-port p)
                   (reverse result))
                 (f (read p)
                    (cons (datum->syntax k x) result)))))))
@@ -3203,10 +3240,11 @@
        (let ((fn (syntax->datum #'filename)))
          (with-syntax ((fn (datum->syntax
                             #'filename
-                            (or (%search-load-path fn)
-                                (syntax-violation 'include-from-path
-                                                  "file not found in path"
-                                                  x #'filename)))))
+                            (canonicalize-path
+                             (or (%search-load-path fn)
+                                 (syntax-violation 'include-from-path
+                                                   "file not found in path"
+                                                   x #'filename))))))
            #'(include fn)))))))
 
 (define-syntax unquote

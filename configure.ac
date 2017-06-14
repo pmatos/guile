@@ -5,7 +5,7 @@ dnl
 define(GUILE_CONFIGURE_COPYRIGHT,[[
 
 Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-  2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
+  2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Free Software Foundation, Inc.
 
 This file is part of GUILE
 
@@ -39,7 +39,7 @@ dnl Use `serial-tests' so the output `check-guile' is not hidden
 dnl (`parallel-tests' is the default in Automake 1.13.)
 dnl `serial-tests' was introduced in Automake 1.12.
 AM_INIT_AUTOMAKE([1.12 gnu no-define -Wall -Wno-override \
-  serial-tests color-tests dist-xz])
+  serial-tests color-tests dist-lzip dist-xz])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])], [AC_SUBST([AM_DEFAULT_VERBOSITY],1)])
 
 AC_COPYRIGHT(GUILE_CONFIGURE_COPYRIGHT)
@@ -66,6 +66,18 @@ AC_LIBTOOL_WIN32_DLL
 
 AC_PROG_INSTALL
 AC_PROG_CC
+
+# Sadly, there is no released version of Autoconf with a nice
+# C11-ensuring macro.  This should work for gcc/clang within the last 5
+# years though.
+AC_MSG_CHECKING([how to enable C11 support])
+if test "$GCC" = yes; then
+  AC_MSG_RESULT([-std=gnu11])
+  CC="$CC -std=gnu11"
+else
+  AC_MSG_RESULT([assuming $CC supports C11 by default])
+fi
+
 gl_EARLY
 AC_PROG_CPP
 AC_PROG_SED
@@ -83,7 +95,8 @@ AC_DEFINE([GNULIB_LOCK], [1],
   [Define to allow Gnulib modules to use Guile's locks.])
 
 
-AC_PROG_CC_C89
+dnl Guile needs C99 or later.
+gl_PROG_CC_C99
 
 # for per-target cflags in the libguile subdir
 AM_PROG_CC_C_O
@@ -313,6 +326,7 @@ AC_SUBST([SCM_I_GSC_T_PTRDIFF])
 
 AC_CHECK_HEADERS([stdint.h])
 AC_CHECK_HEADERS([inttypes.h])
+AC_CHECK_HEADERS([stdatomic.h])
 
 AC_CHECK_SIZEOF(intmax_t)
 
@@ -617,6 +631,18 @@ AC_SUBST([SCM_I_GSC_T_UINTPTR])
 AC_SUBST([SCM_I_GSC_NEEDS_STDINT_H])
 AC_SUBST([SCM_I_GSC_NEEDS_INTTYPES_H])
 
+AC_MSG_CHECKING([for which prebuilt binary set to use during bootstrap])
+SCM_PREBUILT_BINARIES=
+case "$ac_cv_c_bigendian-$ac_cv_sizeof_void_p" in
+  yes-8) SCM_PREBUILT_BINARIES=64-bit-big-endian;;
+  yes-4) SCM_PREBUILT_BINARIES=32-bit-big-endian;;
+  no-8) SCM_PREBUILT_BINARIES=64-bit-little-endian;;
+  no-4) SCM_PREBUILT_BINARIES=32-bit-little-endian;;
+  *) AC_MSG_ERROR([Unexpected endianness+pointer size combination.])
+esac
+AC_MSG_RESULT($SCM_PREBUILT_BINARIES)
+AC_SUBST([SCM_PREBUILT_BINARIES])
+
 AC_HEADER_STDC
 AC_HEADER_TIME
 AC_HEADER_SYS_WAIT
@@ -715,7 +741,7 @@ case $host in
     AC_CHECK_HEADER(winsock2.h, [AC_DEFINE([HAVE_WINSOCK2_H], 1,
       [Define if you have the <winsock2.h> header file.])])
     AC_CHECK_LIB(ws2_32, main)
-    AC_LIBOBJ([win32-uname])
+    AC_LIBOBJ([posix-w32])
     if test "$enable_shared" = yes ; then
       EXTRA_DEFS="-DSCM_IMPORT"
       AC_DEFINE([USE_DLL_IMPORT], 1,
@@ -752,21 +778,22 @@ AC_CHECK_HEADERS([assert.h crt_externs.h])
 #   isblank - available as a GNU extension or in C99
 #   _NSGetEnviron - Darwin specific
 #   strcoll_l, newlocale, uselocale, utimensat - POSIX.1-2008
+#   strtol_l - non-POSIX, found in glibc
 #   fork - unavailable on Windows
 #   sched_getaffinity, sched_setaffinity - GNU extensions (glibc)
 #   sendfile - non-POSIX, found in glibc
 #
 AC_CHECK_FUNCS([DINFINITY DQNAN cexp chsize clog clog10 ctermid		\
   fesetround ftime ftruncate fchown fchmod getcwd geteuid getsid	\
-  gettimeofday gmtime_r ioctl lstat mkdir mknod nice			\
-  readdir_r readdir64_r readlink rename rmdir setegid seteuid		\
-  setlocale setpgid setsid sigaction siginterrupt stat64		\
+  gettimeofday getuid getgid gmtime_r ioctl lstat mkdir mknod nice	\
+  readlink rename rmdir setegid seteuid		                        \
+  setlocale setuid setgid setpgid setsid sigaction siginterrupt stat64	\
   strptime symlink sync sysconf tcgetpgrp tcsetpgrp uname waitpid	\
   strdup system usleep atexit on_exit chown link fcntl ttyname getpwent	\
   getgrent kill getppid getpgrp fork setitimer getitimer strchr strcmp	\
-  index bcopy memcpy rindex truncate unsetenv isblank _NSGetEnviron	\
-  strcoll strcoll_l newlocale uselocale utimensat sched_getaffinity	\
-  sched_setaffinity sendfile])
+  index bcopy memcpy rindex truncate isblank _NSGetEnviron		\
+  strcoll strcoll_l strtod_l strtol_l newlocale uselocale utimensat	\
+  sched_getaffinity sched_setaffinity sendfile])
 
 # Reasons for testing:
 #   netdb.h - not in mingw
@@ -865,6 +892,57 @@ main (void)
   esac
 fi
 
+# Cygwin and Hurd (circa 2017) and various prior versions defined stub
+# versions of the virtual and profiling itimers that would always fail
+# when called.
+if test "$ac_cv_func_getitimer" = yes; then
+
+  AC_CACHE_CHECK([whether getitimer(ITIMER_PROF) is usable],
+    guile_cv_use_getitimer_prof,
+    [AC_RUN_IFELSE([AC_LANG_SOURCE([[
+#include <sys/time.h>
+int
+main (void)
+{
+  struct itimerval I;
+  if (getitimer (ITIMER_PROF, &I) == 0)
+    return 0;  /* good */
+  else
+    return 1;  /* bad */
+}]])],
+    [guile_cv_use_getitimer_prof=yes],
+    [guile_cv_use_getitimer_prof=no],
+    [guile_cv_use_getitimer_prof="yes, hopefully (cross-compiling)"])])
+  case $guile_cv_use_getitimer_prof in
+    yes*)
+      AC_DEFINE([HAVE_USABLE_GETITIMER_PROF], 1, [Define to 1 if getitimer(ITIMER_PROF, ...) is functional])
+      ;;
+  esac
+
+  AC_CACHE_CHECK([whether getitimer(ITIMER_VIRTUAL) is usable],
+    guile_cv_use_getitimer_virtual,
+    [AC_RUN_IFELSE([AC_LANG_SOURCE([[
+#include <sys/time.h>
+int
+main (void)
+{
+  struct itimerval I;
+  if (getitimer (ITIMER_VIRTUAL, &I) == 0)
+    return 0;  /* good */
+  else
+    return 1;  /* bad */
+}]])],
+    [guile_cv_use_getitimer_virtual=yes],
+    [guile_cv_use_getitimer_virtual=no],
+    [guile_cv_use_getitimer_virtual="yes, hopefully (cross-compiling)"])])
+  case $guile_cv_use_getitimer_virtual in
+    yes*)
+      AC_DEFINE([HAVE_USABLE_GETITIMER_VIRTUAL], 1, [Define to 1 if getitimer(ITIMER_VIRTUAL, ...) is functional])
+      ;;
+  esac
+fi
+
+
 AC_CACHE_SAVE
 
 dnl GMP tests
@@ -889,6 +967,13 @@ dnl GNU libunistring is checked for by Gnulib's `libunistring' module.
 if test "x$LTLIBUNISTRING" = "x"; then
   AC_MSG_ERROR([GNU libunistring is required, please install it.])
 fi
+
+dnl Sloppy check to make sure people aren't trying to use too-old libunistring.
+case "$LIBUNISTRING_VERSION" in
+  0.9.0 | 0.9.1 | 0.9.2 )
+  AC_MSG_ERROR([libunistring too old.  Please install a recent libunistring (>= 0.9.3).])
+  ;;
+esac
 
 GUILE_LIBUNISTRING_WITH_ICONV_SUPPORT
 if test "x$ac_cv_libunistring_with_iconv_support" != "xyes"; then
@@ -1124,14 +1209,15 @@ if test "$enable_regex" = yes; then
    AC_DEFINE([ENABLE_REGEX], 1, [Define when regex support is enabled.])
 fi
 
-AC_REPLACE_FUNCS([strerror memmove mkstemp])
+AC_REPLACE_FUNCS([strerror memmove])
 
 # Reasons for testing:
 #   asinh, acosh, atanh, trunc - C99 standard, generally not available on
 #                                older systems
 #   sincos - GLIBC extension
+#   __sincos - APPLE extension
 #
-AC_CHECK_FUNCS(asinh acosh atanh copysign finite sincos trunc)
+AC_CHECK_FUNCS(asinh acosh atanh copysign finite sincos __sincos trunc)
 
 # C99 specifies isinf and isnan as macros.
 # HP-UX provides only macros, no functions.
@@ -1246,7 +1332,11 @@ main (int argc, char **argv)
 # Boehm's GC library
 #
 #--------------------------------------------------------------------
-PKG_CHECK_MODULES([BDW_GC], [bdw-gc >= 7.2])
+AC_MSG_CHECKING(for which bdw-gc pkg-config file to use)
+AC_ARG_WITH(bdw_gc, [  --with-bdw-gc=PKG       name of BDW-GC pkg-config file],
+            [bdw_gc="$withval"], [bdw_gc=bdw-gc])
+AC_MSG_RESULT($bdw_gc)
+PKG_CHECK_MODULES([BDW_GC], [$bdw_gc >= 7.2])
 
 save_LIBS="$LIBS"
 LIBS="$BDW_GC_LIBS $LIBS"
@@ -1256,7 +1346,7 @@ CFLAGS="$BDW_GC_CFLAGS $CFLAGS"
 AC_CHECK_FUNCS([GC_pthread_exit GC_pthread_cancel GC_pthread_sigmask])
 
 # Functions from GC 7.3.
-AC_CHECK_FUNCS([GC_move_disappearing_link])
+AC_CHECK_FUNCS([GC_move_disappearing_link GC_is_heap_ptr])
 
 LIBS="$save_LIBS"
 
@@ -1643,12 +1733,19 @@ AC_CONFIG_FILES([
   test-suite/standalone/Makefile
   test-suite/vm/Makefile
   meta/Makefile
+  bootstrap/Makefile
   module/Makefile
+  prebuilt/Makefile
+  prebuilt/x86_64-unknown-linux-gnu/Makefile
+  prebuilt/i686-pc-linux-gnu/Makefile
+  prebuilt/mips-unknown-linux-gnu/Makefile
 ])
+
 
 GUILE_CONFIG_SCRIPT([check-guile])
 GUILE_CONFIG_SCRIPT([benchmark-guile])
 GUILE_CONFIG_SCRIPT([meta/guile])
+GUILE_CONFIG_SCRIPT([meta/build-env])
 GUILE_CONFIG_SCRIPT([meta/uninstalled-env])
 GUILE_CONFIG_SCRIPT([meta/gdb-uninstalled-guile])
 GUILE_CONFIG_SCRIPT([libguile/guile-snarf])

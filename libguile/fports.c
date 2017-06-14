@@ -49,6 +49,7 @@
 #include <full-write.h>
 
 #include "libguile/_scm.h"
+#include "libguile/fdes-finalizers.h"
 #include "libguile/strings.h"
 #include "libguile/validate.h"
 #include "libguile/gc.h"
@@ -72,168 +73,8 @@
 #error Oops, unknown OFF_T size
 #endif
 
-scm_t_bits scm_tc16_fport;
+scm_t_port_type *scm_file_port_type;
 
-
-/* default buffer size, used if the O/S won't supply a value.  */
-static const size_t default_buffer_size = 1024;
-
-/* Create FPORT buffers with specified sizes (or -1 to use default size
-   or 0 for no buffer.)  */
-static void
-scm_fport_buffer_add (SCM port, long read_size, long write_size)
-#define FUNC_NAME "scm_fport_buffer_add"
-{
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (read_size == -1 || write_size == -1)
-    {
-      size_t default_size;
-#ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
-      struct stat st;
-      scm_t_fport *fp = SCM_FSTREAM (port);
-      
-      default_size = (fstat (fp->fdes, &st) == -1) ? default_buffer_size
-	: st.st_blksize;
-#else
-      default_size = default_buffer_size;
-#endif
-      if (read_size == -1)
-	read_size = default_size;
-      if (write_size == -1)
-	write_size = default_size;
-    }
-
-  if (SCM_INPUT_PORT_P (port) && read_size > 0)
-    {
-      pt->read_buf = scm_gc_malloc_pointerless (read_size, "port buffer");
-      pt->read_pos = pt->read_end = pt->read_buf;
-      pt->read_buf_size = read_size;
-    }
-  else
-    {
-      pt->read_pos = pt->read_buf = pt->read_end = &pt->shortbuf;
-      pt->read_buf_size = 1;
-    }
-
-  if (SCM_OUTPUT_PORT_P (port) && write_size > 0)
-    {
-      pt->write_buf = scm_gc_malloc_pointerless (write_size, "port buffer");
-      pt->write_pos = pt->write_buf;
-      pt->write_buf_size = write_size;
-    }
-  else
-    {
-      pt->write_buf = pt->write_pos = &pt->shortbuf;
-      pt->write_buf_size = 1;
-    }
-
-  pt->write_end = pt->write_buf + pt->write_buf_size;
-  if (read_size > 0 || write_size > 0)
-    SCM_SET_CELL_WORD_0 (port, SCM_CELL_WORD_0 (port) & ~SCM_BUF0);
-  else
-    SCM_SET_CELL_WORD_0 (port, SCM_CELL_WORD_0 (port) | SCM_BUF0);
-}
-#undef FUNC_NAME
-
-SCM_DEFINE (scm_setvbuf, "setvbuf", 2, 1, 0, 
-            (SCM port, SCM mode, SCM size),
-	    "Set the buffering mode for @var{port}.  @var{mode} can be:\n"
-	    "@table @code\n"
-	    "@item _IONBF\n"
-	    "non-buffered\n"
-	    "@item _IOLBF\n"
-	    "line buffered\n"
-	    "@item _IOFBF\n"
-	    "block buffered, using a newly allocated buffer of @var{size} bytes.\n"
-	    "If @var{size} is omitted, a default size will be used.\n"
-	    "@end table\n\n"
-	    "Only certain types of ports are supported, most importantly\n"
-	    "file ports.")
-#define FUNC_NAME s_scm_setvbuf
-{
-  int cmode;
-  long csize;
-  size_t ndrained;
-  char *drained = NULL;
-  scm_t_port *pt;
-  scm_t_ptob_descriptor *ptob;
-
-  port = SCM_COERCE_OUTPORT (port);
-
-  SCM_VALIDATE_OPENPORT (1, port);
-  ptob = SCM_PORT_DESCRIPTOR (port);
-
-  if (ptob->setvbuf == NULL)
-    scm_wrong_type_arg_msg (FUNC_NAME, 1, port,
-			    "port that supports 'setvbuf'");
-
-  cmode = scm_to_int (mode);
-  if (cmode != _IONBF && cmode != _IOFBF && cmode != _IOLBF)
-    scm_out_of_range (FUNC_NAME, mode);
-
-  if (cmode == _IOLBF)
-    {
-      SCM_SET_CELL_WORD_0 (port, SCM_CELL_WORD_0 (port) | SCM_BUFLINE);
-      cmode = _IOFBF;
-    }
-  else
-    SCM_SET_CELL_WORD_0 (port,
-			 SCM_CELL_WORD_0 (port) & ~(scm_t_bits) SCM_BUFLINE);
-
-  if (SCM_UNBNDP (size))
-    {
-      if (cmode == _IOFBF)
-	csize = -1;
-      else
-	csize = 0;
-    }
-  else
-    {
-      csize = scm_to_int (size);
-      if (csize < 0 || (cmode == _IONBF && csize > 0))
-	scm_out_of_range (FUNC_NAME, size);
-    }
-
-  pt = SCM_PTAB_ENTRY (port);
-
-  if (SCM_INPUT_PORT_P (port))
-    {
-      /* Drain pending input from PORT.  Don't use `scm_drain_input' since
-	 it returns a string, whereas we want binary input here.  */
-      ndrained = pt->read_end - pt->read_pos;
-      if (pt->read_buf == pt->putback_buf)
-	ndrained += pt->saved_read_end - pt->saved_read_pos;
-
-      if (ndrained > 0)
-	{
-	  drained = scm_gc_malloc_pointerless (ndrained, "file port");
-	  scm_take_from_input_buffers (port, drained, ndrained);
-	}
-    }
-  else
-    ndrained = 0;
-
-  if (SCM_OUTPUT_PORT_P (port))
-    scm_flush_unlocked (port);
-
-  if (pt->read_buf == pt->putback_buf)
-    {
-      pt->read_buf = pt->saved_read_buf;
-      pt->read_pos = pt->saved_read_pos;
-      pt->read_end = pt->saved_read_end;
-      pt->read_buf_size = pt->saved_read_buf_size;
-    }
-
-  ptob->setvbuf (port, csize, csize);
-
-  if (ndrained > 0)
-    /* Put DRAINED back to PORT.  */
-    scm_unget_bytes ((unsigned char *) drained, ndrained, port);
-
-  return SCM_UNSPECIFIED;
-}
-#undef FUNC_NAME
 
 /* Move ports with the specified file descriptor to new descriptors,
  * resetting the revealed count to 0.
@@ -243,16 +84,9 @@ scm_i_evict_port (void *closure, SCM port)
 {
   int fd = * (int*) closure;
 
-  if (SCM_FPORTP (port))
+  if (SCM_OPFPORTP (port))
     {
-      scm_t_port *p;
-      scm_t_fport *fp;
-
-      /* XXX: In some cases, we can encounter a port with no associated ptab
-	 entry.  */
-      p = SCM_PTAB_ENTRY (port);
-      fp = (p != NULL) ? (scm_t_fport *) p->stream : NULL;
-
+      scm_t_fport *fp = SCM_FSTREAM (port);
       if ((fp != NULL) && (fp->fdes == fd))
 	{
 	  fp->fdes = dup (fd);
@@ -281,8 +115,8 @@ SCM_DEFINE (scm_file_port_p, "file-port?", 1, 0, 0,
 
 
 static SCM sys_file_port_name_canonicalization;
-SCM_SYMBOL (sym_relative, "relative");
-SCM_SYMBOL (sym_absolute, "absolute");
+static SCM sym_relative;
+static SCM sym_absolute;
 
 static SCM
 fport_canonicalize_filename (SCM filename)
@@ -319,45 +153,20 @@ fport_canonicalize_filename (SCM filename)
     }
 }
 
-/* scm_open_file_with_encoding
-   Return a new port open on a given file.
-
-   The mode string must match the pattern: [rwa+]** which
-   is interpreted in the usual unix way.
-
-   Unless binary mode is requested, the character encoding of the new
-   port is determined as follows: First, if GUESS_ENCODING is true,
-   'file-encoding' is used to guess the encoding of the file.  If
-   GUESS_ENCODING is false or if 'file-encoding' fails, ENCODING is used
-   unless it is also false.  As a last resort, the default port encoding
-   is used.  It is an error to pass a non-false GUESS_ENCODING or
-   ENCODING if binary mode is requested.
-
-   Return the new port. */
-SCM
-scm_open_file_with_encoding (SCM filename, SCM mode,
-                             SCM guess_encoding, SCM encoding)
-#define FUNC_NAME "open-file"
+int
+scm_i_mode_to_open_flags (SCM mode, int *is_binary, const char *FUNC_NAME)
 {
-  SCM port;
-  int fdes, flags = 0, binary = 0;
-  unsigned int retries;
-  char *file;
+  int flags = 0;
   const char *md, *ptr;
 
-  if (SCM_UNLIKELY (!(scm_is_false (encoding) || scm_is_string (encoding))))
-    scm_wrong_type_arg_msg (FUNC_NAME, 0, encoding,
-                            "encoding to be string or false");
-
-  scm_dynwind_begin (0);
-
-  file = scm_to_locale_string (filename);
-  scm_dynwind_free (file);
+  if (SCM_UNLIKELY (!scm_is_string (mode)))
+    scm_out_of_range (FUNC_NAME, mode);
 
   if (SCM_UNLIKELY (!scm_i_try_narrow_string (mode)))
     scm_out_of_range (FUNC_NAME, mode);
 
   md = scm_i_string_chars (mode);
+  *is_binary = 0;
 
   switch (*md)
     {
@@ -382,7 +191,7 @@ scm_open_file_with_encoding (SCM filename, SCM mode,
 	  flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR;
 	  break;
 	case 'b':
-	  binary = 1;
+	  *is_binary = 1;
 #if defined (O_BINARY)
 	  flags |= O_BINARY;
 #endif
@@ -395,6 +204,45 @@ scm_open_file_with_encoding (SCM filename, SCM mode,
 	}
       ptr++;
     }
+
+  return flags;
+}
+
+/* scm_open_file_with_encoding
+   Return a new port open on a given file.
+
+   The mode string must match the pattern: [rwa+]** which
+   is interpreted in the usual unix way.
+
+   Unless binary mode is requested, the character encoding of the new
+   port is determined as follows: First, if GUESS_ENCODING is true,
+   'file-encoding' is used to guess the encoding of the file.  If
+   GUESS_ENCODING is false or if 'file-encoding' fails, ENCODING is used
+   unless it is also false.  As a last resort, the default port encoding
+   is used.  It is an error to pass a non-false GUESS_ENCODING or
+   ENCODING if binary mode is requested.
+
+   Return the new port. */
+SCM
+scm_open_file_with_encoding (SCM filename, SCM mode,
+                             SCM guess_encoding, SCM encoding)
+#define FUNC_NAME "open-file"
+{
+  SCM port;
+  int fdes, flags, binary = 0;
+  unsigned int retries;
+  char *file;
+
+  if (SCM_UNLIKELY (!(scm_is_false (encoding) || scm_is_string (encoding))))
+    scm_wrong_type_arg_msg (FUNC_NAME, 0, encoding,
+                            "encoding to be string or false");
+
+  scm_dynwind_begin (0);
+
+  file = scm_to_locale_string (filename);
+  scm_dynwind_free (file);
+
+  flags = scm_i_mode_to_open_flags (mode, &binary, FUNC_NAME);
 
   for (retries = 0, fdes = -1;
        fdes < 0 && retries < 2;
@@ -419,7 +267,8 @@ scm_open_file_with_encoding (SCM filename, SCM mode,
   /* Create a port from this file descriptor.  The port's encoding is initially
      %default-port-encoding.  */
   port = scm_i_fdes_to_port (fdes, scm_i_mode_bits (mode),
-                             fport_canonicalize_filename (filename));
+                             fport_canonicalize_filename (filename),
+                             0);
 
   if (binary)
     {
@@ -546,45 +395,44 @@ SCM_DEFINE (scm_i_open_file, "open-file", 2, 0, 1,
    NAME is a string to be used as the port's filename.
 */
 SCM
-scm_i_fdes_to_port (int fdes, long mode_bits, SCM name)
+scm_i_fdes_to_port (int fdes, long mode_bits, SCM name, unsigned options)
 #define FUNC_NAME "scm_fdes_to_port"
 {
   SCM port;
   scm_t_fport *fp;
 
-  /* Test that fdes is valid.  */
-#ifdef F_GETFL
-  int flags = fcntl (fdes, F_GETFL, 0);
-  if (flags == -1)
-    SCM_SYSERROR;
-  flags &= O_ACCMODE;
-  if (flags != O_RDWR
-      && ((flags != O_WRONLY && (mode_bits & SCM_WRTNG))
-	  || (flags != O_RDONLY && (mode_bits & SCM_RDNG))))
+  if (options & SCM_FPORT_OPTION_VERIFY)
     {
-      SCM_MISC_ERROR ("requested file mode not available on fdes", SCM_EOL);
-    }
+      /* Check that the foreign FD is valid and matches the mode
+         bits.  */
+#ifdef F_GETFL
+      int flags = fcntl (fdes, F_GETFL, 0);
+      if (flags == -1)
+        SCM_SYSERROR;
+      flags &= O_ACCMODE;
+      if (flags != O_RDWR
+          && ((flags != O_WRONLY && (mode_bits & SCM_WRTNG))
+              || (flags != O_RDONLY && (mode_bits & SCM_RDNG))))
+        {
+          SCM_MISC_ERROR ("requested file mode not available on fdes",
+                          SCM_EOL);
+        }
 #else
-  /* If we don't have F_GETFL, as on mingw, at least we can test that
-     it is a valid file descriptor.  */
-  struct stat st;
-  if (fstat (fdes, &st) != 0)
-    SCM_SYSERROR;
+      /* If we don't have F_GETFL, as on mingw, at least we can test that
+         it is a valid file descriptor.  */
+      struct stat st;
+      if (fstat (fdes, &st) != 0)
+        SCM_SYSERROR;
 #endif
+    }
 
   fp = (scm_t_fport *) scm_gc_malloc_pointerless (sizeof (scm_t_fport),
                                                   "file port");
   fp->fdes = fdes;
+  fp->options = options;
 
-  port = scm_c_make_port (scm_tc16_fport, mode_bits, (scm_t_bits)fp);
+  port = scm_c_make_port (scm_file_port_type, mode_bits, (scm_t_bits)fp);
   
-  SCM_PTAB_ENTRY (port)->rw_random = SCM_FDES_RANDOM_P (fdes);
-
-  if (mode_bits & SCM_BUF0)
-    scm_fport_buffer_add (port, 0, 0);
-  else
-    scm_fport_buffer_add (port, -1, -1);
-
   SCM_SET_FILENAME (port, name);
 
   return port;
@@ -594,7 +442,8 @@ scm_i_fdes_to_port (int fdes, long mode_bits, SCM name)
 SCM
 scm_fdes_to_port (int fdes, char *mode, SCM name)
 {
-  return scm_i_fdes_to_port (fdes, scm_mode_bits (mode), name);
+  return scm_i_fdes_to_port (fdes, scm_mode_bits (mode), name,
+                             SCM_FPORT_OPTION_VERIFY);
 }
 
 /* Return a lower bound on the number of bytes available for input.  */
@@ -712,7 +561,7 @@ SCM_DEFINE (scm_adjust_port_revealed_x, "adjust-port-revealed!", 2, 0, 0,
 static int 
 fport_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED)
 {
-  scm_puts_unlocked ("#<", port);
+  scm_puts ("#<", port);
   scm_print_port_mode (exp, port);    
   if (SCM_OPFPORTP (exp))
     {
@@ -721,8 +570,8 @@ fport_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED)
       if (scm_is_string (name) || scm_is_symbol (name))
 	scm_display (name, port);
       else
-	scm_puts_unlocked (SCM_PTOBNAME (SCM_PTOBNUM (exp)), port);
-      scm_putc_unlocked (' ', port);
+	scm_puts (SCM_PORT_TYPE (exp)->name, port);
+      scm_putc (' ', port);
       fdes = (SCM_FSTREAM (exp))->fdes;
 
 #if (defined HAVE_TTYNAME) && (defined HAVE_POSIX)
@@ -734,85 +583,72 @@ fport_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED)
     }
   else
     {
-      scm_puts_unlocked (SCM_PTOBNAME (SCM_PTOBNUM (exp)), port);
-      scm_putc_unlocked (' ', port);
-      scm_uintprint ((scm_t_bits) SCM_PTAB_ENTRY (exp), 16, port);
+      scm_puts (SCM_PORT_TYPE (exp)->name, port);
+      scm_putc (' ', port);
+      scm_uintprint ((scm_t_bits) SCM_PORT (exp), 16, port);
     }
-  scm_putc_unlocked ('>', port);
+  scm_putc ('>', port);
   return 1;
 }
 
-static void fport_flush (SCM port);
-
 /* fill a port's read-buffer with a single read.  returns the first
    char or EOF if end of file.  */
-static scm_t_wchar
-fport_fill_input (SCM port)
+static size_t
+fport_read (SCM port, SCM dst, size_t start, size_t count)
 {
-  long count;
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
   scm_t_fport *fp = SCM_FSTREAM (port);
+  signed char *ptr = SCM_BYTEVECTOR_CONTENTS (dst) + start;
+  ssize_t ret;
 
-  SCM_SYSCALL (count = read (fp->fdes, pt->read_buf, pt->read_buf_size));
-  if (count == -1)
-    scm_syserror ("fport_fill_input");
-  if (count == 0)
-    return (scm_t_wchar) EOF;
-  else
+ retry:
+  ret = read (fp->fdes, ptr, count);
+  if (ret < 0)
     {
-      pt->read_pos = pt->read_buf;
-      pt->read_end = pt->read_buf + count;
-      return *pt->read_buf;
+      if (errno == EINTR)
+        {
+          scm_async_tick ();
+          goto retry;
+        }
+      if (errno == EWOULDBLOCK || errno == EAGAIN)
+        return -1;
+      scm_syserror ("fport_read");
     }
+  return ret;
+}
+
+static size_t
+fport_write (SCM port, SCM src, size_t start, size_t count)
+{
+  int fd = SCM_FPORT_FDES (port);
+  signed char *ptr = SCM_BYTEVECTOR_CONTENTS (src) + start;
+  ssize_t ret;
+
+ retry:
+  ret = write (fd, ptr, count);
+  if (ret < 0)
+    {
+      if (errno == EINTR)
+        {
+          scm_async_tick ();
+          goto retry;
+        }
+      if (errno == EWOULDBLOCK || errno == EAGAIN)
+        return -1;
+      scm_syserror ("fport_write");
+    }
+
+  return ret;
 }
 
 static scm_t_off
 fport_seek (SCM port, scm_t_off offset, int whence)
 {
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
   scm_t_fport *fp = SCM_FSTREAM (port);
-  off_t_or_off64_t rv;
   off_t_or_off64_t result;
 
-  if (pt->rw_active == SCM_PORT_WRITE)
-    {
-      if (offset != 0 || whence != SEEK_CUR)
-	{
-	  fport_flush (port);
-	  result = rv = lseek_or_lseek64 (fp->fdes, offset, whence);
-	}
-      else
-	{
-	  /* read current position without disturbing the buffer.  */
-	  rv = lseek_or_lseek64 (fp->fdes, offset, whence);
-	  result = rv + (pt->write_pos - pt->write_buf);
-	}
-    }
-  else if (pt->rw_active == SCM_PORT_READ)
-    {
-      if (offset != 0 || whence != SEEK_CUR)
-	{
-	  /* could expand to avoid a second seek.  */
-	  scm_end_input_unlocked (port);
-	  result = rv = lseek_or_lseek64 (fp->fdes, offset, whence);
-	}
-      else
-	{
-	  /* read current position without disturbing the buffer
-	     (particularly the unread-char buffer).  */
-	  rv = lseek_or_lseek64 (fp->fdes, offset, whence);
-	  result = rv - (pt->read_end - pt->read_pos);
+  result = lseek_or_lseek64 (fp->fdes, offset, whence);
 
-	  if (pt->read_buf == pt->putback_buf)
-	    result -= pt->saved_read_end - pt->saved_read_pos;
-	}
-    }
-  else /* SCM_PORT_NEITHER */
-    {
-      result = rv = lseek_or_lseek64 (fp->fdes, offset, whence);
-    }
-
-  if (rv == -1)
+  if (result == -1)
     scm_syserror ("fport_seek");
 
   return result;
@@ -828,162 +664,69 @@ fport_truncate (SCM port, scm_t_off length)
 }
 
 static void
-fport_write (SCM port, const void *data, size_t size)
-#define FUNC_NAME "fport_write"
-{
-  /* this procedure tries to minimize the number of writes/flushes.  */
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-
-  if (pt->write_buf == &pt->shortbuf
-      || (pt->write_pos == pt->write_buf && size >= pt->write_buf_size))
-    {
-      /* Unbuffered port, or port with empty buffer and data won't fit in
-	 buffer.  */
-      if (full_write (SCM_FPORT_FDES (port), data, size) < size)
-	SCM_SYSERROR;
-
-      return;
-    }
-
-  {
-    scm_t_off space = pt->write_end - pt->write_pos;
-
-    if (size <= space)
-      {
-	/* data fits in buffer.  */
-	memcpy (pt->write_pos, data, size);
-	pt->write_pos += size;
-	if (pt->write_pos == pt->write_end)
-	  {
-	    fport_flush (port);
-	    /* we can skip the line-buffering check if nothing's buffered. */
-	    return;
-	  }
-      }
-    else
-      {
-	memcpy (pt->write_pos, data, space);
-	pt->write_pos = pt->write_end;
-	fport_flush (port);
-	{
-	  const void *ptr = ((const char *) data) + space;
-	  size_t remaining = size - space;
-
-	  if (size >= pt->write_buf_size)
-	    {
-	      if (full_write (SCM_FPORT_FDES (port), ptr, remaining)
-		  < remaining)
-		SCM_SYSERROR;
-	      return;
-	    }
-	  else
-	    {
-	      memcpy (pt->write_pos, ptr, remaining);
-	      pt->write_pos += remaining;
-	    }
-	}
-      }
-
-    /* handle line buffering.  */     
-    if ((SCM_CELL_WORD_0 (port) & SCM_BUFLINE) && memchr (data, '\n', size))
-      fport_flush (port);
-  }
-}
-#undef FUNC_NAME
-
-static void
-fport_flush (SCM port)
-{
-  size_t written;
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  scm_t_fport *fp = SCM_FSTREAM (port);
-  size_t count = pt->write_pos - pt->write_buf;
-
-  written = full_write (fp->fdes, pt->write_buf, count);
-  if (written < count)
-    scm_syserror ("scm_flush");
-
-  pt->write_pos = pt->write_buf;
-  pt->rw_active = SCM_PORT_NEITHER;
-}
-
-/* clear the read buffer and adjust the file position for unread bytes. */
-static void
-fport_end_input (SCM port, int offset)
-{
-  scm_t_fport *fp = SCM_FSTREAM (port);
-  scm_t_port *pt = SCM_PTAB_ENTRY (port);
-  
-  offset += pt->read_end - pt->read_pos;
-
-  if (offset > 0)
-    {
-      pt->read_pos = pt->read_end;
-      /* will throw error if unread-char used at beginning of file
-	 then attempting to write.  seems correct.  */
-      if (lseek (fp->fdes, -offset, SEEK_CUR) == -1)
-	scm_syserror ("fport_end_input");
-    }
-  pt->rw_active = SCM_PORT_NEITHER;
-}
-
-static void
-close_the_fd (void *data)
-{
-  scm_t_fport *fp = data;
-
-  close (fp->fdes);
-  /* There's already one exception.  That's probably enough!  */
-  errno = 0;
-}
-
-static int
 fport_close (SCM port)
 {
   scm_t_fport *fp = SCM_FSTREAM (port);
-  int rv;
 
-  scm_dynwind_begin (0);
-  scm_dynwind_unwind_handler (close_the_fd, fp, 0);
-  fport_flush (port);
-  scm_dynwind_end ();
-
-  scm_port_non_buffer (SCM_PTAB_ENTRY (port));
-
-  rv = close (fp->fdes);
-  if (rv)
+  scm_run_fdes_finalizers (fp->fdes);
+  if (close (fp->fdes) != 0)
     /* It's not useful to retry after EINTR, as the file descriptor is
        in an undefined state.  See http://lwn.net/Articles/365294/.
        Instead just throw an error if close fails, trusting that the fd
        was cleaned up.  */
     scm_syserror ("fport_close");
-
-  return 0;
 }
 
-static size_t
-fport_free (SCM port)
+static int
+fport_random_access_p (SCM port)
 {
-  fport_close (port);
-  return 0;
+  scm_t_fport *fp = SCM_FSTREAM (port);
+
+  if (fp->options & SCM_FPORT_OPTION_NOT_SEEKABLE)
+    return 0;
+
+  if (lseek (fp->fdes, 0, SEEK_CUR) == -1)
+    return 0;
+
+  return 1;
 }
 
-static scm_t_bits
+static int
+fport_wait_fd (SCM port)
+{
+  return SCM_FSTREAM (port)->fdes;
+}
+
+/* Query the OS to get the natural buffering for FPORT, if available.  */
+static void
+fport_get_natural_buffer_sizes (SCM port, size_t *read_size, size_t *write_size)
+{
+#ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
+  scm_t_fport *fp = SCM_FSTREAM (port);
+  struct stat st;
+
+  if (fstat (fp->fdes, &st) == 0)
+    *read_size = *write_size = st.st_blksize;
+#endif
+}
+
+static scm_t_port_type *
 scm_make_fptob ()
 {
-  scm_t_bits tc = scm_make_port_type ("file", fport_fill_input, fport_write);
+  scm_t_port_type *ptob = scm_make_port_type ("file", fport_read, fport_write);
 
-  scm_set_port_free            (tc, fport_free);
-  scm_set_port_print           (tc, fport_print);
-  scm_set_port_flush           (tc, fport_flush);
-  scm_set_port_end_input       (tc, fport_end_input);
-  scm_set_port_close           (tc, fport_close);
-  scm_set_port_seek            (tc, fport_seek);
-  scm_set_port_truncate        (tc, fport_truncate);
-  scm_set_port_input_waiting   (tc, fport_input_waiting);
-  scm_set_port_setvbuf         (tc, scm_fport_buffer_add);
+  scm_set_port_print                    (ptob, fport_print);
+  scm_set_port_needs_close_on_gc        (ptob, 1);
+  scm_set_port_close                    (ptob, fport_close);
+  scm_set_port_seek                     (ptob, fport_seek);
+  scm_set_port_truncate                 (ptob, fport_truncate);
+  scm_set_port_read_wait_fd             (ptob, fport_wait_fd);
+  scm_set_port_write_wait_fd            (ptob, fport_wait_fd);
+  scm_set_port_input_waiting            (ptob, fport_input_waiting);
+  scm_set_port_random_access_p          (ptob, fport_random_access_p);
+  scm_set_port_get_natural_buffer_sizes (ptob, fport_get_natural_buffer_sizes);
 
-  return tc;
+  return ptob;
 }
 
 /* We can't initialize the keywords from 'scm_init_fports', because
@@ -995,20 +738,34 @@ scm_init_fports_keywords ()
   k_encoding       = scm_from_latin1_keyword ("encoding");
 }
 
+static void
+scm_init_ice_9_fports (void)
+{
+#include "libguile/fports.x"
+}
+
 void
 scm_init_fports ()
 {
-  scm_tc16_fport = scm_make_fptob ();
+  scm_file_port_type = scm_make_fptob ();
 
-  scm_c_define ("_IOFBF", scm_from_int (_IOFBF));
-  scm_c_define ("_IOLBF", scm_from_int (_IOLBF));
-  scm_c_define ("_IONBF", scm_from_int (_IONBF));
+  scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
+                            "scm_init_ice_9_fports",
+			    (scm_t_extension_init_func) scm_init_ice_9_fports,
+			    NULL);
 
+  /* The following bindings are used early in boot-9.scm.  */
+
+  /* Used by `include' and also by `file-exists?' if `stat' is
+     unavailable.  */
+  scm_c_define_gsubr (s_scm_i_open_file, 2, 0, 1, (scm_t_subr) scm_i_open_file);
+
+  /* Used by `open-file.', also via C.  */
+  sym_relative = scm_from_latin1_symbol ("relative");
+  sym_absolute = scm_from_latin1_symbol ("absolute");
   sys_file_port_name_canonicalization = scm_make_fluid ();
   scm_c_define ("%file-port-name-canonicalization",
                 sys_file_port_name_canonicalization);
-                                    
-#include "libguile/fports.x"
 }
 
 /*

@@ -29,11 +29,13 @@
 
 #include "libguile/_scm.h"
 #include "libguile/dynwind.h"
+#include "libguile/fdes-finalizers.h"
 #include "libguile/feature.h"
 #include "libguile/fports.h"
 #include "libguile/hashtab.h"
 #include "libguile/ioext.h"
 #include "libguile/ports.h"
+#include "libguile/ports-internal.h"
 #include "libguile/strings.h"
 #include "libguile/validate.h"
 
@@ -86,20 +88,23 @@ SCM_DEFINE (scm_redirect_port, "redirect-port", 2, 0, 0,
   newfd = fp->fdes;
   if (oldfd != newfd)
     {
-      scm_t_port *pt = SCM_PTAB_ENTRY (new);
-      scm_t_port *old_pt = SCM_PTAB_ENTRY (old);
-      scm_t_ptob_descriptor *ptob = SCM_PORT_DESCRIPTOR (new);
+      /* Ensure there is nothing in either port's input or output
+         buffers.  */
+      if (SCM_OUTPUT_PORT_P (old))
+        scm_flush (old);
+      if (SCM_INPUT_PORT_P (old) && SCM_PORT (old)->rw_random)
+        scm_end_input (old);
 
-      /* must flush to old fdes.  */
-      if (pt->rw_active == SCM_PORT_WRITE)
-	ptob->flush (new);
-      else if (pt->rw_active == SCM_PORT_READ)
-	scm_end_input_unlocked (new);
+      if (SCM_OUTPUT_PORT_P (new))
+        scm_flush (new);
+      if (SCM_INPUT_PORT_P (new) && SCM_PORT (new)->rw_random)
+        scm_end_input (new);
+
       ans = dup2 (oldfd, newfd);
       if (ans == -1)
 	SCM_SYSERROR;
-      pt->rw_random = old_pt->rw_random;
-      /* continue using existing buffers, even if inappropriate.  */
+
+      SCM_PORT (new)->rw_random = SCM_PORT (old)->rw_random;
     }
   return SCM_UNSPECIFIED;
 }
@@ -221,7 +226,8 @@ SCM_DEFINE (scm_fdopen, "fdopen", 2, 0, 0,
 #define FUNC_NAME s_scm_fdopen
 {
   return scm_i_fdes_to_port (scm_to_int (fdes),
-			     scm_i_mode_bits (modes), SCM_BOOL_F);
+			     scm_i_mode_bits (modes), SCM_BOOL_F,
+                             SCM_FPORT_OPTION_VERIFY);
 }
 #undef FUNC_NAME
 
@@ -262,6 +268,7 @@ SCM_DEFINE (scm_primitive_move_to_fdes, "primitive-move->fdes", 2, 0, 0,
   if (rv == -1)
     SCM_SYSERROR;
   stream->fdes = new_fd;
+  scm_run_fdes_finalizers (old_fd);
   SCM_SYSCALL (close (old_fd));  
   return SCM_BOOL_T;
 }
@@ -271,10 +278,8 @@ static SCM
 get_matching_port (void *closure, SCM port, SCM result)
 {
   int fd = * (int *) closure;
-  scm_t_port *entry = SCM_PTAB_ENTRY (port);
   
-  if (SCM_OPFPORTP (port)
-      && ((scm_t_fport *) entry->stream)->fdes == fd)
+  if (SCM_OPFPORTP (port) && SCM_FSTREAM (port)->fdes == fd)
     result = scm_cons (port, result);
 
   return result;
@@ -299,12 +304,21 @@ SCM_DEFINE (scm_fdes_to_ports, "fdes->ports", 1, 0, 0,
 #undef FUNC_NAME    
 
 
+static void
+scm_init_ice_9_ioext (void)
+{
+#include "libguile/ioext.x"
+}
+
 void 
 scm_init_ioext ()
 {
   scm_add_feature ("i/o-extensions");
 
-#include "libguile/ioext.x"
+  scm_c_register_extension ("libguile-" SCM_EFFECTIVE_VERSION,
+                            "scm_init_ice_9_ioext",
+			    (scm_t_extension_init_func) scm_init_ice_9_ioext,
+			    NULL);
 }
 
 

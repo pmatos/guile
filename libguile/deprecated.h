@@ -115,8 +115,7 @@ SCM_DEPRECATED SCM scm_internal_dynamic_wind (scm_t_guard before,
 #define scm_listify scm_listify__GONE__REPLACE_WITH__scm_list_n
 #define scm_option scm_option__GONE__REPLACE_WITH__scm_t_option
 #define scm_port scm_port__GONE__REPLACE_WITH__scm_t_port
-#define scm_port_rw_active scm_port_rw_active__GONE__REPLACE_WITH__scm_t_port_rw_active
-#define scm_ptob_descriptor scm_ptob_descriptor__GONE__REPLACE_WITH__scm_t_ptob_descriptor
+#define scm_ptob_descriptor scm_ptob_descriptor__GONE__REPLACE_WITH__scm_t_port_type
 #define scm_rng scm_rng__GONE__REPLACE_WITH__scm_t_rng
 #define scm_rstate scm_rstate__GONE__REPLACE_WITH__scm_t_rstate
 #define scm_sizet scm_sizet__GONE__REPLACE_WITH__size_t
@@ -203,7 +202,6 @@ SCM_DEPRECATED SCM scm_class_int;
 SCM_DEPRECATED SCM scm_class_float;
 SCM_DEPRECATED SCM scm_class_double;
 
-SCM_DEPRECATED SCM *scm_port_class;
 SCM_DEPRECATED SCM *scm_smob_class;
 
 SCM_INTERNAL void scm_init_deprecated_goops (void);
@@ -216,6 +214,63 @@ SCM_DEPRECATED SCM scm_slot_ref_using_class (SCM cls, SCM obj, SCM slot_name);
 SCM_DEPRECATED SCM scm_slot_set_using_class_x (SCM cls, SCM obj, SCM slot_name, SCM value);
 SCM_DEPRECATED SCM scm_slot_bound_using_class_p (SCM cls, SCM obj, SCM slot_name);
 SCM_DEPRECATED SCM scm_slot_exists_using_class_p (SCM cls, SCM obj, SCM slot_name);
+
+
+
+SCM_DEPRECATED SCM scm_make_arbiter (SCM name);
+SCM_DEPRECATED SCM scm_try_arbiter (SCM arb);
+SCM_DEPRECATED SCM scm_release_arbiter (SCM arb);
+
+
+
+SCM_DEPRECATED SCM scm_async (SCM thunk);
+SCM_DEPRECATED SCM scm_async_mark (SCM a);
+SCM_DEPRECATED SCM scm_run_asyncs (SCM list_of_a);
+
+
+
+SCM_DEPRECATED void scm_critical_section_start (void);
+SCM_DEPRECATED void scm_critical_section_end (void);
+SCM_DEPRECATED void scm_dynwind_critical_section (SCM mutex);
+
+#define SCM_CRITICAL_SECTION_START  scm_critical_section_start ()
+#define SCM_CRITICAL_SECTION_END    scm_critical_section_end ()
+
+
+
+SCM_DEPRECATED SCM scm_make_mutex_with_flags (SCM flags);
+SCM_DEPRECATED SCM scm_unlock_mutex_timed (SCM mx, SCM cond, SCM timeout);
+SCM_DEPRECATED SCM scm_lock_mutex_timed (SCM m, SCM timeout, SCM owner);
+
+
+
+SCM_DEPRECATED SCM scm_internal_cwdr (scm_t_catch_body body,
+                                      void *body_data,
+                                      scm_t_catch_handler handler,
+                                      void *handler_data,
+                                      SCM_STACKITEM *stack_start);
+SCM_DEPRECATED SCM scm_call_with_dynamic_root (SCM thunk, SCM handler);
+SCM_DEPRECATED SCM scm_dynamic_root (void);
+SCM_DEPRECATED SCM scm_apply_with_dynamic_root (SCM proc, SCM a1,
+                                                SCM args, SCM handler);
+
+
+
+SCM_DEPRECATED SCM scm_make_dynamic_state (SCM parent);
+
+
+
+/* Deprecated 2016-11-18. Never documented. Unnecessary, since
+   array-copy! already unrolls and does it in more general cases. */
+/* With this also remove SCM_I_ARRAY_FLAG_CONTIGUOUS,
+   SCM_SET_ARRAY_CONTIGUOUS_FLAG, SCM_CLR_ARRAY_CONTIGUOUS_FLAG,
+   scm_i_ra_set_contp, and uses thereof. */
+SCM_DEPRECATED SCM scm_from_contiguous_array (SCM bounds, const SCM *elts,
+                                              size_t len);
+
+
+
+SCM_DEPRECATED int SCM_FDES_RANDOM_P (int fdes);
 
 
 

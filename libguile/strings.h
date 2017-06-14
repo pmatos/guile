@@ -3,7 +3,8 @@
 #ifndef SCM_STRINGS_H
 #define SCM_STRINGS_H
 
-/* Copyright (C) 1995,1996,1997,1998,2000,2001, 2004, 2005, 2006, 2008, 2009, 2010, 2011, 2013 Free Software Foundation, Inc.
+/* Copyright (C) 1995-1998, 2000, 2001, 2004-2006, 2008-2011, 2013,
+ *   2015-2016 Free Software Foundation, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
@@ -100,10 +101,14 @@ typedef enum
 
 SCM_INTERNAL SCM scm_nullstr;
 
+SCM_INTERNAL scm_t_string_failed_conversion_handler
+scm_i_default_string_failed_conversion_handler (void);
+
 SCM_API SCM scm_string_p (SCM x);
 SCM_API SCM scm_string (SCM chrs);
 SCM_API SCM scm_make_string (SCM k, SCM chr);
 SCM_API SCM scm_string_length (SCM str);
+SCM_API SCM scm_string_utf8_length (SCM str);
 SCM_API SCM scm_string_bytes_per_char (SCM str);
 SCM_API SCM scm_string_ref (SCM str, SCM k);
 SCM_API SCM scm_string_set_x (SCM str, SCM k, SCM chr);
@@ -117,6 +122,7 @@ SCM_API SCM scm_from_stringn (const char *str, size_t len, const char *encoding,
                               scm_t_string_failed_conversion_handler handler);
 SCM_API SCM scm_c_make_string (size_t len, SCM chr);
 SCM_API size_t scm_c_string_length (SCM str);
+SCM_API size_t scm_c_string_utf8_length (SCM str);
 SCM_API size_t scm_c_symbol_length (SCM sym);
 SCM_API SCM scm_c_string_ref (SCM str, size_t pos);
 SCM_API void scm_c_string_set_x (SCM str, size_t pos, SCM chr);
@@ -176,8 +182,8 @@ SCM_API SCM scm_makfromstrs (int argc, char **argv);
 #define scm_tc7_ro_string             (scm_tc7_string + 0x200)
 
 /* Flags for shared and wide strings.  */
-#define SCM_I_STRINGBUF_F_SHARED      0x100
 #define SCM_I_STRINGBUF_F_WIDE        0x400
+#define SCM_I_STRINGBUF_F_MUTABLE     0x800
 
 SCM_INTERNAL void scm_i_print_stringbuf (SCM exp, SCM port,
                                          scm_print_state *pstate);
@@ -188,12 +194,12 @@ SCM_INTERNAL SCM scm_i_make_string (size_t len, char **datap,
 				    int read_only_p);
 SCM_INTERNAL SCM scm_i_make_wide_string (size_t len, scm_t_wchar **datap,
 					 int read_only_p);
-SCM_INTERNAL SCM scm_i_set_string_read_only_x (SCM str);
 SCM_INTERNAL SCM scm_i_substring (SCM str, size_t start, size_t end);
 SCM_INTERNAL SCM scm_i_substring_read_only (SCM str, size_t start, size_t end);
 SCM_INTERNAL SCM scm_i_substring_shared (SCM str, size_t start, size_t end);
 SCM_INTERNAL SCM scm_i_substring_copy (SCM str, size_t start, size_t end);
 SCM_INTERNAL size_t scm_i_string_length (SCM str);
+SCM_INTERNAL int scm_i_string_is_mutable (SCM str);
 SCM_API /* FIXME: not internal */ const char *scm_i_string_chars (SCM str);
 SCM_API /* FIXME: not internal */ char *scm_i_string_writable_chars (SCM str);
 SCM_INTERNAL const scm_t_wchar *scm_i_string_wide_chars (SCM str);
