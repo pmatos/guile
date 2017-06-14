@@ -5,18 +5,10 @@
   #:use-module (ice-9 match)
   #:export (compile-js))
 
-(define optimize (@@ (language cps compile-bytecode) optimize))
-(define convert-closures (@@ (language cps compile-bytecode) convert-closures))
-(define reify-primitives (@@ (language cps compile-bytecode) reify-primitives))
-(define renumber (@@ (language cps compile-bytecode) renumber))
+(define lower-cps (@@ (language cps compile-bytecode) lower-cps))
 
 (define (compile-js exp env opts)
-  ;; See comment in `optimize' about the use of set!.
-  (set! exp (optimize exp opts))
-  (set! exp (convert-closures exp))
-  ;; first-order optimization should go here
-  (set! exp (reify-primitives exp))
-  (set! exp (renumber exp))
+  (set! exp (lower-cps exp opts))
   (match exp
     (($ $program (($ $cont ks funs) ...))
      ;; TODO: I should special case the compilation for the initial fun,
