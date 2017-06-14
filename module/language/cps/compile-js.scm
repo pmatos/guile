@@ -1,48 +1,52 @@
 (define-module (language cps compile-js)
   #:use-module (language cps)
+  #:use-module (language cps intmap)
+  #:use-module (language cps utils)
   #:use-module ((language js-il)
                 #:renamer (lambda (x) (if (eqv? x 'make-prompt) 'make-prompt* x)))
   #:use-module (ice-9 match)
   #:export (compile-js))
 
+(define intmap-select (@@ (language cps compile-bytecode) intmap-select))
 (define lower-cps (@@ (language cps compile-bytecode) lower-cps))
 
 (define (compile-js exp env opts)
-  (set! exp (lower-cps exp opts))
-  (match exp
-    (($ $program (($ $cont ks funs) ...))
-     ;; TODO: I should special case the compilation for the initial fun,
-     ;; as this is the entry point for the program, and shouldn't get a
-     ;; "self" argument, for now, I add "undefined" as the first
-     ;; argument in the call to it.
-     ;; see compile-exp in (language js-il compile-javascript)
-     (values (make-program
-              (map (lambda (k fun)
-                     (cons (make-kid k) (compile-fun fun)))
-                   ks
-                   funs))
-             env
-             env))))
+  ;; TODO: I should special case the compilation for the initial fun,
+  ;; as this is the entry point for the program, and shouldn't get a
+  ;; "self" argument, for now, I add "undefined" as the first
+  ;; argument in the call to it.
+  ;; see compile-exp in (language js-il compile-javascript)
+  (define (intmap->program map)
+    (intmap-fold-right (lambda (kfun body accum)
+                         (acons (make-kid kfun)
+                                (compile-fun (intmap-select map body) kfun)
+                                accum))
+                       (compute-reachable-functions map 0)
+                       '()))
+  (values (make-program (intmap->program (lower-cps exp opts))) env env))
 
-(define (compile-fun fun)
-  (match fun
-    (($ $kfun _ _ self ($ $cont tail ($ $ktail)) clause)
+
+(define (compile-fun cps kfun)
+  (match (intmap-ref cps kfun)
+    (($ $kfun src meta self tail clause)
      (make-function
       (make-id self)
       (make-kid tail)
-      (compile-clauses clause self)))))
+      (compile-clauses cps clause self)))))
 
-(define (compile-clauses clause self)
-  (match clause
-    (($ $cont k ($ $kclause arity body #f))
-     `((,(make-kid k)
+
+(define (compile-clauses cps clause self)
+  (match (intmap-ref cps clause)
+    (($ $kclause arity body #f)
+     `((,(make-kid clause)
         ,(arity->params arity self)
-        ,(compile-clause arity body self))))
-    (($ $cont k ($ $kclause arity body next))
-     `((,(make-kid k)
+        ,(compile-clause cps arity body self))))
+    (($ $kclause arity body next)
+     `((,(make-kid clause)
         ,(arity->params arity self)
-        ,(compile-clause arity body self))
-       . ,(compile-clauses next self)))))
+        ,(compile-clause cps arity body self))
+       . ,(compile-clauses cps next self)))))
+
 
 (define (arity->params arity self)
   (match arity
@@ -58,34 +62,23 @@
                        kw-syms)
                   allow-other-keys?))))
 
-(define (compile-clause arity body self)
+
+(define (compile-clause cps arity body self)
   (match arity
     (($ $arity req opt rest ((_ _ kw-syms) ...) _)
      (let ((ids (map make-id
                      (append req opt kw-syms (if rest (list rest) '())))))
        (make-continuation
         (cons (make-id self) ids)
-        (match body
-          (($ $cont k cont)
-           (make-local `((,(make-kid k) . ,(compile-cont cont)))
-                       (make-continue (make-kid k) ids)))))))))
+        (make-local `((,(make-kid body) . ,(compile-cont cps body)))
+                    (make-continue (make-kid body) ids)))))))
 
-(define (compile-term term)
-  (match term
-    (($ $letk (($ $cont ks conts) ...) body)
-     (make-local (map (lambda (k cont)
-                        (cons (make-kid k)
-                              (compile-cont cont)))
-                      ks
-                      conts)
-                 (compile-term body)))
-    (($ $continue k src exp)
-     (compile-exp exp k))))
 
-(define (compile-cont cont)
-  (match cont
-    (($ $kargs names syms body)
-     (make-continuation (map make-id syms) (compile-term body)))
+(define (compile-cont cps cont)
+  (match (intmap-ref cps cont)
+    ;; The term in a $kargs is always a $continue
+    (($ $kargs names syms ($ $continue k src exp))
+     (make-continuation (map make-id syms) (compile-exp exp k)))
     (($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2)
      (let ((ids (map make-id (append req (list rest)))))
        (make-continuation ids (make-continue (make-kid k2) ids))))
