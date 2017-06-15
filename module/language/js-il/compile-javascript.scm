@@ -15,9 +15,13 @@
   (eqv? obj (pointer->scm (make-pointer unbound-bits))))
 
 (define (compile-javascript exp env opts)
-  (set! exp (inline-single-calls exp))
+  (match (memq #:js-inline? opts)
+    ((#:js-inline? #f _ ...) #f)
+    (_ (set! exp (inline-single-calls exp))))
   (set! exp (compile-exp exp))
-  (set! exp (flatten-blocks exp))
+  (match (memq #:js-flatten? opts)
+    ((#:js-flatten? #f _ ...) #f)
+    (_ (set! exp (flatten-blocks exp))))
   (values exp env env))
 
 (define *scheme* (make-id "scheme"))
