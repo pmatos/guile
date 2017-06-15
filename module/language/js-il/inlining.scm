@@ -69,7 +69,7 @@
   counts)
 
 (define no-values-primitives
-  '(define!
+  '(
     cache-current-module!
     set-cdr!
     set-car!
@@ -83,6 +83,7 @@
     unwind
     push-fluid
     pop-fluid
+    handle-interrupts
     ))
 
 (define no-values-primitive?
