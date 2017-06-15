@@ -35,17 +35,45 @@
       (compile-clauses cps clause self)))))
 
 
+(define (extract-and-compile-conts cps)
+  (define (step id body accum)
+    (match body
+      ;; The term in a $kargs is always a $continue
+      (($ $kargs names syms ($ $continue k src exp))
+       (acons (make-kid id)
+              (make-continuation (map make-id syms) (compile-exp exp k))
+              accum))
+      (($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2)
+       (let ((ids (map make-id (append req (list rest)))))
+         (acons (make-kid id)
+                (make-continuation ids (make-continue (make-kid k2) ids))
+                accum)))
+      (($ $kreceive ($ $arity req _ #f _ _) k2)
+       (let ((ids (map make-id req)))
+         (acons (make-kid id)
+                (make-continuation ids (make-continue (make-kid k2) ids))
+                accum)))
+      (else accum)))
+  (intmap-fold step cps '()))
+
+
 (define (compile-clauses cps clause self)
-  (match (intmap-ref cps clause)
-    (($ $kclause arity body #f)
-     `((,(make-kid clause)
-        ,(arity->params arity self)
-        ,(compile-clause cps arity body self))))
-    (($ $kclause arity body next)
-     `((,(make-kid clause)
-        ,(arity->params arity self)
-        ,(compile-clause cps arity body self))
-       . ,(compile-clauses cps next self)))))
+  ;; FIXME: This duplicates all the conts in each clause, and requires
+  ;; the inliner to remove them. A better solution is to change the
+  ;; function type to contain a separate map of conts, but this requires
+  ;; more code changes, and is should constitute a separate commit.
+  (define function-conts (extract-and-compile-conts cps))
+  (let loop ((clause clause))
+   (match (intmap-ref cps clause)
+     (($ $kclause arity body #f)
+      `((,(make-kid clause)
+         ,(arity->params arity self)
+         ,(compile-clause cps arity body self function-conts))))
+     (($ $kclause arity body next)
+      `((,(make-kid clause)
+         ,(arity->params arity self)
+         ,(compile-clause cps arity body self function-conts))
+        . ,(loop next))))))
 
 
 (define (arity->params arity self)
@@ -63,15 +91,14 @@
                   allow-other-keys?))))
 
 
-(define (compile-clause cps arity body self)
+(define (compile-clause cps arity body self bindings)
   (match arity
     (($ $arity req opt rest ((_ _ kw-syms) ...) _)
      (let ((ids (map make-id
                      (append req opt kw-syms (if rest (list rest) '())))))
        (make-continuation
         (cons (make-id self) ids)
-        (make-local `((,(make-kid body) . ,(compile-cont cps body)))
-                    (make-continue (make-kid body) ids)))))))
+        (make-local bindings (make-continue (make-kid body) ids)))))))
 
 
 (define (compile-cont cps cont)
