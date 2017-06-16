@@ -33,12 +33,20 @@ scheme.primitives.add1 = function (x) {
     return x + 1;
 };
 
+scheme.primitives["add/immediate"] = function (x, y) {
+    return x + y;
+};
+
 scheme.primitives.sub = function (x, y) {
     return x - y;
 };
 
 scheme.primitives.sub1 = function (x) {
     return x - 1;
+};
+
+scheme.primitives["sub/immediate"] = function (x, y) {
+    return x - y;
 };
 
 scheme.primitives.mul = function (x, y) {
@@ -72,6 +80,32 @@ scheme.primitives[">="] = function (x, y) {
 scheme.primitives.quo = not_implemented_yet;
 scheme.primitives.rem = not_implemented_yet;
 scheme.primitives.mod = not_implemented_yet;
+
+// Unboxed Numbers
+scheme.primitives["load-u64"] = function(x) {
+    return x;
+};
+
+scheme.primitives["u64-=-scm"] = function(x, y) {
+    // i.e. br-if-u64-=-scm
+    return coerce_bool(x === y);
+};
+
+scheme.primitives["u64-<=-scm"] = function(x, y) {
+    return coerce_bool(x <= y);
+};
+
+scheme.primitives["u64-<-scm"] = function(x, y) {
+    return coerce_bool(x < y);
+};
+
+scheme.primitives["u64->-scm"] = function(x, y) {
+    return coerce_bool(x > y);
+};
+
+scheme.primitives["u64->=-scm"] = function(x, y) {
+    return coerce_bool(x >= y);
+};
 
 // Boxes
 scheme.Box = function (x) {
@@ -259,7 +293,9 @@ scheme.primitives["builtin-ref"] = function (idx) {
 
 // Modules
 scheme.primitives["define!"] = function(sym, obj) {
-    scheme.env[sym.name] = new scheme.Box(obj);
+    var b = new scheme.Box(obj);
+    scheme.env[sym.name] = b;
+    return b;
 };
 
 scheme.primitives["cache-current-module!"] = function (module, scope) {
@@ -430,6 +466,12 @@ var find_prompt = function(prompt) {
     // FIXME: should error
     return undefined;
 };
+
+scheme.primitives["handle-interrupts"] = function () {
+    // TODO: implement
+    return;
+};
+
 // Dynstack frames
 scheme.frame = {};
 
