@@ -1,3 +1,9 @@
+;; FIXME: It is currently wrong to think of inlining as an optimisation
+;; since in the cps-soup world we need inlining to rebuild the scope
+;; tree for variables.
+;; FIXME: since *all* conts are passed to each clause, there can be
+;; "dead" conts thare are included in a clause
+
 (define-module (language js-il inlining)
   #:use-module ((srfi srfi-1) #:select (partition))
   #:use-module (ice-9 match)
@@ -94,7 +100,26 @@
     (lambda (prim)
       (hashv-ref h prim))))
 
+
 (define (inline-single-calls exp)
+  (define (handle-function fun)
+    (match fun
+      (($ function self tail ((ids params bodies) ...))
+       (make-function self
+                      tail
+                      (map (lambda (id param body)
+                             (list id param (inline-clause body)))
+                           ids
+                           params
+                           bodies)))))
+  (match exp
+    (($ program ((ids . funs) ...))
+     (make-program (map (lambda (id fun)
+                          (cons id (handle-function fun)))
+                        ids
+                        funs)))))
+
+(define (inline-clause exp)
 
   (define calls (count-calls exp))
 
@@ -179,20 +204,4 @@
 
       (exp exp)))
 
-  (define (handle-function fun)
-    (match fun
-      (($ function self tail ((ids params bodies) ...))
-       (make-function self
-                      tail
-                      (map (lambda (id param body)
-                             (list id param (inline body '())))
-                           ids
-                           params
-                           bodies)))))
-
-  (match exp
-    (($ program ((ids . funs) ...))
-     (make-program (map (lambda (id fun)
-                          (cons id (handle-function fun)))
-                        ids
-                        funs)))))
+  (inline exp '()))
