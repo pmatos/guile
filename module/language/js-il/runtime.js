@@ -291,6 +291,14 @@ scheme.primitives["builtin-ref"] = function (idx) {
     return scheme.builtins[idx];
 };
 
+// Syntax Objects
+scheme.Syntax = function (expr, wrap, module) {
+    this.expr = expr;
+    this.wrap = wrap;
+    this.module = module;
+    return this;
+};
+
 // Modules
 scheme.primitives["define!"] = function(sym, obj) {
     var b = new scheme.Box(obj);

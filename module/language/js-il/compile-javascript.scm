@@ -6,6 +6,7 @@
   #:use-module (language javascript simplify)
   #:use-module (language js-il inlining)
   #:use-module (system foreign)
+  #:use-module (system syntax internal)
   #:export (compile-javascript))
 
 (define (undefined? obj)
@@ -355,5 +356,12 @@
            (list (make-const (symbol->string (keyword->symbol c)))))))
         ((undefined? c)
          (make-refine *scheme* (make-const "UNDEFINED")))
+        ((syntax? c)
+         (make-call
+          (make-refine *scheme* (make-const "Syntax"))
+          (map compile-const
+               (list (syntax-expression c)
+                     (syntax-wrap c)
+                     (syntax-module c)))))
         (else
          (throw 'uncompilable-const c))))
