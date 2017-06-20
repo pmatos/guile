@@ -90,6 +90,9 @@
     push-fluid
     pop-fluid
     handle-interrupts
+    push-dynamic-state
+    pop-dynamic-state
+    fluid-set!
     ))
 
 (define no-values-primitive?
