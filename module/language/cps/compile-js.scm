@@ -5,6 +5,7 @@
   #:use-module ((language js-il)
                 #:renamer (lambda (x) (if (eqv? x 'make-prompt) 'make-prompt* x)))
   #:use-module (ice-9 match)
+  #:use-module ((srfi srfi-1) #:select (append-map))
   #:export (compile-js))
 
 (define intmap-select (@@ (language cps compile-bytecode) intmap-select))
@@ -27,12 +28,13 @@
 
 
 (define (compile-fun cps kfun)
+  (define doms (compute-dom-edges (compute-idoms cps kfun)))
   (match (intmap-ref cps kfun)
     (($ $kfun src meta self tail clause)
      (make-function
       (make-id self)
       (make-kid tail)
-      (compile-clauses cps clause self)))))
+      (compile-clauses cps doms clause self)))))
 
 
 (define (extract-and-compile-conts cps)
@@ -57,22 +59,21 @@
   (intmap-fold step cps '()))
 
 
-(define (compile-clauses cps clause self)
+(define (compile-clauses cps doms clause self)
   ;; FIXME: This duplicates all the conts in each clause, and requires
   ;; the inliner to remove them. A better solution is to change the
   ;; function type to contain a separate map of conts, but this requires
   ;; more code changes, and is should constitute a separate commit.
-  (define function-conts (extract-and-compile-conts cps))
   (let loop ((clause clause))
    (match (intmap-ref cps clause)
      (($ $kclause arity body #f)
       `((,(make-kid clause)
          ,(arity->params arity self)
-         ,(compile-clause cps arity body self function-conts))))
+         ,(compile-clause cps doms arity body self))))
      (($ $kclause arity body next)
       `((,(make-kid clause)
          ,(arity->params arity self)
-         ,(compile-clause cps arity body self function-conts))
+         ,(compile-clause cps doms arity body self))
         . ,(loop next))))))
 
 
@@ -91,27 +92,48 @@
                   allow-other-keys?))))
 
 
-(define (compile-clause cps arity body self bindings)
+(define (compile-clause cps doms arity body self)
   (match arity
     (($ $arity req opt rest ((_ _ kw-syms) ...) _)
      (let ((ids (map make-id
                      (append req opt kw-syms (if rest (list rest) '())))))
        (make-continuation
         (cons (make-id self) ids)
-        (make-local bindings (make-continue (make-kid body) ids)))))))
+        (make-local (list (cons (make-kid body) (compile-cont cps doms body)))
+                    (make-continue (make-kid body) ids)))))))
 
-
-(define (compile-cont cps cont)
-  (match (intmap-ref cps cont)
-    ;; The term in a $kargs is always a $continue
-    (($ $kargs names syms ($ $continue k src exp))
-     (make-continuation (map make-id syms) (compile-exp exp k)))
-    (($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2)
-     (let ((ids (map make-id (append req (list rest)))))
-       (make-continuation ids (make-continue (make-kid k2) ids))))
-    (($ $kreceive ($ $arity req _ #f _ _) k2)
-     (let ((ids (map make-id req)))
-       (make-continuation ids (make-continue (make-kid k2) ids))))))
+(define (compile-cont cps doms cont)
+  (define (redominate label exp)
+    ;; This ensures that functions which are dominated by a $kargs [e.g.
+    ;; because they need its arguments] are moved into its body, and so
+    ;; we get correct scoping.
+    (define (find&compile-dominated label)
+      (append-map (lambda (label)
+                    (match (intmap-ref cps label)
+                      (($ $ktail) '()) ; ignore tails
+                      (($ $kargs)
+                       ;; kargs may bind more arguments
+                       (list (cons (make-kid label) (compile label))))
+                      (else
+                       ;; otherwise, even if it dominates other conts,
+                       ;; it doesn't need to contain them
+                       (cons (cons (make-kid label) (compile label))
+                             (find&compile-dominated label)))))
+                  (intmap-ref doms label)))
+    (make-local (find&compile-dominated label) exp))
+  (define (compile cont)
+    (match (intmap-ref cps cont)
+      ;; The term in a $kargs is always a $continue
+      (($ $kargs names syms ($ $continue k src exp))
+       (make-continuation (map make-id syms)
+                          (redominate cont (compile-exp exp k))))
+      (($ $kreceive ($ $arity req _ (? symbol? rest) _ _) k2)
+       (let ((ids (map make-id (append req (list rest)))))
+         (make-continuation ids (make-continue (make-kid k2) ids))))
+      (($ $kreceive ($ $arity req _ #f _ _) k2)
+       (let ((ids (map make-id req)))
+         (make-continuation ids (make-continue (make-kid k2) ids))))))
+  (compile cont))
 
 (define (compile-exp exp k)
  (match exp
