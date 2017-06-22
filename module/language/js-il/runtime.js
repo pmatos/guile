@@ -4,6 +4,7 @@ var scheme = {
     utils : {},
     env : {},
     cache: [],
+    module_cache: {},
     builtins: [],
     dynstack : [],
     // TODO: placeholders
@@ -314,7 +315,21 @@ scheme.primitives["cached-toplevel-box"] = function (scope, sym, is_bound) {
     return scheme.cache[scope][sym.name];
 };
 
-scheme.primitives["cached-module-box"] = not_implemented_yet;
+scheme.primitives["cached-module-box"] = function (module_name, sym, is_public, is_bound)  {
+    var cache = scheme.module_cache;
+
+    while (scheme.EMPTY != module_name.cdr) {
+        cache = cache[module_name.car.name];
+    }
+
+    cache = cache[module_name.car.name];
+    var r = cache[sym.name];
+    if (typeof r === 'undefined') {
+        throw {r : "cached-module-box", s : sym, m : module_name};
+    } else {
+        return r;
+    }
+};
 
 scheme.primitives["current-module"] = function () {
     return scheme.env;
@@ -493,3 +508,45 @@ scheme.frame.Fluid = function(fluid, old_value) {
     this.fluid = fluid;
     this.old_value = old_value;
 };
+
+// Module Cache
+scheme.module_cache["guile"] = scheme.env;
+
+function def_guile0 (name, fn) {
+    var sym = new scheme.Symbol(name); // put in obarray
+    var clos = new scheme.Closure(fn, 0);
+    var box = new scheme.Box(clos);
+    scheme.module_cache["guile"][name] = box;
+};
+
+function scm_list (self, cont) {
+    var l = scheme.EMPTY;
+    for (var i = arguments.length - 1; i >= 2; i--){
+        l = scheme.primitives.cons(arguments[i],l);
+    };
+    return cont(l);
+};
+def_guile0("list", scm_list);
+
+function scm_add(self, cont) {
+
+    var total = 0;
+    for (var i = arguments.length - 1; i >= 2; i--){
+        total += arguments[i];
+    };
+    return cont(total);
+
+};
+def_guile0("+", scm_add);
+
+function scm_mul(self, cont) {
+
+    var total = 1;
+    for (var i = arguments.length - 1; i >= 2; i--){
+        total *= arguments[i];
+    };
+    return cont(total);
+
+};
+def_guile0("*", scm_mul);
+
