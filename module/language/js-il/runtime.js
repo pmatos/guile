@@ -550,3 +550,15 @@ function scm_mul(self, cont) {
 };
 def_guile0("*", scm_mul);
 
+// Macros
+scheme.Macro = function (name, type, binding) {
+    // TODO: prim field?
+    this.name = name;
+    this.type = type;
+    this.binding = binding;
+    return this;
+};
+
+def_guile0("make-syntax-transformer", function (self, cont, name, type, binding) {
+    return cont(new scheme.Macro(name, type, binding));
+});
