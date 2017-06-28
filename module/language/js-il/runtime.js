@@ -380,7 +380,7 @@ var abort_to_prompt = function(self, k, prompt) {
         kont = new scheme.Closure(f, 0);
     };
 
-    unwind(idx);
+    unwind(scheme.dynstack, idx); // FIXME:
 
     var handler = frame.handler;
     args.unshift(kont);
@@ -396,8 +396,17 @@ var call_with_values = function (self, k, producer, consumer) {
 };
 
 var callcc = function (self, k, closure) {
+    var dynstack = scheme.dynstack.slice();
+
     var f = function (self, k2) {
         var args = Array.prototype.slice.call(arguments, 2);
+
+        var i = shared_stack_length(dynstack, scheme.dynstack);
+
+        unwind(scheme.dynstack, i);
+        wind(dynstack, i);
+        scheme.dynstack = dynstack;
+
         return k.apply(k,args);
     };
     return closure.fun(closure, k, new scheme.Closure(f, 0));
@@ -461,8 +470,17 @@ scheme.primitives["fluid-ref"] = function (fluid) {
 scheme.primitives["variable?"] = not_implemented_yet;
 
 // Dynamic Wind
-scheme.primitives["wind"] = not_implemented_yet;
-scheme.primitives["unwind"] = not_implemented_yet;
+scheme.primitives["wind"] = function(enter, leave) {
+    var frame = new scheme.frame.DynWind(enter, leave);
+    scheme.dynstack.unshift(frame);
+};
+
+scheme.primitives["unwind"] = function () {
+    var frame = scheme.dynstack.shift();
+    if (!(frame instanceof scheme.frame.DynWind)) {
+        throw "not a dynamic wind frame";
+    };
+};
 
 // Misc
 scheme.primitives["prompt"] = function(escape_only, tag, handler){
@@ -470,9 +488,45 @@ scheme.primitives["prompt"] = function(escape_only, tag, handler){
     scheme.dynstack.unshift(frame);
 };
 
-var unwind = function (idx) {
-    // TODO: call winders
-    scheme.dynstack = scheme.dynstack.slice(idx+1);
+var shared_stack_length = function (dynstack1, dynstack2) {
+    // Assumes that if it matches at i then it matches for all x<i,
+    // which will be fine given that we don't reuse frames
+    var size1 = dynstack1.length;
+    var size2 = dynstack2.length;
+    var last = Math.min(size1, size2);
+
+    var i = last-1;
+    for (; i >= 0; i--) {
+        if (dynstack1[i] === dynstack2[i]) {
+            break;
+        }
+    };
+
+    return i + 1;
+};
+
+var wind = function (dynstack, idx) {
+    for (var i = idx; i < dynstack.length; i++) {
+        var frame = dynstack[i];
+        if (frame instanceof scheme.frame.DynWind) {
+            // TODO: how to handle continuations and errors in this?
+            frame.wind.fun(frame.wind, scheme.initial_cont);
+        } else {
+            throw "unsupported frame type -- wind";
+        }
+    }
+};
+
+var unwind = function (dynstack, idx) {
+    for (var i = dynstack.length - 1; i >= idx; i--) {
+        var frame = dynstack[i];
+        if (frame instanceof scheme.frame.DynWind) {
+            // TODO: how to handle continuations and errors in this?
+            frame.unwind.fun(frame.unwind, scheme.initial_cont);
+        } else {
+            throw "unsupported frame type -- unwind";
+        }
+    }
 };
 
 var find_prompt = function(prompt) {
@@ -507,6 +561,11 @@ scheme.frame.Prompt = function(tag, escape_only, handler){
 scheme.frame.Fluid = function(fluid, old_value) {
     this.fluid = fluid;
     this.old_value = old_value;
+};
+
+scheme.frame.DynWind = function(wind, unwind) {
+    this.wind = wind;
+    this.unwind = unwind;
 };
 
 // Module Cache
