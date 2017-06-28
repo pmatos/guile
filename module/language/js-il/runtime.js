@@ -418,13 +418,37 @@ scheme.builtins[3] = new scheme.Closure(call_with_values, 0);
 scheme.builtins[4] = new scheme.Closure(callcc, 0);
 
 // Structs
-scheme.primitives["struct?"] = not_implemented_yet;
-scheme.primitives["struct-set!/immediate"] = not_implemented_yet;
-scheme.primitives["struct-vtable"] = not_implemented_yet;
-scheme.primitives["struct-ref/immediate"] = not_implemented_yet;
-scheme.primitives["struct-ref"] = not_implemented_yet;
-scheme.primitives["struct-set!"] = not_implemented_yet;
-scheme.primitives["allocate-struct/immediate"] = not_implemented_yet;
+scheme.Struct = function (vtable, nfields) {
+    this.is_vtable = false;
+    this.vtable = vtable;
+    this.fields = [];
+
+    // FIXME: worth doing?
+    for(var i = 0; i < nfields; i++){
+        this.fields[i]=scheme.UNDEFINED;
+    }
+
+    return this;
+};
+
+scheme.primitives["allocate-struct/immediate"] = function (vtable, nfields) {
+    return new scheme.Struct(vtable, nfields);
+};
+
+scheme.primitives["struct-vtable"] = function(struct) {
+    return struct.vtable;
+};
+
+scheme.primitives["struct-set!"] = function (struct, idx, obj) {
+    return struct.fields[idx] = obj;
+};
+
+scheme.primitives["struct-ref"] = function (struct, idx) {
+    return struct.fields[idx];
+};
+
+scheme.primitives["struct-set!/immediate"] = scheme.primitives["struct-set!"];
+scheme.primitives["struct-ref/immediate"] = scheme.primitives["struct-ref"];
 
 // Equality
 scheme.primitives["eq?"] = function(x, y) {
@@ -578,6 +602,12 @@ function def_guile0 (name, fn) {
     scheme.module_cache["guile"][name] = box;
 };
 
+function def_guile_val (name, val) {
+    var sym = new scheme.Symbol(name); // put in obarray
+    var box = new scheme.Box(val);
+    scheme.module_cache["guile"][name] = box;
+};
+
 function scm_list (self, cont) {
     var l = scheme.EMPTY;
     for (var i = arguments.length - 1; i >= 2; i--){
@@ -620,4 +650,98 @@ scheme.Macro = function (name, type, binding) {
 
 def_guile0("make-syntax-transformer", function (self, cont, name, type, binding) {
     return cont(new scheme.Macro(name, type, binding));
+});
+
+// Strings
+def_guile0("string=?", function (self, cont, s1, s2) {
+    return cont(coerce_bool(s1.s === s2.s));
+});
+
+def_guile0("string-append", function (self, cont, s1, s2) {
+    var s = new scheme.String(s1.s + s2.s);
+    return cont(s);
+});
+
+// Structs
+var vtable_base_layout = new scheme.String("pruhsruhpwphuhuh");
+def_guile_val("standard-vtable-fields", vtable_base_layout);
+
+var scm_vtable_index_layout = 0;
+var scm_vtable_index_flags = 1;
+var scm_vtable_index_self = 2;
+var scm_vtable_index_instance_finalize = 3;
+var scm_vtable_index_instance_printer = 4;
+var scm_vtable_index_name = 5;
+var scm_vtable_index_size = 6;
+var scm_vtable_index_reserved_7 = 7;
+var scm_vtable_offset_user = 8;
+
+function scm_struct_init(struct, layout, args) {
+    // FIXME: assumes there are no tail arrays
+    var nfields = layout.length / 2; // assumes even
+    var arg = 0;
+
+    for (var i = 0; i < nfields; i++) {
+        if (layout[2*i+1] == 'o') {
+            continue;
+        }
+        switch (layout[2*i]) {
+        case 'p' :
+            struct.fields[i] = (arg < args.length) ? args[arg] : scheme.FALSE;
+            arg += 1;
+            break;
+        case 'u' :
+            struct.fields[i] = (arg < args.length) ? args[arg] : 0;
+            arg += 1;
+            break;
+        case 's' :
+            struct.fields[i] = struct;
+        }
+    }
+};
+
+// Set up <standard-vtable>
+var scm_standard_vtable = new scheme.Struct(undefined, 0);
+scm_standard_vtable.vtable = scm_standard_vtable;
+scm_standard_vtable.is_vtable = true; // ?
+scm_struct_init(scm_standard_vtable,
+                vtable_base_layout.s,
+                [new scheme.Symbol(vtable_base_layout.s)]);
+//   scm_set_struct_vtable_name_x (scm_standard_vtable_vtable, name);
+
+def_guile_val("<standard-vtable>", scm_standard_vtable);
+def_guile_val("vtable-index-layout", scm_vtable_index_layout);
+def_guile_val("vtable-index-printer", scm_vtable_index_instance_printer);
+def_guile_val("vtable-offset-user", scm_vtable_offset_user);
+
+
+function scm_make_struct (vtable, args) {
+    var layout = vtable.fields[scm_vtable_index_layout].name;
+    var s = new scheme.Struct(vtable, layout.length / 2);
+    scm_struct_init(s, layout, args);
+    return s;
+}
+
+def_guile0("make-struct/no-tail", function (self, cont, vtable) {
+    var args = Array.prototype.slice.call(arguments, 3);
+    return cont(scm_make_struct(vtable, args));
+});
+
+def_guile0("make-vtable", function(self, cont, fields, printer) {
+    var layout = new scheme.Symbol(fields.s); // make-struct-layout
+    var str = scm_make_struct(scm_standard_vtable, [layout, printer]);
+    str.is_vtable = true;
+    return cont(str);
+});
+
+def_guile0("make-struct-layout", function (self, cont, str) {
+    var layout = new scheme.Symbol(str.s);
+    return cont(layout);
+});
+
+def_guile0("struct-vtable?", function (self, cont, obj) {
+    // We don't inherit flags, so =struct-vtable?= may give the wrong
+    // answer where SCM_VTABLE_FLAG_VTABLE would have been set
+    var bool = coerce_bool(obj instanceof scheme.Struct && obj.is_vtable);
+    return cont(bool);
 });
