@@ -439,6 +439,22 @@ scheme.Struct = function (vtable, nfields) {
     this.vtable = vtable;
     this.fields = [];
 
+    if (this.vtable && this.vtable.hasOwnProperty('children_applicable_vtables')) {
+        this.is_vtable = true;
+        this.children_applicable = true;
+    }
+
+    if (this.vtable && this.vtable.hasOwnProperty('children_applicable')) {
+        this.is_applicable = true;
+        this.fun = function (self, cont) {
+            var scm_applicable_struct_index_procedure = 0;
+            var clos = self.fields[scm_applicable_struct_index_procedure];
+            return clos.fun(clos, cont);
+        };
+    } else {
+        this.fun = function () { throw "not applicable"; };
+    }
+
     // FIXME: worth doing?
     for(var i = 0; i < nfields; i++){
         this.fields[i]=scheme.UNDEFINED;
