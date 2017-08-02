@@ -507,7 +507,10 @@ scheme.primitives["fluid-ref"] = function (fluid) {
 };
 
 // Variables
-scheme.primitives["variable?"] = not_implemented_yet;
+scheme.primitives["variable?"] = function (obj) {
+    // FIXME: should variables be distinct from boxes?
+    return coerce_bool(obj instanceof scheme.Box);
+};
 
 // Dynamic Wind
 scheme.primitives["wind"] = function(enter, leave) {
@@ -827,8 +830,6 @@ def_guile0("string-join", function (self, cont, strings) {
     return cont(new scheme.String(s));
 });
 
-});
-
 // Structs
 var vtable_base_layout = new scheme.String("pruhsruhpwphuhuh");
 def_guile_val("standard-vtable-fields", vtable_base_layout);
@@ -1025,6 +1026,74 @@ def_guile0("hashq-set!", function (self, cont, hashtable, key, obj) {
 
 def_guile0("hash-for-each", function (self, cont, module, symbol) {
     // FIXME:
+    return cont(scheme.FALSE);
+});
+
+// Modules
+def_guile0("make-variable", function (self, cont, val) {
+    return cont(new scheme.Box(val));
+});
+
+def_guile0("define!", function (self, cont, symbol, value) {
+    // FIXME: reuse module-define!
+    if (symbol.name in scheme.env) {
+        scheme.env[symbol.name].x = value;
+    } else {
+        scheme.env[symbol.name] = new scheme.Box(value);
+    }
+    return cont();
+});
+
+var boot_modules = {};
+
+function scm_primitive_load_path (self, cont, path) {
+    if (path.s in boot_modules) {
+        boot_modules[path.s](); // FIXME: note modules should share cont?
+        return cont(scheme.UNDEFINED);
+    } else {
+        console.log("primitive load path", arguments);
+        not_implemented_yet();
+    }
+};
+def_guile0("primitive-load-path", scm_primitive_load_path);
+
+boot_modules["ice-9/deprecated"] = function () {};
+boot_modules["ice-9/ports"] = function () {};
+boot_modules["ice-9/posix"] = function () {};
+boot_modules["ice-9/threads"] = function () {};
+boot_modules["srfi/srfi-4"] = function () {};
+
+def_guile0("module-local-variable", function (self, cont, module, symbol) {
+    if (module instanceof scheme.Struct) {
+      // Assumes we get a module with a hashtable
+      var obarray = scheme.primitives["struct-ref"](module, 0);
+      return cont(obarray.lookup(symbol, scheme.FALSE)); // hashq-ref
+    } else {
+      // FIXME: could be #f, then should use the pre-mod obarray
+      console.log("module-local-variable needs real modules");
+      throw "fail";
+    }
+});
+
+def_guile0("module-variable", function (self, cont, module, symbol) {
+    if (module instanceof scheme.Struct) {
+       console.log("FIXME: should only be called pre-bootstrap");
+       throw "fail";
+    }
+    if (module instanceof scheme.HashTable) {
+       console.log("modvar htable");
+       throw "fail";
+    }
+    return cont(module[symbol.name]);
+});
+
+def_guile0("%get-pre-modules-obarray", function (self, cont) {
+    var obarray = new scheme.HashTable();
+    obarray.table = scheme.env;
+    return cont(obarray);
+});
+
+def_guile0("set-current-module", function (self, cont, module) {
     return cont(scheme.FALSE);
 });
 
