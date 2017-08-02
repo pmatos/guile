@@ -443,6 +443,10 @@ scheme.Struct = function (vtable, nfields) {
     return this;
 };
 
+scheme.primitives["struct?"] = function (obj) {
+    return coerce_bool(obj instanceof scheme.Struct);
+};
+
 scheme.primitives["allocate-struct/immediate"] = function (vtable, nfields) {
     return new scheme.Struct(vtable, nfields);
 };
@@ -908,3 +912,27 @@ def_guile0("struct-vtable?", function (self, cont, obj) {
     var bool = coerce_bool(obj instanceof scheme.Struct && obj.is_vtable);
     return cont(bool);
 });
+
+var applicable_vtable = scm_make_struct(scm_standard_vtable, [new scheme.Symbol(vtable_base_layout.s)]);
+applicable_vtable.children_applicable_vtables = true;
+
+def_guile_val("<applicable-struct-vtable>", applicable_vtable);
+
+def_guile_val("record-type-vtable", scm_standard_vtable); // FIXME:
+
+def_guile0("set-struct-vtable-name!", function (self, cont, val, args) {
+    // FIXME:
+    return cont(scheme.FALSE);
+});
+
+def_guile0("make-struct", function (self, cont, vtable, tailsize) {
+    if (tailsize === 0) {
+        // make-struct/no-tail
+        var args = Array.prototype.slice.call(arguments, 4);
+        return cont(scm_make_struct(vtable, args));
+    } else {
+        console.log("make-struct with tail", arguments);
+        not_implemented_yet();
+    }
+});
+
