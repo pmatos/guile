@@ -936,6 +936,19 @@ def_guile0("make-struct", function (self, cont, vtable, tailsize) {
     }
 });
 
+// Procedures
+def_guile0("procedure?", function (self, cont, obj) {
+    return cont(coerce_bool(obj instanceof scheme.Closure));
+});
+
+def_guile0("set-procedure-property!", function (self, cont, procedure, property, obj) {
+    return cont(scheme.FALSE);
+});
+
+def_guile0("make-procedure-with-setter", function (self, cont, procedure, setter) {
+    return cont(scheme.FALSE);
+});
+
 // Hashtables
 def_guile0("make-hash-table", function (self, cont, size) {
     return cont(new scheme.HashTable());
