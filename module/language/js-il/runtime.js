@@ -651,6 +651,96 @@ function scm_mul(self, cont) {
 };
 def_guile0("*", scm_mul);
 
+// Lists
+def_guile0("make-list", function (self, cont, n, obj) {
+    var list = scheme.EMPTY;
+
+    for (var i = 0; i <= n; i++) {
+        list = new scheme.Pair(obj, list);
+    }
+
+    return cont(list);
+});
+
+def_guile0("length", function (self, cont, list) {
+   var len = 0;
+
+    while (!scheme.is_true(scheme.primitives["null?"](list))) {
+        if (scheme.is_true(scheme.primitives["pair?"](list))) {
+            list = list.cdr;
+            len += 1;
+        } else {
+            console.log("length bad");
+            not_implemented_yet();
+        }
+    }
+
+    return cont(len);
+});
+
+def_guile0("list?", function (self, cont, list) {
+
+    while (!scheme.is_true(scheme.primitives["null?"](list))) {
+        if (scheme.is_true(scheme.primitives["pair?"](list))) {
+            list = list.cdr;
+        } else {
+            return cont(scheme.FALSE);
+        }
+    }
+
+    return cont(scheme.TRUE);
+});
+
+def_guile0("reverse", function (self, cont, lst) {
+    var l = scheme.EMPTY;
+    while (lst != scheme.EMPTY) {
+        l = scheme.primitives.cons(lst.car, l);
+        lst = lst.cdr;
+    }
+    return cont(l);
+});
+
+def_guile0("append", function (self, cont, l1, l2) {
+    if (arguments.length != 4) {
+        console.log("FIXAPPEND", arguments.length);
+        throw "fail";
+    }
+
+
+    if (l1 === scheme.EMPTY) {
+        return cont(l2);
+    }
+
+    var l = new scheme.Pair(l1.car, l2);
+
+    var lp = l;
+    while (scheme.is_true(scheme.primitives["pair?"](l1.cdr))) {
+
+        var lo = new scheme.Pair(l1.cdr.car, l2);
+        lp.cdr = l2;
+
+        lp = lp.cdr;
+        l1 = l1.cdr;
+    }
+
+    return cont(l);
+});
+
+def_guile0("memq", function (self, cont, val, args) {
+    return cont(scheme.FALSE);
+});
+
+def_guile0("member", function (self, cont, elt, list) {
+    // FIXME: needs equal? console.log("member", arguments);
+    // throw "";
+    return cont(scheme.FALSE);
+});
+
+def_guile0("delete!", function (self, cont, elt, list) {
+    // FIXME:
+    return cont(list);
+});
+
 // Macros
 scheme.Macro = function (name, type, binding) {
     // TODO: prim field?
