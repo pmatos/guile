@@ -849,7 +849,7 @@ function scm_struct_init(struct, layout, args) {
     var arg = 0;
 
     for (var i = 0; i < nfields; i++) {
-        if (layout[2*i+1] == 'o') {
+        if (layout[2*i+1] == 'o' || layout[2*i+1] == 'h') {
             continue;
         }
         switch (layout[2*i]) {
