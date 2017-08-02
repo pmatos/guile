@@ -541,7 +541,8 @@ scheme.primitives["wind"] = function(enter, leave) {
 
 scheme.primitives["unwind"] = function () {
     var frame = scheme.dynstack.shift();
-    if (!(frame instanceof scheme.frame.DynWind)) {
+    if (!(frame instanceof scheme.frame.DynWind) &&
+        !(frame instanceof scheme.frame.Prompt)) {
         throw "not a dynamic wind frame";
     };
 };
