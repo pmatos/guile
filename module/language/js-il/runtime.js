@@ -754,6 +754,27 @@ def_guile0("make-syntax-transformer", function (self, cont, name, type, binding)
     return cont(new scheme.Macro(name, type, binding));
 });
 
+function scm_is_syntax (self, cont, obj) {
+    return cont(coerce_bool(obj instanceof scheme.Syntax));
+};
+def_guile0("syntax?", scm_is_syntax);
+
+def_guile0("make-syntax", function (self, cont, expr, wrap, module) {
+    return cont(new scheme.Syntax(expr, wrap, module));
+});
+
+def_guile0("syntax-expression", function (self, cont, obj) {
+    return cont(obj.expr);
+});
+
+def_guile0("syntax-wrap", function (self, cont, obj) {
+    return cont(obj.wrap);
+});
+
+def_guile0("syntax-module", function (self, cont, obj) {
+    return cont(obj.module);
+});
+
 // Strings
 def_guile0("string=?", function (self, cont, s1, s2) {
     return cont(coerce_bool(s1.s === s2.s));
