@@ -775,6 +775,22 @@ def_guile0("syntax-module", function (self, cont, obj) {
     return cont(obj.module);
 });
 
+// Symbols
+def_guile0("symbol->string", function (self, cont, sym) {
+    return cont(new scheme.String(sym.name));
+});
+
+var gensym_counter = 0;
+function scm_gensym (self, cont, prefix) {
+    var name = prefix ? prefix.s : "gen ";
+    name += gensym_counter;
+    gensym_counter += 1;
+
+    return cont(new scheme.Symbol(name));
+};
+def_guile0("gensym", scm_gensym);
+
+
 // Strings
 def_guile0("string=?", function (self, cont, s1, s2) {
     return cont(coerce_bool(s1.s === s2.s));
