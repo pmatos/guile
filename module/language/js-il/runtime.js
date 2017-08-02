@@ -235,9 +235,21 @@ scheme.primitives["vector?"] = function (obj) {
     return coerce_bool(obj instanceof scheme.Vector);
 };
 
-scheme.primitives["make-vector/immediate"] = not_implemented_yet;
-scheme.primitives["vector-set!/immediate"] = not_implemented_yet;
-scheme.primitives["vector-ref/immediate"] = not_implemented_yet;
+scheme.primitives["make-vector/immediate"] = function(length, init) {
+    var v = new scheme.Vector();
+
+    var temp = []
+    for (var i=0; i < length; i++) {
+        temp[i] = init;
+    }
+
+    v.array = temp;
+
+    return v;
+};
+
+scheme.primitives["vector-set!/immediate"] = scheme.primitives["vector-set!"];
+scheme.primitives["vector-ref/immediate"] = scheme.primitives["vector-ref"];
 
 // Bytevectors
 
