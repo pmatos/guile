@@ -476,7 +476,8 @@ scheme.primitives["struct-vtable"] = function(struct) {
 };
 
 scheme.primitives["struct-set!"] = function (struct, idx, obj) {
-    return struct.fields[idx] = obj;
+    struct.fields[idx] = obj;
+    return;
 };
 
 scheme.primitives["struct-ref"] = function (struct, idx) {
