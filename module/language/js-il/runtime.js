@@ -936,3 +936,82 @@ def_guile0("make-struct", function (self, cont, vtable, tailsize) {
     }
 });
 
+// Hashtables
+def_guile0("make-hash-table", function (self, cont, size) {
+    return cont(new scheme.HashTable());
+});
+
+def_guile0("make-weak-key-hash-table", function (self, cont, size) {
+    // FIXME: not weak
+    return cont(new scheme.HashTable());
+});
+
+def_guile0("hash-clear!", function (self, cont, hashtable) {
+    if (hashtable instanceof scheme.HashTable) {
+        hashtable.table = {};
+        return cont(scheme.FALSE);
+    } else {
+        console.log("hash-clear!", arguments);
+        not_implemented_yet();
+    }
+});
+
+def_guile0("hashq-remove!", function (self, cont, htable, key) {
+    if (htable instanceof scheme.HashTable) {
+        delete htable.table[scm_hash(key)];
+        return cont(scheme.FALSE);
+    } else {
+        console.log("hashq-ref", arguments);
+        not_implemented_yet();
+    }
+});
+
+var scm_hash = function (obj) {
+    if (obj instanceof scheme.Symbol) {
+        return obj.name;
+    }
+
+    console.log("Can't hash object", obj);
+    throw "BadHash";
+};
+
+scheme.HashTable = function ( ) {
+    this.table = {};
+    this.lookup = function (obj, dflt) {
+        var hash = scm_hash(obj);
+        if (this.table.hasOwnProperty(hash)) {
+            return this.table[hash];
+        } else {
+            return dflt;
+        }
+    };
+
+    return this;
+}
+
+def_guile0("hashq-ref", function(self, cont, obarray, sym, dflt) {
+
+    if (obarray instanceof scheme.HashTable) {
+        return cont(obarray.lookup(sym, dflt ? dflt : scheme.FALSE));
+    } else {
+        console.log("hashq-ref", arguments);
+        not_implemented_yet();
+    }
+});
+
+
+def_guile0("hashq-set!", function (self, cont, hashtable, key, obj) {
+    if (hashtable instanceof scheme.HashTable) {
+        hashtable.table[scm_hash(key)] = obj;
+        return cont(scheme.FALSE);
+    } else {
+        console.log("hashq-set!", arguments);
+        not_implemented_yet();
+    }
+});
+
+def_guile0("hash-for-each", function (self, cont, module, symbol) {
+    // FIXME:
+    return cont(scheme.FALSE);
+});
+
