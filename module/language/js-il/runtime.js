@@ -108,6 +108,10 @@ scheme.primitives["u64->=-scm"] = function(x, y) {
     return coerce_bool(x >= y);
 };
 
+scheme.primitives["scm->u64"] = function(x) {
+    return x;
+};
+
 // Boxes
 scheme.Box = function (x) {
     this.x = x;
@@ -636,6 +640,7 @@ function scm_list (self, cont) {
 };
 def_guile0("list", scm_list);
 
+// Numbers
 function scm_add(self, cont) {
 
     var total = 0;
@@ -657,6 +662,11 @@ function scm_mul(self, cont) {
 
 };
 def_guile0("*", scm_mul);
+
+def_guile0("integer?", function(self, cont, obj) {
+    // return coerce_bool(Number.isInteger(obj));  // ES6
+    return cont(coerce_bool(typeof(obj) === 'number'));
+});
 
 // Lists
 def_guile0("make-list", function (self, cont, n, obj) {
@@ -797,6 +807,10 @@ function scm_gensym (self, cont, prefix) {
 };
 def_guile0("gensym", scm_gensym);
 
+// Chars
+def_guile0("char=?", function (self, cont, char1, char2) {
+    return cont(char1.c === char2.c);
+});
 
 // Strings
 def_guile0("string=?", function (self, cont, s1, s2) {
@@ -828,6 +842,11 @@ def_guile0("string-join", function (self, cont, strings) {
     }
 
     return cont(new scheme.String(s));
+});
+
+// Fluids
+def_guile0("make-fluid", function (self, cont, val) {
+    return cont(new scheme.Fluid(val));
 });
 
 // Structs
@@ -1095,5 +1114,39 @@ def_guile0("%get-pre-modules-obarray", function (self, cont) {
 
 def_guile0("set-current-module", function (self, cont, module) {
     return cont(scheme.FALSE);
+});
+
+// Stubs
+function stub(name) {
+    function scm_fn (self, cont) {
+        console.log(name, arguments);
+        not_implemented_yet();
+    };
+    def_guile0(name, scm_fn);
+};
+
+stub("syntax-session-id");
+stub("macroexpand");
+stub("%exception-handler");
+stub("print-exception");
+stub("*features*");
+stub("%load-hook");
+stub("current-reader");
+
+def_guile0("read-hash-extend", function (self, cont, char, fun) {
+    return cont(scheme.FALSE);
+});
+
+def_guile0("make-hook", function (self, cont, nargs) {
+    return cont(scheme.FALSE);
+});
+
+function scm_simple_format (self, cont) {
+    not_implemented_yet();
+};
+def_guile0("simple-format", scm_simple_format);
+
+def_guile0("scm-error", function (self, cont, key, subr, message, args, data) {
+  not_implemented_yet();
 });
 
