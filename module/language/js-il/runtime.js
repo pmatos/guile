@@ -797,8 +797,32 @@ def_guile0("string=?", function (self, cont, s1, s2) {
 });
 
 def_guile0("string-append", function (self, cont, s1, s2) {
-    var s = new scheme.String(s1.s + s2.s);
-    return cont(s);
+    var s = "";
+
+    for (var i = 2; i < arguments.length; i++) {
+        s += arguments[i].s;
+    }
+
+    //console.log("sap", s1, s2, arguments.length);
+    return cont(new scheme.String(s));
+});
+
+def_guile0("string-join", function (self, cont, strings) {
+    var s = "";
+
+    while (!scheme.is_true(scheme.primitives["null?"](strings))) {
+        if (scheme.is_true(scheme.primitives["pair?"](strings))) {
+            s += strings.car.s;
+            strings = strings.cdr;
+        } else {
+            console.log("string-join bad");
+            not_implemented_yet();
+        }
+    }
+
+    return cont(new scheme.String(s));
+});
+
 });
 
 // Structs
