@@ -313,8 +313,8 @@ scheme.Syntax = function (expr, wrap, module) {
 };
 
 // Modules
-scheme.primitives["define!"] = function(sym, obj) {
-    var b = new scheme.Box(obj);
+scheme.primitives["define!"] = function(sym) {
+    var b = new scheme.Box(scheme.UNDEFINED);
     scheme.env[sym.name] = b;
     return b;
 };
