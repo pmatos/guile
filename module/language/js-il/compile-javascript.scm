@@ -141,18 +141,17 @@
              (make-call (compile-id name)
                         (list
                          (make-id "undefined")
-                         (make-refine *scheme* (make-const "initial_cont")))))))
-       (make-call (make-function
-                   '()
-                   (append
-                    (map (lambda (id f)
-                           (make-var (rename-id id)
-                                     (compile-exp f)))
-                         (cons name names)
-                         (cons fun funs))
+                         (make-id "unit_cont"))))))
+       (make-function
+        (list "unit_cont")
+        (append
+         (map (lambda (id f)
+                (make-var (rename-id id)
+                          (compile-exp f)))
+              (cons name names)
+              (cons fun funs))
 
-                    (list entry-call)))
-                  '())))
+         (list entry-call)))))
 
     (($ il:continuation params body)
      (make-function (map rename-id params) (list (compile-exp body))))

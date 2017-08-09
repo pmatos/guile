@@ -193,6 +193,7 @@ SOURCES =					\
   language/js-il.scm				\
   language/js-il/inlining.scm			\
   language/js-il/compile-javascript.scm		\
+  language/js-il/runtime.js			\
   language/js-il/spec.scm			\
 						\
   language/scheme/compile-tree-il.scm		\
@@ -257,6 +258,7 @@ SOURCES =					\
   scripts/frisk.scm				\
   scripts/generate-autoload.scm			\
   scripts/help.scm				\
+  scripts/jslink.scm				\
   scripts/lint.scm				\
   scripts/list.scm				\
   scripts/punify.scm				\
