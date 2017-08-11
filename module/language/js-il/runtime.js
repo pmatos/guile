@@ -1085,8 +1085,7 @@ var boot_modules = {};
 
 function scm_primitive_load_path (self, cont, path) {
     if (path.s in boot_modules) {
-        boot_modules[path.s](); // FIXME: note modules should share cont?
-        return cont(scheme.UNDEFINED);
+        return boot_modules[path.s](cont);
     } else {
         console.log("primitive load path", arguments);
         not_implemented_yet();
