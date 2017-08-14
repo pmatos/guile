@@ -496,8 +496,6 @@ scheme.primitives["eqv?"] = function(x, y) {
     return coerce_bool(x === y);
 };
 
-scheme.primitives["equal?"] = not_implemented_yet;
-
 // Fluids
 scheme.Fluid = function (x) {
     this.value = x;
@@ -759,6 +757,24 @@ def_guile0("append", function (self, cont, l1, l2) {
     }
 
     return cont(l);
+});
+
+function scm_equal(x,y) {
+    if (x instanceof scheme.Pair) {
+        if (y instanceof scheme.Pair) {
+            return (scm_equal(x.car,y.car) && scm_equal(x.cdr,y.cdr));
+        } else {
+            return false;
+        }
+    } else if (y instanceof scheme.Pair) {
+        return false;
+    } else {
+        return (x === y);
+    }
+}
+
+def_guile0("equal?", function (self, cont, x, y) {
+    return cont(coerce_bool(scm_equal(x,y)));
 });
 
 def_guile0("memq", function (self, cont, val, args) {
