@@ -87,6 +87,10 @@ scheme.primitives["load-u64"] = function(x) {
     return x;
 };
 
+scheme.primitives["u64-="] = function(x, y) {
+    return coerce_bool(x === y);
+};
+
 scheme.primitives["u64-=-scm"] = function(x, y) {
     // i.e. br-if-u64-=-scm
     return coerce_bool(x === y);
@@ -109,6 +113,10 @@ scheme.primitives["u64->=-scm"] = function(x, y) {
 };
 
 scheme.primitives["scm->u64"] = function(x) {
+    return x;
+};
+
+scheme.primitives["u64->scm"] = function(x) {
     return x;
 };
 
