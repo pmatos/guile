@@ -324,11 +324,36 @@ scheme.Syntax = function (expr, wrap, module) {
     return this;
 };
 
+// Hashtables
+var scm_hash = function (obj) {
+    if (obj instanceof scheme.Symbol) {
+        return obj.name;
+    }
+
+    console.log("Can't hash object", obj);
+    throw "BadHash";
+};
+
+scheme.HashTable = function ( ) {
+    // HashTable definition needs to come before scm_pre_modules_obarray
+    this.table = {};
+    this.lookup = function (obj, dflt) {
+        var hash = scm_hash(obj);
+        if (this.table.hasOwnProperty(hash)) {
+            return this.table[hash];
+        } else {
+            return dflt;
+        }
+    };
+
+    return this;
+};
+
 // Modules
 scheme.primitives["define!"] = function(sym) {
-    var b = new scheme.Box(scheme.UNDEFINED);
-    scheme.env[sym.name] = b;
-    return b;
+    var mod = scm_current_module ();
+    var v = scm_module_ensure_local_variable (mod, sym);
+    return v;
 };
 
 scheme.primitives["cache-current-module!"] = function (module, scope) {
@@ -336,32 +361,177 @@ scheme.primitives["cache-current-module!"] = function (module, scope) {
 };
 
 scheme.primitives["cached-toplevel-box"] = function (scope, sym, is_bound) {
-    return scheme.cache[scope][sym.name];
+    var module = scheme.cache[scope]; // FIXME: what if not there?
+
+    if (!scheme.is_true(module)) {
+        module = scm_the_root_module();
+    }
+
+    var v = scm_module_lookup(module, sym);
+
+    if (is_bound) {
+        // not_implemented_yet();
+    }
+
+    return v;
 };
+
+var scm_pre_modules_obarray = new scheme.HashTable();
+var the_root_module;
+
+function scm_the_root_module() {
+    if (module_system_is_booted)
+        return the_root_module.x;
+    else
+        return scheme.FALSE;
+}
 
 scheme.primitives["cached-module-box"] = function (module_name, sym, is_public, is_bound)  {
-    var cache = scheme.module_cache;
+    var v;
 
-    while (scheme.EMPTY != module_name.cdr) {
-        cache = cache[module_name.car.name];
-    }
-
-    cache = cache[module_name.car.name];
-    var r = cache[sym.name];
-    if (typeof r === 'undefined') {
-        throw {r : "cached-module-box", s : sym, m : module_name};
+    if (!module_system_is_booted) {
+        if (module_name instanceof scheme.Pair
+            && module_name.car.name === "guile"
+            && module_name.cdr === scheme.EMPTY) {
+            v = scm_lookup (sym);
+        } else {
+            not_implemented_yet();
+        }
+    } else if (sym.name === "equal?") {
+        // FIXME: this hack exists to work around a miscompilation of
+        // equal? which is not being handled as a toplevel reference.
+        // This leads to an infinite loop in the temporary definition of
+        // resolve-module, which is called by cache-module-box.
+        v = scm_pre_modules_obarray.table["equal?"];
+    } else if (scheme.is_true(is_public)) {
+        v = scm_public_lookup (module_name, sym);
     } else {
-        return r;
+        v = scm_private_lookup (module_name, sym);
     }
+
+    if (is_bound) {
+        // not_implemented_yet();
+    }
+
+    return v;
 };
 
-scheme.primitives["current-module"] = function () {
-    return scheme.env;
-};
+function scm_public_lookup(module_name, name) {
+    var v = scm_public_variable (module_name, name);
+    // if false, error
+    return v;
+}
+
+function scm_public_variable(module_name, name) {
+    var mod = scheme.call(resolve_module_var.x, module_name, k_ensure, scheme.FALSE);
+
+    // if (scm_is_false (mod))
+    //   scm_misc_error ("public-lookup", "Module named ~s does not exist",
+    //                   scm_list_1 (module_name));
+
+    // iface = scm_module_public_interface (mod);
+
+    // if (scm_is_false (iface))
+    //   scm_misc_error ("public-lookup", "Module ~s has no public interface",
+    //                   scm_list_1 (mod));
+
+    return scm_module_variable (mod, name);
+}
+
+function scm_private_lookup(module_name, sym) {
+    // FIXME: scm_private_variable + miscerror if not bound
+    return scm_public_lookup(module_name, sym);
+}
+
+scheme.primitives["current-module"] = scm_current_module;
 
 scheme.primitives["resolve"] = function (sym, is_bound) {
-    return scheme.env[sym.name];
+    var v = scm_lookup(sym);
+
+    if (is_bound) {
+        // not_implemented_yet();
+    };
+
+    return v;
 };
+
+function scm_current_module() {
+    if (module_system_is_booted) {
+        return the_module.value;
+    } else {
+        return scheme.FALSE;
+    }
+}
+
+function scm_lookup(sym) {
+    return scm_module_lookup(scm_current_module(), sym);
+};
+
+scheme.call = function (func) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    args.unshift(scheme.initial_cont);
+    args.unshift(func);
+    return func.fun.apply(func, args);
+};
+
+function scm_module_ensure_local_variable(module, sym) {
+    if (module_system_is_booted) {
+        // SCM_VALIDATE_MODULE (1, module);
+        // SCM_VALIDATE_SYMBOL (2, sym);
+        // FIXME: this will need a specific continuation
+        return scheme.call(module_make_local_var_x_var.x, module, sym);
+    } else {
+        var box = scm_pre_modules_obarray.lookup(sym, false);
+        if (box) {
+            return box;
+        } else {
+            var v = new scheme.Box(scheme.UNDEFINED);
+            scm_pre_modules_obarray.table[sym.name] = v;
+            return v;
+        }
+    }
+}
+
+function scm_module_variable(module, sym) {
+    // if booted, validate module
+    // validate symbol
+    if (scheme.is_true(module)) {
+        // 1. Check Module Obarray
+        if (module instanceof scheme.Struct) {
+            var obarray = module.fields[0];
+            return obarray.lookup(sym, scheme.UNDEFINED);
+        }
+        // 2. Search among the imported variables
+        // 3. Query the custom binder
+        // 4. Return False
+        not_implemented_yet();
+    }
+
+    return scm_pre_modules_obarray.lookup(sym, scheme.UNDEFINED);
+}
+
+function scm_module_define(module, sym, val) {
+    var v = scm_module_ensure_local_variable(module, sym);
+    v.x = val;
+    return v;
+}
+
+function scm_module_lookup(module, sym) {
+    var v = scm_module_variable(module, sym);
+    if (scheme.is_true(v)) {
+        return v;
+    }
+    not_implemented_yet(); // FIXME: unbound
+}
+
+
+var module_system_is_booted = false;
+
+var module_make_local_var_x_var =
+    scm_module_define(scm_current_module(),
+                      new scheme.Symbol("module-make-local-var!"),
+                      scheme.UNDEFINED);
+
 
 // bleh
 scheme.initial_cont = function (x) { return x; };
@@ -510,6 +680,8 @@ scheme.Fluid = function (x) {
     return this;
 };
 
+var the_module = new scheme.Fluid(scheme.FALSE);
+
 scheme.primitives["pop-fluid"] = function () {
     var frame = scheme.dynstack.shift();
     if (frame instanceof scheme.frame.Fluid) {
@@ -639,20 +811,15 @@ scheme.frame.DynWind = function(wind, unwind) {
     this.unwind = unwind;
 };
 
-// Module Cache
-scheme.module_cache["guile"] = scheme.env;
-
 function def_guile0 (name, fn) {
-    var sym = new scheme.Symbol(name); // put in obarray
     var clos = new scheme.Closure(fn, 0);
-    var box = new scheme.Box(clos);
-    scheme.module_cache["guile"][name] = box;
+    def_guile_val(name, clos);
 };
 
 function def_guile_val (name, val) {
     var sym = new scheme.Symbol(name); // put in obarray
     var box = new scheme.Box(val);
-    scheme.module_cache["guile"][name] = box;
+    scm_pre_modules_obarray.table[name] = box;
 };
 
 function scm_list (self, cont) {
@@ -1041,28 +1208,9 @@ def_guile0("hashq-remove!", function (self, cont, htable, key) {
     }
 });
 
-var scm_hash = function (obj) {
-    if (obj instanceof scheme.Symbol) {
-        return obj.name;
-    }
 
-    console.log("Can't hash object", obj);
-    throw "BadHash";
-};
 
-scheme.HashTable = function ( ) {
-    this.table = {};
-    this.lookup = function (obj, dflt) {
-        var hash = scm_hash(obj);
-        if (this.table.hasOwnProperty(hash)) {
-            return this.table[hash];
-        } else {
-            return dflt;
-        }
-    };
 
-    return this;
-}
 
 def_guile0("hashq-ref", function(self, cont, obarray, sym, dflt) {
 
@@ -1094,15 +1242,13 @@ def_guile0("hash-for-each", function (self, cont, module, symbol) {
 def_guile0("make-variable", function (self, cont, val) {
     return cont(new scheme.Box(val));
 });
+def_guile0("make-undefined-variable", function (self, cont, val) {
+    return cont(new scheme.Box(scheme.UNDEFINED));
+});
 
 def_guile0("define!", function (self, cont, symbol, value) {
-    // FIXME: reuse module-define!
-    if (symbol.name in scheme.env) {
-        scheme.env[symbol.name].x = value;
-    } else {
-        scheme.env[symbol.name] = new scheme.Box(value);
-    }
-    return cont();
+    // FIXME: validate symbol
+    return cont(scm_module_define(scm_current_module(), symbol, value));
 });
 
 var boot_modules = {};
@@ -1124,38 +1270,52 @@ boot_modules["ice-9/threads"] = function () {};
 boot_modules["srfi/srfi-4"] = function () {};
 
 def_guile0("module-local-variable", function (self, cont, module, symbol) {
-    if (module instanceof scheme.Struct) {
-      // Assumes we get a module with a hashtable
-      var obarray = scheme.primitives["struct-ref"](module, 0);
-      return cont(obarray.lookup(symbol, scheme.FALSE)); // hashq-ref
-    } else {
-      // FIXME: could be #f, then should use the pre-mod obarray
-      console.log("module-local-variable needs real modules");
-      throw "fail";
+    // module system is booted, then validate module
+    // validate symbol
+    if (!scheme.is_true(module)) {
+        // hashq ref
+        return cont(scm_pre_modules_obarray.lookup(symbol, scheme.UNDEFINED));
     }
+    // 1. check module_obarray
+    var obarray = module.fields[0]; // SCM_MODULE_OBARRAY
+    var b = obarray.lookup(symbol, scheme.UNDEFINED);
+    if (b != scheme.UNDEFINED) { // is_true
+        return cont(b);
+    }
+
+    // FIXME: check binders
+    return cont(scheme.FALSE);
 });
 
 def_guile0("module-variable", function (self, cont, module, symbol) {
-    if (module instanceof scheme.Struct) {
-       console.log("FIXME: should only be called pre-bootstrap");
-       throw "fail";
-    }
-    if (module instanceof scheme.HashTable) {
-       console.log("modvar htable");
-       throw "fail";
-    }
-    return cont(module[symbol.name]);
+    return cont(scm_module_variable(module, symbol));
 });
 
 def_guile0("%get-pre-modules-obarray", function (self, cont) {
-    var obarray = new scheme.HashTable();
-    obarray.table = scheme.env;
-    return cont(obarray);
+    return cont(scm_pre_modules_obarray);
 });
 
 def_guile0("set-current-module", function (self, cont, module) {
-    return cont(scheme.FALSE);
+
+    if (!module_system_is_booted) {
+        scm_post_boot_init_modules ();
+    }
+    // SCM_VALIDATE_MODULE (SCM_ARG1, module);
+
+    var old = scm_current_module ();
+    the_module.value = module;
+    return cont(old);
 });
+
+var k_ensure;
+var resolve_module_var;
+
+function scm_post_boot_init_modules() {
+    module_system_is_booted = true;
+    the_root_module = scm_lookup (new scheme.Symbol("the-root-module"));
+    k_ensure = new scheme.Keyword("ensure");
+    resolve_module_var = scm_lookup (new scheme.Symbol("resolve-module"));
+}
 
 // Stubs
 function stub(name) {
