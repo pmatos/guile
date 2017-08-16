@@ -325,25 +325,41 @@ scheme.Syntax = function (expr, wrap, module) {
 };
 
 // Hashtables
-var scm_hash = function (obj) {
-    if (obj instanceof scheme.Symbol) {
-        return obj.name;
-    }
-
-    console.log("Can't hash object", obj);
-    throw "BadHash";
-};
-
-scheme.HashTable = function ( ) {
+scheme.HashTable = function (is_weak) {
     // HashTable definition needs to come before scm_pre_modules_obarray
-    this.table = {};
+
+    // ignore the is_weak argument, since we can't iterate over js WeakMaps
+    this.table = new Map(); // WeakMap();
+
     this.lookup = function (obj, dflt) {
-        var hash = scm_hash(obj);
-        if (this.table.hasOwnProperty(hash)) {
-            return this.table[hash];
+        if (this.table.has(obj)) {
+            return this.table.get(obj);
         } else {
             return dflt;
         }
+    };
+
+    this.get = function(key) {
+        return this.table.get(key);
+    };
+
+    this.set = function (key, obj) {
+        this.table.set(key, obj);
+        return obj;
+    };
+
+    this.delete = function (key) {
+        this.table.delete(key);
+        return scheme.FALSE; // or handle
+    };
+
+    this.clear = function () {
+        this.table.clear();
+        return scheme.UNSPECIFIED;
+    };
+
+    this.keys = function () {
+        return [...this.table.keys()];
     };
 
     return this;
@@ -402,7 +418,7 @@ scheme.primitives["cached-module-box"] = function (module_name, sym, is_public, 
         // equal? which is not being handled as a toplevel reference.
         // This leads to an infinite loop in the temporary definition of
         // resolve-module, which is called by cache-module-box.
-        v = scm_pre_modules_obarray.table["equal?"];
+        v = scm_pre_modules_obarray.get(sym);
     } else if (scheme.is_true(is_public)) {
         v = scm_public_lookup (module_name, sym);
     } else {
@@ -486,7 +502,7 @@ function scm_module_ensure_local_variable(module, sym) {
             return box;
         } else {
             var v = new scheme.Box(scheme.UNDEFINED);
-            scm_pre_modules_obarray.table[sym.name] = v;
+            scm_pre_modules_obarray.set(sym, v);
             return v;
         }
     }
@@ -819,7 +835,7 @@ function def_guile0 (name, fn) {
 function def_guile_val (name, val) {
     var sym = new scheme.Symbol(name); // put in obarray
     var box = new scheme.Box(val);
-    scm_pre_modules_obarray.table[name] = box;
+    scm_pre_modules_obarray.set(sym,box);
 };
 
 function scm_list (self, cont) {
@@ -1184,58 +1200,62 @@ def_guile0("make-hash-table", function (self, cont, size) {
 });
 
 def_guile0("make-weak-key-hash-table", function (self, cont, size) {
-    // FIXME: not weak
-    return cont(new scheme.HashTable());
+    return cont(new scheme.HashTable(true));
+});
+
+def_guile0("make-weak-value-hash-table", function (self, cont, size) {
+    // FIXME:
+    return cont(new scheme.HashTable(true));
 });
 
 def_guile0("hash-clear!", function (self, cont, hashtable) {
-    if (hashtable instanceof scheme.HashTable) {
-        hashtable.table = {};
-        return cont(scheme.FALSE);
-    } else {
-        console.log("hash-clear!", arguments);
-        not_implemented_yet();
-    }
+    return cont(hashtable.clear());
 });
 
 def_guile0("hashq-remove!", function (self, cont, htable, key) {
-    if (htable instanceof scheme.HashTable) {
-        delete htable.table[scm_hash(key)];
-        return cont(scheme.FALSE);
-    } else {
-        console.log("hashq-ref", arguments);
-        not_implemented_yet();
-    }
+    return cont(htable.delete(key));
 });
-
-
-
-
 
 def_guile0("hashq-ref", function(self, cont, obarray, sym, dflt) {
-
-    if (obarray instanceof scheme.HashTable) {
-        return cont(obarray.lookup(sym, dflt ? dflt : scheme.FALSE));
-    } else {
-        console.log("hashq-ref", arguments);
-        not_implemented_yet();
-    }
+    return cont(obarray.lookup(sym, dflt ? dflt : scheme.FALSE));
 });
-
 
 def_guile0("hashq-set!", function (self, cont, hashtable, key, obj) {
-    if (hashtable instanceof scheme.HashTable) {
-        hashtable.table[scm_hash(key)] = obj;
-        return cont(scheme.FALSE);
-    } else {
-        console.log("hashq-set!", arguments);
-        not_implemented_yet();
-    }
+    return cont(hashtable.set(key,obj));
 });
 
-def_guile0("hash-for-each", function (self, cont, module, symbol) {
-    // FIXME:
-    return cont(scheme.FALSE);
+def_guile0("hash-for-each", function (self, cont, proc, htable) {
+    var keys = htable.keys(); // don't know if I can use js iterators
+
+    var loop = function (i) {
+        if (i === keys.length) {
+            return cont(scheme.UNSPECIFIED);
+        } else {
+            var newk = function() {
+                return loop(i+1);
+            };
+            return proc.fun(proc, newk, keys[i], htable.get(keys[i]));
+        }
+    };
+
+    return loop(0);
+});
+
+def_guile0("hash-map->list", function (self, cont, proc, htable) {
+    var keys = htable.keys(); // don't know if I can use js iterators
+
+    var loop = function (i, retval, k) {
+        if (i === keys.length) {
+            return k(retval);
+        } else {
+            var newk = function(result) {
+                return loop(i+1, scheme.primitives.cons(result, retval), k);
+            };
+            return proc.fun(proc, newk, keys[i], htable.get(keys[i]));
+        }
+    };
+
+    return loop(0, scheme.EMPTY, cont);
 });
 
 // Modules
