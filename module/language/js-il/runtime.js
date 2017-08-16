@@ -1360,6 +1360,10 @@ def_guile0("make-undefined-variable", function (self, cont, val) {
     return cont(new scheme.Box(scheme.UNDEFINED));
 });
 
+def_guile0("variable-bound?", function (self, cont, box) {
+    return cont(coerce_bool(!(box.x === scheme.UNDEFINED)));
+});
+
 def_guile0("define!", function (self, cont, symbol, value) {
     // FIXME: validate symbol
     return cont(scm_module_define(scm_current_module(), symbol, value));
