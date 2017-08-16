@@ -1418,8 +1418,35 @@ def_guile0("read-hash-extend", function (self, cont, char, fun) {
     return cont(scheme.FALSE);
 });
 
+scheme.Hook = function (arity) {
+    this.arity = arity;
+    this.procs = [];
+};
+
 def_guile0("make-hook", function (self, cont, nargs) {
-    return cont(scheme.FALSE);
+    var arity = (nargs === undefined) ? 0 : nargs;
+    return cont(new scheme.Hook(arity));
+});
+
+def_guile0("run-hook", function (self, cont, hook) {
+    var procs = hook.procs;
+    var args = Array.prototype.slice.call(arguments, 3);
+    // FIXME: validate hook
+    // FIXME: check num args = arity or error
+
+    var loop = function (i) {
+        if (i === procs.length) {
+            return cont(scheme.UNSPECIFIED);
+        } else {
+            var newk = function() {
+                return loop(i+1);
+            };
+
+            var proc = procs[i];
+            return proc.fun.apply(proc.fun, [proc, newk].concat(args));
+        }
+    };
+    return loop(0);
 });
 
 function scm_simple_format (self, cont) {
