@@ -445,18 +445,34 @@ function scm_public_variable(module_name, name) {
     //   scm_misc_error ("public-lookup", "Module named ~s does not exist",
     //                   scm_list_1 (module_name));
 
-    // iface = scm_module_public_interface (mod);
+    var iface = scm_module_public_interface (mod);
 
     // if (scm_is_false (iface))
     //   scm_misc_error ("public-lookup", "Module ~s has no public interface",
     //                   scm_list_1 (mod));
 
-    return scm_module_variable (mod, name);
+    return scm_module_variable (iface, name);
+}
+
+var module_public_interface_var;
+
+function scm_module_public_interface (module) {
+      return scheme.call(module_public_interface_var.x, module);
 }
 
 function scm_private_lookup(module_name, sym) {
     // FIXME: scm_private_variable + miscerror if not bound
-    return scm_public_lookup(module_name, sym);
+    return scm_private_variable(module_name, sym);
+}
+
+function scm_private_variable (module_name, name) {
+    var mod = scheme.call(resolve_module_var.x, module_name, k_ensure, scheme.FALSE);
+
+    // if (scm_is_false (mod))
+    //     scm_misc_error ("private-lookup", "Module named ~s does not exist",
+    //                     scm_list_1 (module_name));
+
+    return scm_module_variable (mod, name);
 }
 
 scheme.primitives["current-module"] = scm_current_module;
@@ -1335,6 +1351,7 @@ function scm_post_boot_init_modules() {
     the_root_module = scm_lookup (new scheme.Symbol("the-root-module"));
     k_ensure = new scheme.Keyword("ensure");
     resolve_module_var = scm_lookup (new scheme.Symbol("resolve-module"));
+    module_public_interface_var = scm_lookup (new scheme.Symbol("module-public-interface"));
 }
 
 // Stubs
