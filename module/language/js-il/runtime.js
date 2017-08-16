@@ -945,6 +945,10 @@ def_guile0("make-list", function (self, cont, n, obj) {
     return cont(list);
 });
 
+def_guile0("cons", function (self, cont, car, cdr) {
+    return cont(scheme.primitives.cons(car, cdr));
+});
+
 def_guile0("length", function (self, cont, list) {
    var len = 0;
 
@@ -1027,18 +1031,46 @@ def_guile0("equal?", function (self, cont, x, y) {
     return cont(coerce_bool(scm_equal(x,y)));
 });
 
-def_guile0("memq", function (self, cont, val, args) {
+def_guile0("memq", function (self, cont, elt, list) {
+    // FIXME: validate list
+    for (; list != scheme.EMPTY && list != scheme.NIL; list = list.cdr) {
+        if (elt === list.car) { // FIXME: eqv
+            return cont(list);
+        }
+    }
     return cont(scheme.FALSE);
 });
 
 def_guile0("member", function (self, cont, elt, list) {
-    // FIXME: needs equal? console.log("member", arguments);
-    // throw "";
+    // FIXME: validate list
+    for (; list != scheme.EMPTY && list != scheme.NIL; list = list.cdr) {
+        if (scm_equal(elt, list.car)) {
+            return cont(list);
+        }
+    }
     return cont(scheme.FALSE);
 });
 
 def_guile0("delete!", function (self, cont, elt, list) {
-    // FIXME:
+    // FIXME: validate list
+    if (list instanceof scheme.Pair) {
+        // initially skip car;
+        for (var prev = list, walk = list.cdr;
+             walk instanceof scheme.Pair;
+             walk = walk.cdr) {
+
+            if (scm_equal(walk.car, elt)) {
+                prev.cdr = walk.cdr;
+            } else {
+                prev = prev.cdr;
+            }
+        }
+        // fixup car in return value, but can't delete
+        if (scm_equal(list.car, elt)) {
+            return cont(list.cdr);
+        }
+    }
+
     return cont(list);
 });
 
