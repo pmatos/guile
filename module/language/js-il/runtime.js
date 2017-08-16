@@ -1442,7 +1442,7 @@ stub("syntax-session-id");
 stub("macroexpand");
 stub("%exception-handler");
 stub("print-exception");
-stub("*features*");
+def_guile_val("*features*", scheme.EMPTY);
 stub("%load-hook");
 stub("current-reader");
 
