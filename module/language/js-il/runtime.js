@@ -531,7 +531,16 @@ function scm_module_variable(module, sym) {
         // 1. Check Module Obarray
         if (module instanceof scheme.Struct) {
             var obarray = module.fields[0];
-            return obarray.lookup(sym, scheme.UNDEFINED);
+            var v = obarray.lookup(sym, scheme.UNDEFINED);
+            if (v === scheme.UNDEFINED) { // is_false
+                // 2. Search among the imported variables
+                v = module_imported_variable(module, sym);
+                return v;
+                // can't be imported
+                not_implemented_yet();
+            } else {
+                return v;
+            }
         }
         // 2. Search among the imported variables
         // 3. Query the custom binder
@@ -540,6 +549,40 @@ function scm_module_variable(module, sym) {
     }
 
     return scm_pre_modules_obarray.lookup(sym, scheme.UNDEFINED);
+}
+
+var scm_module_index_obarray = 0;
+var scm_module_index_uses = 1;
+var scm_module_index_import_obarray = 8;
+function module_imported_variable(module, sym)  {
+    // search cached imported bindings
+    var imports = module.fields[scm_module_index_import_obarray];
+    var v = imports.lookup(sym, scheme.UNDEFINED);
+    if (!(scheme.UNDEFINED === (v))) {
+        return v;
+    }
+    // search use list
+    var uses = module.fields[scm_module_index_uses];
+    var found_var = scheme.FALSE;
+    var found_iface = scheme.FALSE;
+    for (; uses instanceof scheme.Pair; uses = uses.cdr) {
+        var iface = uses.car;
+        var v = scm_module_variable(iface, sym);
+        if (scheme.is_true(v)) {
+            if (scheme.is_true(found_var)) {
+                console.log("resolve duplicate binding");
+                not_implemented_yet();
+            } else {
+                found_var = v;
+                found_iface = iface;
+            }
+        }
+    }
+    if (scheme.is_true(found_var)) {
+        imports.set(sym, found_var);
+        return found_var;
+    }
+    return scheme.FALSE;
 }
 
 function scm_module_define(module, sym, val) {
