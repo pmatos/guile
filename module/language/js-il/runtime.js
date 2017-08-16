@@ -1162,6 +1162,9 @@ def_guile0("string-join", function (self, cont, strings) {
 
 // Fluids
 def_guile0("make-fluid", function (self, cont, val) {
+    if (val === undefined) {
+        val = scheme.FALSE;
+    }
     return cont(new scheme.Fluid(val));
 });
 
