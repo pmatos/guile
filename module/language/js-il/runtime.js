@@ -760,7 +760,7 @@ var the_module = new scheme.Fluid(scheme.FALSE);
 scheme.primitives["pop-fluid"] = function () {
     var frame = scheme.dynstack.shift();
     if (frame instanceof scheme.frame.Fluid) {
-        frame.fluid.value = frame.fluid.old_value;
+        frame.fluid.value = frame.old_value;
         return;
     } else {
         throw "not a frame";
