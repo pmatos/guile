@@ -131,6 +131,51 @@
        kws
        ids))
 
+(define (bind-opt-kw-args opts kws ids num-drop)
+  ;; FIXME: what we really need is a rewrite of all the complex argument
+  ;; handling , not another special case.
+  ;; NB: our generated IDs will not clash since they are not prefixed
+  ;; with k_ or v_
+  (define skip? (make-id "skip"))
+  (define skip-idx (make-id "skip_idx"))
+  (define (bind-opt-args opts num-drop)
+    (map (lambda (opt idx)
+           (make-var (rename-id opt)
+                     (let ((arg (make-refine (make-id "arguments")
+                                             (make-const (+ num-drop idx)))))
+                       (make-ternary (make-binop 'or
+                                                 skip?
+                                                 (make-binop '===
+                                                             (make-prefix 'typeof arg)
+                                                             (make-id "undefined")))
+                                     (make-refine *scheme* (make-const "UNDEFINED"))
+                                     (make-ternary (make-binop 'instanceof
+                                                               arg
+                                                               (make-refine *scheme* (make-const "Keyword")))
+                                                   (make-binop 'begin
+                                                               (make-assign "skip" (compile-const #t))
+                                                               (make-refine *scheme* (make-const "UNDEFINED")))
+                                                   (make-binop 'begin
+                                                               (make-assign "skip_idx" (make-binop '+ skip-idx (make-const 1)))
+                                                               arg))))))
+         opts
+         (iota (length opts))))
+  (define (bind-kw-args kws ids)
+    (define lookup (make-refine *utils* (make-const "keyword_ref")))
+    (map (lambda (kw id)
+           (make-var (rename-id id)
+                     (make-call lookup
+                                (list (compile-const kw)
+                                      (make-id "arguments")
+                                      skip-idx
+                                      (make-refine *scheme* (make-const "UNDEFINED"))))))
+         kws
+         ids))
+  (append (list  (make-var "skip" (compile-const #f))
+                 (make-var "skip_idx" (compile-const num-drop)))
+        (bind-opt-args opts num-drop)
+        (bind-kw-args kws ids)))
+
 
 (define (compile-exp exp)
   ;; TODO: handle ids for js
@@ -284,8 +329,7 @@
                              (map compile-id opts)))))))
       (($ il:params self req opts #f ((kws names ids) ...) _)
        (append
-        (bind-opt-args opts (+ offset (length req)))
-        (bind-kw-args kws names (+ offset (length req)))
+        (bind-opt-kw-args opts kws names (+ offset (length req)))
         (list
          (make-return
           (make-call (compile-id k)
