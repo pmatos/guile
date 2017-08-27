@@ -15,6 +15,8 @@
     (fold-right flatten '() stmts))
   (define (flatten-exp exp)
     (match exp
+      (($ assign id exp)
+       (make-assign id (flatten-exp exp)))
       (($ const c) exp)
       (($ new exp)
        (make-new (flatten-exp exp)))

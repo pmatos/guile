@@ -4,6 +4,7 @@
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-9 gnu)
   #:export (
+            make-assign assign
             make-const const
             make-function function
             make-return return
@@ -50,6 +51,7 @@
 (define (print-js exp port)
   (format port "#<js ~S>" (unparse-js exp)))
 
+(define-js-type assign id exp)
 (define-js-type const c)
 (define-js-type function args body)
 (define-js-type return exp)
@@ -66,6 +68,8 @@
 
 (define (unparse-js exp)
   (match exp
+    (($ assign id exp)
+     `(assign ,id ,(unparse-js exp)))
     (($ const c)
      `(const ,c))
     (($ function args body)
@@ -98,6 +102,13 @@
 
 (define (print-exp exp port)
   (match exp
+
+    (($ assign id exp)
+     (print-id id port)
+     (format port " = ")
+     (display "(" port)
+     (print-exp exp port)
+     (display ")" port))
 
     (($ const c)
      (print-const c port))
