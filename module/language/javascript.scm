@@ -179,7 +179,8 @@
     ((or) (display "||" port))
     ((and) (display "&&" port))
     ((=) (display "==" port))
-    ((+ - < <= > >= ===) (format port "~a" op))
+    ((begin) (display "," port))
+    ((+ - < <= > >= === instanceof) (format port "~a" op))
     (else
      (throw 'unprintable-binop op))))
 
