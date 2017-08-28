@@ -94,8 +94,10 @@ There is NO WARRANTY, to the extent permitted by law.~%"))
 Link Javascript FILE with all its dependencies
 
   -h, --help           print this help message
+  -v, --version        show version information
   -o, --output=OFILE   write output to OFILE
-  -o, --depends=DEP    add dependency on DEP
+  -d, --depends=DEP    add dependency on DEP
+      --no-boot        link without boot-9 & its dependencies
 
 Report bugs to <~A>.~%"
           %guile-bug-report-address))
