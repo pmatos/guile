@@ -1,6 +1,7 @@
 (define-module (scripts jslink)
   #:use-module (system base compile)
   #:use-module (system base language)
+  #:use-module (language javascript)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-37)
   #:use-module (ice-9 format)
@@ -20,9 +21,9 @@
 
 (define boot-dependencies
   '(("ice-9/posix" . #f)
-    ("ice-9/ports" . #f)
-    ("ice-9/threads" . #f)
-    ("srfi/srfi-4" . #f)
+    ("ice-9/ports" . (ice-9 ports))
+    ("ice-9/threads" . (ice-9 threads))
+    ("srfi/srfi-4" . (srfi srfi-4))
 
     ("ice-9/deprecated" . #t)
     ("ice-9/boot-9" . #t)
@@ -137,6 +138,11 @@ Report bugs to <~A>.~%"
   (format #t "boot_modules[~s] =\n" path)
   (cond ((string? file)
          (compile-dependency file))
+        ((list? file)
+         (print-statement (compile `(define-module ,file)
+                                   #:from 'scheme #:to 'javascript)
+                          (current-output-port))
+         (newline))
         (file (compile-dependency (%search-load-path path)))
         (else
          (format #t "function (cont) { return cont(scheme.UNDEFINED); };")))
