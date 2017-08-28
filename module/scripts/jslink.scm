@@ -103,7 +103,8 @@ Report bugs to <~A>.~%"
 (define* (link-file file #:key (extra-dependencies '()) output-file no-boot?)
   (let ((dependencies (if no-boot?
                           extra-dependencies
-                          (append boot-dependencies extra-dependencies)))
+                          ;; FIXME: extra-dependencies need to come before psyntax
+                          (append extra-dependencies boot-dependencies)))
         (output-file (or output-file "main.js")) ;; FIXME: changeable
         )
     (with-output-to-file output-file
