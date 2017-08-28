@@ -53,8 +53,10 @@
 
         (option '(#\d "depends") #t #f
                 (lambda (opt name arg result)
+                  (define (read-from-string s)
+                    (call-with-input-string s read))
                   (let ((depends (assoc-ref result 'depends)))
-                    (alist-cons 'depends (cons arg depends)
+                    (alist-cons 'depends (cons (read-from-string arg) depends)
                                 result))))
 
         (option '("no-boot") #f #f
