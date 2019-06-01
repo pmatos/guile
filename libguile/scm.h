@@ -288,7 +288,7 @@ typedef uintptr_t scm_t_bits;
 
    Heap Objects
 
-   All object types not mentioned above in the list of immedate objects
+   All object types not mentioned above in the list of immediate objects
    are represented as heap objects.  The amount of memory referenced by
    a heap object depends on the object's type, namely on the set of
    attributes that have to be stored with objects of that type.  Every
