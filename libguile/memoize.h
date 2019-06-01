@@ -1,7 +1,7 @@
 #ifndef SCM_MEMOIZE_H
 #define SCM_MEMOIZE_H
 
-/* Copyright 1995-1996,1998-2002,2004,2008-2011,2013-2014,2018
+/* Copyright 1995-1996,1998-2002,2004,2008-2011,2013-2014,2018,2019
      Free Software Foundation, Inc.
 
    This file is part of Guile.
@@ -56,8 +56,10 @@ SCM_API SCM scm_sym_args;
 /* {Memoized Source}
  */
 
-#define SCM_MEMOIZED_TAG(x) 	(scm_to_uint16 (scm_car (x)))
-#define SCM_MEMOIZED_ARGS(x) 	(scm_cdr (x))
+#define SCM_MEMOIZED_TAG(x) 	    (scm_to_uint16 (scm_car (x)))
+#define SCM_MEMOIZED_SRC(x) 	    (scm_cadr (x))
+#define SCM_MEMOIZED_ARGS(x) 	    (scm_cddr (x))
+#define SCM_SET_MEMOIZED_ARGS(x, v) (scm_set_cdr_x (scm_cdr (x), (v)))
 
 enum
   {

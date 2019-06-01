@@ -380,7 +380,7 @@ expand (SCM exp, SCM env)
         return TOPLEVEL_REF (SCM_BOOL_F, exp);
     }
   else
-    return CONST_ (SCM_BOOL_F, exp);
+    return CONST_ (scm_source_properties (exp), exp);
 }
 
 static SCM
@@ -441,17 +441,21 @@ expand_and (SCM expr, SCM env)
   const SCM cdr_expr = CDR (expr);
 
   if (scm_is_null (cdr_expr))
-    return CONST_ (SCM_BOOL_F, SCM_BOOL_T);
+    return CONST_ (scm_source_properties (expr), SCM_BOOL_T);
 
   ASSERT_SYNTAX (scm_is_pair (cdr_expr), s_bad_expression, expr);
 
   if (scm_is_null (CDR (cdr_expr)))
     return expand (CAR (cdr_expr), env);
   else
-    return CONDITIONAL (scm_source_properties (expr),
-                        expand (CAR (cdr_expr), env),
-                        expand_and (cdr_expr, env),
-                        CONST_ (SCM_BOOL_F, SCM_BOOL_F));
+    {
+      SCM src = scm_source_properties (expr);
+
+      return CONDITIONAL (src,
+                          expand (CAR (cdr_expr), env),
+                          expand_and (cdr_expr, env),
+                          CONST_ (src, SCM_BOOL_F));
+    }
 }
 
 static SCM
@@ -479,7 +483,7 @@ expand_cond_clauses (SCM clause, SCM rest, int elp, int alp, SCM env)
     }
 
   if (scm_is_null (rest))
-    rest = VOID_ (SCM_BOOL_F);
+    rest = VOID_ (scm_source_properties (clause));
   else
     rest = expand_cond_clauses (CAR (rest), CDR (rest), elp, alp, env);
 
@@ -489,23 +493,23 @@ expand_cond_clauses (SCM clause, SCM rest, int elp, int alp, SCM env)
     {
       SCM tmp = scm_gensym (scm_from_utf8_string ("cond "));
       SCM new_env = scm_acons (tmp, tmp, env);
+      SCM src = scm_source_properties (clause);
       ASSERT_SYNTAX (length > 2, s_missing_recipient, clause);
       ASSERT_SYNTAX (length == 3, s_extra_expression, clause);
-      return LET (SCM_BOOL_F,
+      return LET (src,
                   scm_list_1 (tmp),
                   scm_list_1 (tmp),
                   scm_list_1 (expand (test, env)),
-                  CONDITIONAL (SCM_BOOL_F,
-                               LEXICAL_REF (SCM_BOOL_F, tmp, tmp),
-                               CALL (SCM_BOOL_F,
+                  CONDITIONAL (src,
+                               LEXICAL_REF (src, tmp, tmp),
+                               CALL (src,
                                      expand (CADDR (clause), new_env),
-                                     scm_list_1 (LEXICAL_REF (SCM_BOOL_F,
-                                                              tmp, tmp))),
+                                     scm_list_1 (LEXICAL_REF (src, tmp, tmp))),
                                rest));
     }
   /* FIXME length == 1 case */
   else
-    return CONDITIONAL (SCM_BOOL_F,
+    return CONDITIONAL (scm_source_properties (clause),
                         expand (test, env),
                         expand_sequence (CDR (clause), env),
                         rest);
@@ -580,13 +584,14 @@ expand_if (SCM expr, SCM env SCM_UNUSED)
 {
   const SCM cdr_expr = CDR (expr);
   const long length = scm_ilength (cdr_expr);
+  SCM src = scm_source_properties (expr);
   ASSERT_SYNTAX (length == 2 || length == 3, s_expression, expr);
-  return CONDITIONAL (scm_source_properties (expr),
+  return CONDITIONAL (src,
                       expand (CADR (expr), env),
                       expand (CADDR (expr), env),
                       ((length == 3)
                        ? expand (CADDDR (expr), env)
-                       : VOID_ (SCM_BOOL_F)));
+                       : VOID_ (src)));
 }
 
 /* A helper function for expand_lambda to support checking for duplicate
@@ -664,7 +669,7 @@ expand_lambda_case (SCM clause, SCM alternate, SCM env)
   if (scm_is_true (alternate) && !(SCM_EXPANDED_P (alternate) && SCM_EXPANDED_TYPE (alternate) == SCM_EXPANDED_LAMBDA_CASE))
     abort ();
     
-  return LAMBDA_CASE (SCM_BOOL_F, req, SCM_BOOL_F, rest, SCM_BOOL_F,
+  return LAMBDA_CASE (scm_source_properties (clause), req, SCM_BOOL_F, rest, SCM_BOOL_F,
                       SCM_EOL, vars, body, alternate);
 }
 
@@ -843,7 +848,7 @@ expand_lambda_star_case (SCM clause, SCM alternate, SCM env)
   inits = scm_reverse_x (inits, SCM_UNDEFINED);
   body = expand_sequence (body, env);
 
-  return LAMBDA_CASE (SCM_BOOL_F, req, opt, rest, kw, inits, vars, body,
+  return LAMBDA_CASE (scm_source_properties (clause), req, opt, rest, kw, inits, vars, body,
                       alternate);
 }
 
@@ -963,6 +968,7 @@ expand_named_let (const SCM expr, SCM env)
   const SCM name = CAR (cdr_expr);
   const SCM cddr_expr = CDR (cdr_expr);
   const SCM bindings = CAR (cddr_expr);
+  const SCM src = scm_source_properties (expr);
   check_bindings (bindings, expr);
 
   transform_bindings (bindings, expr, &var_names, &var_syms, &inits);
@@ -971,16 +977,16 @@ expand_named_let (const SCM expr, SCM env)
   inner_env = expand_env_extend (inner_env, var_names, var_syms);
 
   return LETREC
-    (scm_source_properties (expr), SCM_BOOL_F,
+    (src, SCM_BOOL_F,
      scm_list_1 (name), scm_list_1 (name_sym),
-     scm_list_1 (LAMBDA (SCM_BOOL_F,
+     scm_list_1 (LAMBDA (src,
                          SCM_EOL,
-                         LAMBDA_CASE (SCM_BOOL_F, var_names, SCM_EOL, SCM_BOOL_F,
+                         LAMBDA_CASE (src, var_names, SCM_EOL, SCM_BOOL_F,
                                       SCM_BOOL_F, SCM_EOL, var_syms,
                                       expand_sequence (CDDDR (expr), inner_env),
                                       SCM_BOOL_F))),
-     CALL (SCM_BOOL_F,
-           LEXICAL_REF (SCM_BOOL_F, name, name_sym),
+     CALL (src,
+           LEXICAL_REF (src, name, name_sym),
            expand_exprs (inits, env)));
 }
 
@@ -1008,7 +1014,7 @@ expand_let (SCM expr, SCM env)
     {
       SCM var_names, var_syms, inits;
       transform_bindings (bindings, expr, &var_names, &var_syms, &inits);
-      return LET (SCM_BOOL_F,
+      return LET (scm_source_properties (expr),
                   var_names, var_syms, expand_exprs (inits, env),
                   expand_sequence (CDDR (expr),
                                    expand_env_extend (env, var_names,
@@ -1035,7 +1041,7 @@ expand_letrec_helper (SCM expr, SCM env, SCM in_order_p)
       SCM var_names, var_syms, inits;
       transform_bindings (bindings, expr, &var_names, &var_syms, &inits);
       env = expand_env_extend (env, var_names, var_syms);
-      return LETREC (SCM_BOOL_F, in_order_p,
+      return LETREC (scm_source_properties (expr), in_order_p,
                      var_names, var_syms, expand_exprs (inits, env),
                      expand_sequence (CDDR (expr), env));
     }
@@ -1069,7 +1075,7 @@ expand_letstar_clause (SCM bindings, SCM body, SCM env SCM_UNUSED)
       sym = scm_gensym (SCM_UNDEFINED);
       init = CADR (bind);
       
-      return LET (SCM_BOOL_F, scm_list_1 (name), scm_list_1 (sym),
+      return LET (scm_source_properties (bindings), scm_list_1 (name), scm_list_1 (sym),
                   scm_list_1 (expand (init, env)),
                   expand_letstar_clause (CDR (bindings), body,
                                          scm_acons (name, sym, env)));
@@ -1091,20 +1097,21 @@ expand_or (SCM expr, SCM env SCM_UNUSED)
 {
   SCM tail = CDR (expr);
   const long length = scm_ilength (tail);
+  SCM src = scm_source_properties (expr);
 
   ASSERT_SYNTAX (length >= 0, s_bad_expression, expr);
 
   if (scm_is_null (CDR (expr)))
-    return CONST_ (SCM_BOOL_F, SCM_BOOL_F);
+    return CONST_ (src, SCM_BOOL_F);
   else
     {
       SCM tmp = scm_gensym (SCM_UNDEFINED);
-      return LET (SCM_BOOL_F,
+      return LET (src,
                   scm_list_1 (tmp), scm_list_1 (tmp),
                   scm_list_1 (expand (CADR (expr), env)),
-                  CONDITIONAL (SCM_BOOL_F,
-                               LEXICAL_REF (SCM_BOOL_F, tmp, tmp),
-                               LEXICAL_REF (SCM_BOOL_F, tmp, tmp),
+                  CONDITIONAL (src,
+                               LEXICAL_REF (src, tmp, tmp),
+                               LEXICAL_REF (src, tmp, tmp),
                                expand_or (CDR (expr),
                                           scm_acons (tmp, tmp, env))));
     }
@@ -1277,17 +1284,17 @@ compute_assigned (SCM exp, SCM assigned)
 }
 
 static SCM
-box_value (SCM exp)
+box_value (SCM src, SCM exp)
 {
-  return PRIMCALL (SCM_BOOL_F, scm_from_latin1_symbol ("make-variable"),
+  return PRIMCALL (src, scm_from_latin1_symbol ("make-variable"),
                    scm_list_1 (exp));
 }
 
 static SCM
-box_lexical (SCM name, SCM sym)
+box_lexical (SCM src, SCM name, SCM sym)
 {
-  return LEXICAL_SET (SCM_BOOL_F, name, sym,
-                      box_value (LEXICAL_REF (SCM_BOOL_F, name, sym)));
+  return LEXICAL_SET (src, name, sym,
+                      box_value (src, LEXICAL_REF (SCM_BOOL_F, name, sym)));
 }
 
 static SCM
@@ -1407,24 +1414,27 @@ convert_assignment (SCM exp, SCM assigned)
          convert_assignment (REF (exp, SEQ, TAIL), assigned));
 
     case SCM_EXPANDED_LAMBDA:
-      return LAMBDA
-        (REF (exp, LAMBDA, SRC),
-         REF (exp, LAMBDA, META),
-         scm_is_false (REF (exp, LAMBDA, BODY))
-         /* Give a body to case-lambda with no clauses.  */
-         ? LAMBDA_CASE (SCM_BOOL_F, SCM_EOL, SCM_EOL, SCM_BOOL_F, SCM_BOOL_F,
-                        SCM_EOL, SCM_EOL,
-                        PRIMCALL
-                        (SCM_BOOL_F,
-                         scm_from_latin1_symbol ("throw"),
-                         scm_list_5 (CONST_ (SCM_BOOL_F, scm_args_number_key),
-                                     CONST_ (SCM_BOOL_F, SCM_BOOL_F),
-                                     CONST_ (SCM_BOOL_F, scm_from_latin1_string
-                                             ("Wrong number of arguments")),
-                                     CONST_ (SCM_BOOL_F, SCM_EOL),
-                                     CONST_ (SCM_BOOL_F, SCM_BOOL_F))),
-                        SCM_BOOL_F)
-         : convert_assignment (REF (exp, LAMBDA, BODY), assigned));
+      {
+        SCM src = scm_source_properties (exp);
+        return LAMBDA
+          (REF (exp, LAMBDA, SRC),
+           REF (exp, LAMBDA, META),
+           scm_is_false (REF (exp, LAMBDA, BODY))
+           /* Give a body to case-lambda with no clauses.  */
+           ? LAMBDA_CASE (src, SCM_EOL, SCM_EOL, SCM_BOOL_F, SCM_BOOL_F,
+                          SCM_EOL, SCM_EOL,
+                          PRIMCALL
+                          (src,
+                           scm_from_latin1_symbol ("throw"),
+                           scm_list_5 (CONST_ (src, scm_args_number_key),
+                                       CONST_ (src, SCM_BOOL_F),
+                                       CONST_ (src, scm_from_latin1_string
+                                               ("Wrong number of arguments")),
+                                       CONST_ (src, SCM_EOL),
+                                       CONST_ (src, SCM_BOOL_F))),
+                          SCM_BOOL_F)
+           : convert_assignment (REF (exp, LAMBDA, BODY), assigned));
+      }
 
     case SCM_EXPANDED_LAMBDA_CASE:
       {
@@ -1456,7 +1466,7 @@ convert_assignment (SCM exp, SCM assigned)
           {
             SCM name = CAR (namewalk), sym = CAR (symwalk);
             if (scm_is_true (scm_hashq_ref (assigned, sym, SCM_BOOL_F)))
-              seq = scm_cons (box_lexical (name, sym), seq);
+              seq = scm_cons (box_lexical (src, name, sym), seq);
           }
         /* Optional arguments may need initialization and/or boxing.  */
         for (namewalk = opt;
@@ -1467,7 +1477,7 @@ convert_assignment (SCM exp, SCM assigned)
             SCM name = CAR (namewalk), sym = CAR (symwalk), init = CAR (inits);
             seq = scm_cons (init_if_unbound (src, name, sym, init), seq);
             if (scm_is_true (scm_hashq_ref (assigned, sym, SCM_BOOL_F)))
-              seq = scm_cons (box_lexical (name, sym), seq);
+              seq = scm_cons (box_lexical (src, name, sym), seq);
           }
         /* Rest arguments may need boxing.  */
         if (scm_is_true (rest))
@@ -1475,7 +1485,7 @@ convert_assignment (SCM exp, SCM assigned)
             SCM sym = CAR (symwalk);
             symwalk = CDR (symwalk);
             if (scm_is_true (scm_hashq_ref (assigned, sym, SCM_BOOL_F)))
-              seq = scm_cons (box_lexical (rest, sym), seq);
+              seq = scm_cons (box_lexical (src, rest, sym), seq);
           }
         /* The rest of the arguments, if any, are keyword arguments,
            which may need initialization and/or boxing.  */
@@ -1486,7 +1496,7 @@ convert_assignment (SCM exp, SCM assigned)
             SCM sym = CAR (symwalk), init = CAR (inits);
             seq = scm_cons (init_if_unbound (src, SCM_BOOL_F, sym, init), seq);
             if (scm_is_true (scm_hashq_ref (assigned, sym, SCM_BOOL_F)))
-              seq = scm_cons (box_lexical (SCM_BOOL_F, sym), seq);
+              seq = scm_cons (box_lexical (src, SCM_BOOL_F, sym), seq);
           }
 
         for (; scm_is_pair (seq); seq = CDR (seq))
@@ -1512,7 +1522,7 @@ convert_assignment (SCM exp, SCM assigned)
           {
             SCM sym = CAR (walk), val = CAR (vals);
             if (scm_is_true (scm_hashq_ref (assigned, sym, SCM_BOOL_F)))
-              new_vals = scm_cons (box_value (val), new_vals);
+              new_vals = scm_cons (box_value (src, val), new_vals);
             else
               new_vals = scm_cons (val, new_vals);
           }
@@ -1532,7 +1542,7 @@ convert_assignment (SCM exp, SCM assigned)
         body = convert_assignment (REF (exp, LETREC, BODY), assigned);
 
         empty_box =
-          PRIMCALL (SCM_BOOL_F,
+          PRIMCALL (src,
                     scm_from_latin1_symbol ("make-undefined-variable"),
                     SCM_EOL);
         boxes = scm_make_list (scm_length (names), empty_box);
@@ -1549,7 +1559,7 @@ convert_assignment (SCM exp, SCM assigned)
               {
                 SCM tmp = scm_gensym (SCM_UNDEFINED);
                 tmps = scm_cons (tmp, tmps);
-                inits = scm_cons (LEXICAL_REF (SCM_BOOL_F, SCM_BOOL_F, tmp),
+                inits = scm_cons (LEXICAL_REF (src, SCM_BOOL_F, tmp),
                                   inits);
               }
             tmps = scm_reverse (tmps);

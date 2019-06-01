@@ -1,4 +1,4 @@
-/* Copyright 1995-2015,2018
+/* Copyright 1995-2016,2018,2019
      Free Software Foundation, Inc.
 
    This file is part of Guile.
@@ -136,57 +136,55 @@ do_pop_dynamic_state (void)
 /* {Evaluator memoized expressions}
  */
 
-scm_t_bits scm_tc16_memoized;
+#define MAKMEMO(n, src, args) \
+  (scm_cons (SCM_I_MAKINUM (n), scm_cons (src, args)))
 
-#define MAKMEMO(n, args)                                                \
-  (scm_cons (SCM_I_MAKINUM (n), args))
-
-#define MAKMEMO_SEQ(head,tail) \
-  MAKMEMO (SCM_M_SEQ, scm_cons (head, tail))
-#define MAKMEMO_IF(test, then, else_) \
-  MAKMEMO (SCM_M_IF, scm_cons (test, scm_cons (then, else_)))
+#define MAKMEMO_SEQ(src, head, tail) \
+  MAKMEMO (SCM_M_SEQ, src, scm_cons (head, tail))
+#define MAKMEMO_IF(src, test, then, else_) \
+  MAKMEMO (SCM_M_IF, src, scm_cons (test, scm_cons (then, else_)))
 #define FIXED_ARITY(nreq) \
   scm_list_1 (SCM_I_MAKINUM (nreq))
 #define REST_ARITY(nreq, rest) \
   scm_list_2 (SCM_I_MAKINUM (nreq), rest)
-#define FULL_ARITY(nreq, rest, nopt, kw, ninits, unbound, alt) \
-  scm_list_n (SCM_I_MAKINUM (nreq), rest, SCM_I_MAKINUM (nopt), kw, \
+#define FULL_ARITY(nreq, rest, nopt, kw, ninits, unbound, alt)       \
+  scm_list_n (SCM_I_MAKINUM (nreq), rest, SCM_I_MAKINUM (nopt), kw,  \
               SCM_I_MAKINUM (ninits), unbound, alt, SCM_UNDEFINED)
-#define MAKMEMO_LAMBDA(body, arity, meta)			\
-  MAKMEMO (SCM_M_LAMBDA,					\
+#define MAKMEMO_LAMBDA(src, body, arity, meta)			\
+  MAKMEMO (SCM_M_LAMBDA, src,					\
 	   scm_cons (body, scm_cons (meta, arity)))
-#define MAKMEMO_CAPTURE_ENV(vars, body)			\
-  MAKMEMO (SCM_M_CAPTURE_ENV, scm_cons (vars, body))
-#define MAKMEMO_LET(inits, body) \
-  MAKMEMO (SCM_M_LET, scm_cons (inits, body))
-#define MAKMEMO_QUOTE(exp) \
-  MAKMEMO (SCM_M_QUOTE, exp)
-#define MAKMEMO_CAPTURE_MODULE(exp) \
-  MAKMEMO (SCM_M_CAPTURE_MODULE, exp)
-#define MAKMEMO_APPLY(proc, args)\
-  MAKMEMO (SCM_M_APPLY, scm_list_2 (proc, args))
-#define MAKMEMO_CONT(proc) \
-  MAKMEMO (SCM_M_CONT, proc)
-#define MAKMEMO_CALL_WITH_VALUES(prod, cons) \
-  MAKMEMO (SCM_M_CALL_WITH_VALUES, scm_cons (prod, cons))
-#define MAKMEMO_CALL(proc, args) \
-  MAKMEMO (SCM_M_CALL, scm_cons (proc, args))
-#define MAKMEMO_LEX_REF(pos) \
-  MAKMEMO (SCM_M_LEXICAL_REF, pos)
-#define MAKMEMO_LEX_SET(pos, val)                                      \
-  MAKMEMO (SCM_M_LEXICAL_SET, scm_cons (pos, val))
-#define MAKMEMO_BOX_REF(box) \
-  MAKMEMO (SCM_M_BOX_REF, box)
-#define MAKMEMO_BOX_SET(box, val)                                      \
-  MAKMEMO (SCM_M_BOX_SET, scm_cons (box, val))
-#define MAKMEMO_TOP_BOX(mode, var)               \
-  MAKMEMO (SCM_M_RESOLVE, scm_cons (SCM_I_MAKINUM (mode), var))
-#define MAKMEMO_MOD_BOX(mode, mod, var, public)                         \
-  MAKMEMO (SCM_M_RESOLVE, \
+#define MAKMEMO_CAPTURE_ENV(src, vars, body)                     \
+  MAKMEMO (SCM_M_CAPTURE_ENV, src, scm_cons (vars, body))
+#define MAKMEMO_LET(src, inits, body) \
+  MAKMEMO (SCM_M_LET, src, scm_cons (inits, body))
+#define MAKMEMO_QUOTE(src, exp) \
+  MAKMEMO (SCM_M_QUOTE, src, exp)
+#define MAKMEMO_CAPTURE_MODULE(src, exp) \
+  MAKMEMO (SCM_M_CAPTURE_MODULE, src, exp)
+#define MAKMEMO_APPLY(src, proc, args) \
+  MAKMEMO (SCM_M_APPLY, src, scm_list_2 (proc, args))
+#define MAKMEMO_CONT(src, proc) \
+  MAKMEMO (SCM_M_CONT, src, proc)
+#define MAKMEMO_CALL_WITH_VALUES(src, prod, cons) \
+  MAKMEMO (SCM_M_CALL_WITH_VALUES, src, scm_cons (prod, cons))
+#define MAKMEMO_CALL(src, proc, args) \
+  MAKMEMO (SCM_M_CALL, src, scm_cons (proc, args))
+#define MAKMEMO_LEX_REF(src, pos) \
+  MAKMEMO (SCM_M_LEXICAL_REF, src, pos)
+#define MAKMEMO_LEX_SET(src, pos, val) \
+  MAKMEMO (SCM_M_LEXICAL_SET, src, scm_cons (pos, val))
+#define MAKMEMO_BOX_REF(src, box) \
+  MAKMEMO (SCM_M_BOX_REF, src, box)
+#define MAKMEMO_BOX_SET(src, box, val) \
+  MAKMEMO (SCM_M_BOX_SET, src, scm_cons (box, val))
+#define MAKMEMO_TOP_BOX(src, mode, var) \
+  MAKMEMO (SCM_M_RESOLVE, src, scm_cons (SCM_I_MAKINUM (mode), var))
+#define MAKMEMO_MOD_BOX(src, mode, mod, var, public)                    \
+  MAKMEMO (SCM_M_RESOLVE, src,                                          \
            scm_cons (SCM_I_MAKINUM (mode),                              \
                      scm_cons (mod, scm_cons (var, public))))
-#define MAKMEMO_CALL_WITH_PROMPT(tag, thunk, handler) \
-  MAKMEMO (SCM_M_CALL_WITH_PROMPT, scm_cons (tag, scm_cons (thunk, handler)))
+#define MAKMEMO_CALL_WITH_PROMPT(src, tag, thunk, handler)              \
+  MAKMEMO (SCM_M_CALL_WITH_PROMPT, src, scm_cons (tag, scm_cons (thunk, handler)))
 
 
 
@@ -332,7 +330,7 @@ lookup (SCM x, SCM env)
 }
 
 static SCM
-capture_flat_env (SCM lambda, SCM env)
+capture_flat_env (SCM src, SCM lambda, SCM env)
 {
   int nenv;
   SCM vars, link, locs;
@@ -345,12 +343,16 @@ capture_flat_env (SCM lambda, SCM env)
   for (; scm_is_pair (vars); vars = CDR (vars))
     scm_c_vector_set_x (locs, --nenv, CDAR (vars));
 
-  return MAKMEMO_CAPTURE_ENV (locs, lambda);
+  return MAKMEMO_CAPTURE_ENV (src, locs, lambda);
 }
 
 /* Abbreviate SCM_EXPANDED_REF. Copied because I'm not sure about symbol pasting */
 #define REF(x,type,field) \
   (scm_struct_ref (x, SCM_I_MAKINUM (SCM_EXPANDED_##type##_##field)))
+#define SRC(x) \
+  (scm_struct_ref (x, SCM_INUM0))   /* WARNING: this assumes that every
+                                       expanded structure starts with
+                                       its source. */
 
 static SCM list_of_guile = SCM_BOOL_F;
 
@@ -374,56 +376,70 @@ capture_env (SCM env)
 }
 
 static SCM
-maybe_makmemo_capture_module (SCM exp, SCM env)
+maybe_makmemo_capture_module (SCM src, SCM exp, SCM env)
 {
   if (scm_is_false (env))
-    return MAKMEMO_CAPTURE_MODULE (exp);
+    return MAKMEMO_CAPTURE_MODULE (src, exp);
   return exp;
 }
 
 static SCM
 memoize (SCM exp, SCM env)
 {
+  SCM src;
+
   if (!SCM_EXPANDED_P (exp))
     abort ();
+  src = SRC (exp);
 
   switch (SCM_EXPANDED_TYPE (exp))
     {
     case SCM_EXPANDED_VOID:
-      return MAKMEMO_QUOTE (SCM_UNSPECIFIED);
+      return MAKMEMO_QUOTE (src, SCM_UNSPECIFIED);
       
     case SCM_EXPANDED_CONST:
-      return MAKMEMO_QUOTE (REF (exp, CONST, EXP));
+      return MAKMEMO_QUOTE (src, REF (exp, CONST, EXP));
 
     case SCM_EXPANDED_PRIMITIVE_REF:
       if (scm_is_eq (scm_current_module (), scm_the_root_module ()))
         return maybe_makmemo_capture_module
-          (MAKMEMO_BOX_REF (MAKMEMO_TOP_BOX (SCM_EXPANDED_TOPLEVEL_REF,
+          (src,
+           MAKMEMO_BOX_REF (src,
+                            MAKMEMO_TOP_BOX (src,
+                                             SCM_EXPANDED_TOPLEVEL_REF,
                                              REF (exp, PRIMITIVE_REF, NAME))),
            env);
       else
-        return MAKMEMO_BOX_REF (MAKMEMO_MOD_BOX (SCM_EXPANDED_MODULE_REF,
+        return MAKMEMO_BOX_REF (src,
+                                MAKMEMO_MOD_BOX (src,
+                                                 SCM_EXPANDED_MODULE_REF,
                                                  list_of_guile,
                                                  REF (exp, PRIMITIVE_REF, NAME),
                                                  SCM_BOOL_F));
                                 
     case SCM_EXPANDED_LEXICAL_REF:
-      return MAKMEMO_LEX_REF (lookup (REF (exp, LEXICAL_REF, GENSYM), env));
+      return MAKMEMO_LEX_REF (src,
+                              lookup (REF (exp, LEXICAL_REF, GENSYM), env));
 
     case SCM_EXPANDED_LEXICAL_SET:
-      return MAKMEMO_LEX_SET (lookup (REF (exp, LEXICAL_SET, GENSYM), env),
+      return MAKMEMO_LEX_SET (src,
+                              lookup (REF (exp, LEXICAL_SET, GENSYM), env),
                               memoize (REF (exp, LEXICAL_SET, EXP), env));
 
     case SCM_EXPANDED_MODULE_REF:
-      return MAKMEMO_BOX_REF (MAKMEMO_MOD_BOX
-                              (SCM_EXPANDED_MODULE_REF,
+      return MAKMEMO_BOX_REF (src,
+                              MAKMEMO_MOD_BOX
+                              (src,
+                               SCM_EXPANDED_MODULE_REF,
                                REF (exp, MODULE_REF, MOD),
                                REF (exp, MODULE_REF, NAME),
                                REF (exp, MODULE_REF, PUBLIC)));
 
     case SCM_EXPANDED_MODULE_SET:
-      return MAKMEMO_BOX_SET (MAKMEMO_MOD_BOX
-                              (SCM_EXPANDED_MODULE_SET,
+      return MAKMEMO_BOX_SET (src,
+                              MAKMEMO_MOD_BOX
+                              (src,
+                               SCM_EXPANDED_MODULE_SET,
                                REF (exp, MODULE_SET, MOD),
                                REF (exp, MODULE_SET, NAME),
                                REF (exp, MODULE_SET, PUBLIC)),
@@ -431,13 +447,19 @@ memoize (SCM exp, SCM env)
 
     case SCM_EXPANDED_TOPLEVEL_REF:
       return maybe_makmemo_capture_module
-        (MAKMEMO_BOX_REF (MAKMEMO_TOP_BOX (SCM_EXPANDED_TOPLEVEL_REF,
+        (src,
+         MAKMEMO_BOX_REF (src,
+                          MAKMEMO_TOP_BOX (src,
+                                           SCM_EXPANDED_TOPLEVEL_REF,
                                            REF (exp, TOPLEVEL_REF, NAME))),
          env);
 
     case SCM_EXPANDED_TOPLEVEL_SET:
       return maybe_makmemo_capture_module
-        (MAKMEMO_BOX_SET (MAKMEMO_TOP_BOX (SCM_EXPANDED_TOPLEVEL_SET,
+        (src,
+         MAKMEMO_BOX_SET (src,
+                          MAKMEMO_TOP_BOX (src,
+                                           SCM_EXPANDED_TOPLEVEL_SET,
                                            REF (exp, TOPLEVEL_SET, NAME)),
                           memoize (REF (exp, TOPLEVEL_SET, EXP),
                                    capture_env (env))),
@@ -445,14 +467,18 @@ memoize (SCM exp, SCM env)
 
     case SCM_EXPANDED_TOPLEVEL_DEFINE:
       return maybe_makmemo_capture_module
-        (MAKMEMO_BOX_SET (MAKMEMO_TOP_BOX (SCM_EXPANDED_TOPLEVEL_DEFINE,
+        (src,
+         MAKMEMO_BOX_SET (src,
+                          MAKMEMO_TOP_BOX (src,
+                                           SCM_EXPANDED_TOPLEVEL_DEFINE,
                                            REF (exp, TOPLEVEL_DEFINE, NAME)),
                           memoize (REF (exp, TOPLEVEL_DEFINE, EXP),
                                    capture_env (env))),
          env);
 
     case SCM_EXPANDED_CONDITIONAL:
-      return MAKMEMO_IF (memoize (REF (exp, CONDITIONAL, TEST), env),
+      return MAKMEMO_IF (src,
+                         memoize (REF (exp, CONDITIONAL, TEST), env),
                          memoize (REF (exp, CONDITIONAL, CONSEQUENT), env),
                          memoize (REF (exp, CONDITIONAL, ALTERNATE), env));
 
@@ -463,7 +489,7 @@ memoize (SCM exp, SCM env)
         proc = REF (exp, CALL, PROC);
         args = memoize_exps (REF (exp, CALL, ARGS), env);
 
-        return MAKMEMO_CALL (memoize (proc, env), args);
+        return MAKMEMO_CALL (src, memoize (proc, env), args);
       }
 
     case SCM_EXPANDED_PRIMCALL:
@@ -477,59 +503,71 @@ memoize (SCM exp, SCM env)
 
         if (nargs == 3
             && scm_is_eq (name, scm_from_latin1_symbol ("call-with-prompt")))
-          return MAKMEMO_CALL_WITH_PROMPT (CAR (args),
+          return MAKMEMO_CALL_WITH_PROMPT (src,
+                                           CAR (args),
                                            CADR (args),
                                            CADDR (args));
         else if (nargs == 2
                  && scm_is_eq (name, scm_from_latin1_symbol ("apply")))
-          return MAKMEMO_APPLY (CAR (args), CADR (args));
+          return MAKMEMO_APPLY (src, CAR (args), CADR (args));
         else if (nargs == 1
                  && scm_is_eq (name,
                                scm_from_latin1_symbol
                                ("call-with-current-continuation")))
-          return MAKMEMO_CONT (CAR (args));
+          return MAKMEMO_CONT (src, CAR (args));
         else if (nargs == 2
                  && scm_is_eq (name,
                                scm_from_latin1_symbol ("call-with-values")))
-          return MAKMEMO_CALL_WITH_VALUES (CAR (args), CADR (args));
+          return MAKMEMO_CALL_WITH_VALUES (src, CAR (args), CADR (args));
         else if (nargs == 1
                  && scm_is_eq (name,
                                scm_from_latin1_symbol ("variable-ref")))
-          return MAKMEMO_BOX_REF (CAR (args));
+          return MAKMEMO_BOX_REF (src, CAR (args));
         else if (nargs == 2
                  && scm_is_eq (name,
                                scm_from_latin1_symbol ("variable-set!")))
-          return MAKMEMO_BOX_SET (CAR (args), CADR (args));
+          return MAKMEMO_BOX_SET (src, CAR (args), CADR (args));
         else if (nargs == 2
                  && scm_is_eq (name, scm_from_latin1_symbol ("wind")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (wind), args);
+          return MAKMEMO_CALL (src, MAKMEMO_QUOTE (src, wind), args);
         else if (nargs == 0
                  && scm_is_eq (name, scm_from_latin1_symbol ("unwind")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (unwind), SCM_EOL);
+          return MAKMEMO_CALL (src, MAKMEMO_QUOTE (src, unwind), SCM_EOL);
         else if (nargs == 2
                  && scm_is_eq (name, scm_from_latin1_symbol ("push-fluid")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (push_fluid), args);
+          return MAKMEMO_CALL (src, MAKMEMO_QUOTE (src, push_fluid), args);
         else if (nargs == 0
                  && scm_is_eq (name, scm_from_latin1_symbol ("pop-fluid")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (pop_fluid), SCM_EOL);
+          return MAKMEMO_CALL (src, MAKMEMO_QUOTE (src, pop_fluid), SCM_EOL);
         else if (nargs == 1
                  && scm_is_eq (name,
                                scm_from_latin1_symbol ("push-dynamic-state")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (push_dynamic_state), args);
+          return MAKMEMO_CALL (src,
+                               MAKMEMO_QUOTE (src, push_dynamic_state),
+                               args);
         else if (nargs == 0
                  && scm_is_eq (name,
                                scm_from_latin1_symbol ("pop-dynamic-state")))
-          return MAKMEMO_CALL (MAKMEMO_QUOTE (pop_dynamic_state), SCM_EOL);
+          return MAKMEMO_CALL (src,
+                               MAKMEMO_QUOTE (src, pop_dynamic_state),
+                               SCM_EOL);
         else if (scm_is_eq (scm_current_module (), scm_the_root_module ()))
-          return MAKMEMO_CALL (maybe_makmemo_capture_module
-                               (MAKMEMO_BOX_REF
-                                (MAKMEMO_TOP_BOX (SCM_EXPANDED_TOPLEVEL_REF,
+          return MAKMEMO_CALL (src,
+                               maybe_makmemo_capture_module
+                               (src,
+                                MAKMEMO_BOX_REF
+                                (src,
+                                 MAKMEMO_TOP_BOX (src,
+                                                  SCM_EXPANDED_TOPLEVEL_REF,
                                                   name)),
                                 env),
                                args);
         else
-          return MAKMEMO_CALL (MAKMEMO_BOX_REF
-                               (MAKMEMO_MOD_BOX (SCM_EXPANDED_MODULE_REF,
+          return MAKMEMO_CALL (src,
+                               MAKMEMO_BOX_REF
+                               (src,
+                                MAKMEMO_MOD_BOX (src,
+                                                 SCM_EXPANDED_MODULE_REF,
                                                  list_of_guile,
                                                  name,
                                                  SCM_BOOL_F)),
@@ -537,7 +575,8 @@ memoize (SCM exp, SCM env)
       }
 
     case SCM_EXPANDED_SEQ:
-      return MAKMEMO_SEQ (memoize (REF (exp, SEQ, HEAD), env),
+      return MAKMEMO_SEQ (src,
+                          memoize (REF (exp, SEQ, HEAD), env),
                           memoize (REF (exp, SEQ, TAIL), env));
 
     case SCM_EXPANDED_LAMBDA:
@@ -551,7 +590,10 @@ memoize (SCM exp, SCM env)
         proc = memoize (body, new_env);
         SCM_SETCAR (SCM_CDR (SCM_MEMOIZED_ARGS (proc)), meta);
 
-	return maybe_makmemo_capture_module (capture_flat_env (proc, new_env),
+	return maybe_makmemo_capture_module (src,
+                                             capture_flat_env (src,
+                                                               proc,
+                                                               new_env),
                                              env);
       }
 
@@ -610,7 +652,8 @@ memoize (SCM exp, SCM env)
           arity = FULL_ARITY (nreq, rest, nopt, kw, ninits, unbound,
                               SCM_BOOL_F);
 
-        return MAKMEMO_LAMBDA (memoize (body, new_env), arity,
+        return MAKMEMO_LAMBDA (src,
+                               memoize (body, new_env), arity,
                                SCM_EOL /* meta, filled in later */);
       }
 
@@ -631,7 +674,7 @@ memoize (SCM exp, SCM env)
           VECTOR_SET (inits, i, memoize (CAR (exps), env));
 
         return maybe_makmemo_capture_module
-          (MAKMEMO_LET (inits, memoize (body, new_env)), env);
+          (src, MAKMEMO_LET (src, inits, memoize (body, new_env)), env);
       }
 
     default:

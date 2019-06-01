@@ -267,9 +267,18 @@ lists."
          ;; procedure property interface.
          (name (or (and program (procedure-name program))
                    (and pdi (program-debug-info-name pdi))))
-         (source (match (find-program-sources addr)
-                   (() #f)
-                   ((source . _) source)))
+         (source (let ((source-override
+                        (procedure-property program 'source-override)))
+                   (if (and source-override
+                            (not (null? source-override)))  ; I think the () case didn't occur in 2.2.  What's up with that?
+                       ((@@ (system vm debug) make-source)  ; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                              0
+                              (assq-ref source-override 'filename)
+                              (assq-ref source-override 'line)
+                              (assq-ref source-override 'column))
+                       (match (find-program-sources addr)
+                          (() #f)
+                          ((source . _) source)))))
          (formals (if program
                       (program-arguments-alists program)
                       (let ((arities (find-program-arities addr)))
