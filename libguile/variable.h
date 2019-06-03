@@ -30,7 +30,7 @@
 
 /* Variables 
  */
-#define SCM_VARIABLEP(X)      (SCM_HAS_TYP7 (X, scm_tc7_variable))
+#define SCM_VARIABLEP(X)      (SCM_HAS_TYP11 (X, scm_tc11_variable))
 #define SCM_VARIABLE_REF(V)   SCM_CELL_OBJECT_1 (V)
 #define SCM_VARIABLE_SET(V, X) SCM_SET_CELL_OBJECT_1 (V, X)
 #define SCM_VARIABLE_LOC(V)   (SCM_CELL_OBJECT_LOC ((V), 1))

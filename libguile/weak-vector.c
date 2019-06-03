@@ -59,7 +59,7 @@ scm_c_make_weak_vector (size_t len, SCM fill)
   wv = SCM_PACK_POINTER (scm_gc_malloc_pointerless ((len + 1) * sizeof (SCM),
                                            "weak vector"));
 
-  SCM_SET_CELL_WORD_0 (wv, (len << 8) | scm_tc7_wvect);
+  SCM_SET_CELL_WORD_0 (wv, (len << 12) | scm_tc11_wvect);
 
   if (SCM_HEAP_OBJECT_P (fill))
     {

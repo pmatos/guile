@@ -44,13 +44,13 @@
  * but alack, all we have is this crufty C.
  */
 
-#define SCM_F_BITVECTOR_IMMUTABLE (0x80)
+#define SCM_F_BITVECTOR_IMMUTABLE (0x800)
 
-#define IS_BITVECTOR(obj)         SCM_HAS_TYP7  ((obj), scm_tc7_bitvector)
+#define IS_BITVECTOR(obj)         SCM_HAS_TYP11 ((obj), scm_tc11_bitvector)
 #define IS_MUTABLE_BITVECTOR(x)                                 \
   (SCM_NIMP (x) &&                                              \
-   ((SCM_CELL_TYPE (x) & (0x7f | SCM_F_BITVECTOR_IMMUTABLE))    \
-    == scm_tc7_bitvector))
+   ((SCM_CELL_TYPE (x) & (0x7ff | SCM_F_BITVECTOR_IMMUTABLE))    \
+    == scm_tc11_bitvector))
 #define BITVECTOR_LENGTH(obj)   ((size_t)SCM_CELL_WORD_1(obj))
 #define BITVECTOR_BITS(obj)     ((uint32_t *)SCM_CELL_WORD_2(obj))
 
@@ -136,7 +136,7 @@ scm_c_make_bitvector (size_t len, SCM fill)
 
   bits = scm_gc_malloc_pointerless (sizeof (uint32_t) * word_len,
 				    "bitvector");
-  res = scm_double_cell (scm_tc7_bitvector, len, (scm_t_bits)bits, 0);
+  res = scm_double_cell (scm_tc11_bitvector, len, (scm_t_bits)bits, 0);
 
   if (!SCM_UNBNDP (fill))
     scm_bitvector_fill_x (res, fill);

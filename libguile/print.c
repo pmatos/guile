@@ -593,16 +593,7 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 {
   switch (SCM_ITAG3 (exp))
     {
-    case scm_tc3_tc7_1:
-    case scm_tc3_tc7_2:
-      /* These tc3 tags should never occur in an immediate value.  They are
-       * only used in cell types of non-immediates, i. e. the value returned
-       * by SCM_CELL_TYPE (exp) can use these tags.
-       */
-      scm_ipruk ("immediate", exp, port);
-      break;
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
+    case scm_tcs_fixnums:
       scm_intprint (SCM_I_INUM (exp), 10, port);
       break;
     case scm_tc3_imm24:
@@ -625,7 +616,7 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	}
       break;
     case scm_tc3_cons:
-      switch (SCM_TYP7 (exp))
+      switch (SCM_TYP11 (exp))
 	{
 	case scm_tcs_struct:
 	  {
@@ -647,16 +638,10 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	    EXIT_NESTED_DATA (pstate);
 	  }
 	  break;
-	case scm_tcs_cons_imcar:
-	case scm_tcs_cons_nimcar:
-	  ENTER_NESTED_DATA (pstate, exp, circref);
-	  scm_iprlist ("(", exp, ')', port, pstate);
-	  EXIT_NESTED_DATA (pstate);
-	  break;
 	circref:
 	  print_circref (port, pstate, exp);
 	  break;
-	case scm_tc7_number:
+	case scm_tc11_number:
           switch SCM_TYP16 (exp) {
           case scm_tc16_big:
             scm_bigprint (exp, port, pstate);
@@ -672,10 +657,10 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
             break;
           }
 	  break;
-        case scm_tc7_stringbuf:
+        case scm_tc11_stringbuf:
           scm_i_print_stringbuf (exp, port, pstate);
           break;
-        case scm_tc7_string:
+        case scm_tc11_string:
 	  {
 	    size_t len = scm_i_string_length (exp);
 
@@ -688,7 +673,7 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	  }
           scm_remember_upto_here_1 (exp);
           break;
-	case scm_tc7_symbol:
+	case scm_tc11_symbol:
 	  if (scm_i_symbol_is_interned (exp))
 	    {
 	      print_symbol (exp, port);
@@ -703,91 +688,98 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	      scm_putc ('>', port);
 	    }
 	  break;
-	case scm_tc7_variable:
+	case scm_tc11_variable:
 	  scm_i_variable_print (exp, port, pstate);
 	  break;
-        case scm_tc7_values:
+        case scm_tc11_values:
           scm_puts ("#<values (", port);
           print_vector_or_weak_vector (exp, scm_i_nvalues (exp),
                                        scm_c_value_ref, port, pstate);
           scm_puts (">", port);
           break;
-	case scm_tc7_program:
+	case scm_tc11_program:
 	  scm_i_program_print (exp, port, pstate);
 	  break;
-	case scm_tc7_pointer:
+	case scm_tc11_pointer:
 	  scm_i_pointer_print (exp, port, pstate);
 	  break;
-	case scm_tc7_hashtable:
+	case scm_tc11_hashtable:
 	  scm_i_hashtable_print (exp, port, pstate);
 	  break;
-	case scm_tc7_weak_set:
+	case scm_tc11_weak_set:
 	  scm_i_weak_set_print (exp, port, pstate);
 	  break;
-	case scm_tc7_weak_table:
+	case scm_tc11_weak_table:
 	  scm_i_weak_table_print (exp, port, pstate);
 	  break;
-	case scm_tc7_fluid:
+	case scm_tc11_fluid:
 	  scm_i_fluid_print (exp, port, pstate);
 	  break;
-	case scm_tc7_dynamic_state:
+	case scm_tc11_dynamic_state:
 	  scm_i_dynamic_state_print (exp, port, pstate);
 	  break;
-	case scm_tc7_frame:
+	case scm_tc11_frame:
 	  scm_i_frame_print (exp, port, pstate);
 	  break;
-        case scm_tc7_keyword:
+        case scm_tc11_keyword:
           scm_puts ("#:", port);
           scm_iprin1 (scm_keyword_to_symbol (exp), port, pstate);
           break;
-        case scm_tc7_syntax:
+        case scm_tc11_syntax:
 	  scm_i_syntax_print (exp, port, pstate);
           break;
-	case scm_tc7_atomic_box:
+	case scm_tc11_atomic_box:
 	  scm_i_atomic_box_print (exp, port, pstate);
 	  break;
-	case scm_tc7_vm_cont:
+	case scm_tc11_vm_cont:
 	  scm_i_vm_cont_print (exp, port, pstate);
 	  break;
-	case scm_tc7_array:
+	case scm_tc11_array:
 	  ENTER_NESTED_DATA (pstate, exp, circref);
           scm_i_print_array (exp, port, pstate);
           EXIT_NESTED_DATA (pstate);
           break;
-	case scm_tc7_bytevector:
+	case scm_tc11_bytevector:
 	  scm_i_print_bytevector (exp, port, pstate);
 	  break;
-	case scm_tc7_bitvector:
+	case scm_tc11_bitvector:
 	  scm_i_print_bitvector (exp, port, pstate);
 	  break;
-	case scm_tc7_wvect:
+	case scm_tc11_wvect:
 	  ENTER_NESTED_DATA (pstate, exp, circref);
           scm_puts ("#w(", port);
           print_vector_or_weak_vector (exp, scm_c_weak_vector_length (exp),
                                        scm_c_weak_vector_ref, port, pstate);
 	  EXIT_NESTED_DATA (pstate);
 	  break;
-	case scm_tc7_vector:
+	case scm_tc11_vector:
 	  ENTER_NESTED_DATA (pstate, exp, circref);
 	  scm_puts ("#(", port);
           print_vector_or_weak_vector (exp, SCM_SIMPLE_VECTOR_LENGTH (exp),
                                        scm_c_vector_ref, port, pstate);
 	  EXIT_NESTED_DATA (pstate);
 	  break;
-	case scm_tc7_port:
+	case scm_tc11_port:
 	  {
 	    scm_t_port_type *ptob = SCM_PORT_TYPE (exp);
 	    if (ptob->print && ptob->print (exp, port, pstate))
 	      break;
 	    goto punk;
 	  }
-	case scm_tc7_smob:
+	case scm_tcs_smob:
 	  ENTER_NESTED_DATA (pstate, exp, circref);
 	  SCM_SMOB_DESCRIPTOR (exp).print (exp, port, pstate);
 	  EXIT_NESTED_DATA (pstate);
 	  break;
 	default:
-          /* case scm_tcs_closures: */
+          if (scm_is_pair (exp))
+            {
+              ENTER_NESTED_DATA (pstate, exp, circref);
+              scm_iprlist ("(", exp, ')', port, pstate);
+              EXIT_NESTED_DATA (pstate);
+              break;
+            }
+          /* fall through */
 	punk:
 	  scm_ipruk ("type", exp, port);
 	}

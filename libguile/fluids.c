@@ -98,14 +98,14 @@
    table could share more state, as in an immutable weak array-mapped
    hash trie or something, but we don't have such a data structure.  */
 
-#define FLUID_F_THREAD_LOCAL 0x100
+#define FLUID_F_THREAD_LOCAL 0x1000
 #define SCM_I_FLUID_THREAD_LOCAL_P(x) \
   (SCM_CELL_WORD_0 (x) & FLUID_F_THREAD_LOCAL)
 
 static inline int
 is_dynamic_state (SCM x)
 {
-  return SCM_HAS_TYP7 (x, scm_tc7_dynamic_state);
+  return SCM_HAS_TYP11 (x, scm_tc11_dynamic_state);
 }
 
 static inline SCM
@@ -225,7 +225,7 @@ scm_i_dynamic_state_print (SCM exp, SCM port, scm_print_state *pstate SCM_UNUSED
 static SCM
 new_fluid (SCM init, scm_t_bits flags)
 {
-  return scm_cell (scm_tc7_fluid | flags, SCM_UNPACK (init));
+  return scm_cell (scm_tc11_fluid | flags, SCM_UNPACK (init));
 }
 
 SCM
@@ -585,7 +585,7 @@ scm_dynwind_fluid (SCM fluid, SCM value)
 SCM
 scm_i_make_initial_dynamic_state (void)
 {
-  return scm_cell (scm_tc7_dynamic_state,
+  return scm_cell (scm_tc11_dynamic_state,
                    SCM_UNPACK (scm_c_make_weak_table
                                (0, SCM_WEAK_TABLE_KIND_KEY)));
 }
@@ -613,7 +613,7 @@ SCM_DEFINE (scm_current_dynamic_state, "current-dynamic-state", 0, 0, 0,
 #define FUNC_NAME s_scm_current_dynamic_state
 {
   struct scm_dynamic_state *state = SCM_I_CURRENT_THREAD->dynamic_state;
-  return scm_cell (scm_tc7_dynamic_state,
+  return scm_cell (scm_tc11_dynamic_state,
                    SCM_UNPACK (save_dynamic_state (state)));
 }
 #undef FUNC_NAME

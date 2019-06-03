@@ -544,7 +544,7 @@ term."
            (letk ktag0
                  ($kargs ('closure) (closure)
                    ($continue ktag1 src
-                     ($primcall 'load-u64 (+ %tc7-program (ash nfree 16)) ()))))
+                     ($primcall 'load-u64 (+ %tc11-program (ash nfree 20)) ()))))
            (build-term
              ($continue ktag0 src
                ($primcall 'allocate-words/immediate `(closure . ,(+ nfree 2))
@@ -571,7 +571,7 @@ term."
            (letk ktag0
                  ($kargs ('v) (v)
                    ($continue ktag1 src
-                     ($primcall 'load-u64 (+ %tc7-vector (ash nfree 8)) ()))))
+                     ($primcall 'load-u64 (+ %tc11-vector (ash nfree 12)) ()))))
            (build-term
              ($continue ktag0 src
                ($primcall 'allocate-words/immediate `(vector . ,(1+ nfree))

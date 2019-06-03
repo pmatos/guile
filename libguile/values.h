@@ -27,14 +27,14 @@
 static inline int
 scm_is_values (SCM x)
 {
-  return SCM_HAS_TYP7 (x, scm_tc7_values);
+  return SCM_HAS_TYP11 (x, scm_tc11_values);
 }
 
 #ifdef BUILDING_LIBGUILE
 static inline size_t
 scm_i_nvalues (SCM x)
 {
-  return SCM_CELL_WORD_0 (x) >> 8;
+  return SCM_CELL_WORD_0 (x) >> 12;
 }
 
 static inline SCM

@@ -1,7 +1,7 @@
 #ifndef SCM_NUMBERS_H
 #define SCM_NUMBERS_H
 
-/* Copyright 1995-1996,1998,2000-2006,2008-2011,2013-2014,2016-2018
+/* Copyright 1995-1996,1998,2000-2006,2008-2011,2013-2014,2016-2019
      Free Software Foundation, Inc.
 
    This file is part of Guile.
@@ -38,7 +38,7 @@
  * In the current implementation, Inums must also fit within a long
  * because that's what GMP's mpz_*_si functions accept.  */
 typedef long scm_t_inum;
-#define SCM_I_FIXNUM_BIT         (SCM_LONG_BIT - 2)
+#define SCM_I_FIXNUM_BIT         (SCM_SIZEOF_UINTPTR_T * 8 - scm_fixnum_tag_size)
 #define SCM_MOST_NEGATIVE_FIXNUM (-1L << (SCM_I_FIXNUM_BIT - 1))
 #define SCM_MOST_POSITIVE_FIXNUM (- (SCM_MOST_NEGATIVE_FIXNUM + 1))
 
@@ -67,18 +67,18 @@ typedef long scm_t_inum;
 
    NOTE: X must not perform side effects.  */
 #ifdef __GNUC__
-# define SCM_I_INUM(x)  (SCM_SRS ((scm_t_inum) SCM_UNPACK (x), 2))
+# define SCM_I_INUM(x)  (SCM_SRS ((scm_t_inum) SCM_UNPACK (x), scm_fixnum_tag_size))
 #else
-# define SCM_I_INUM(x)                          \
-  (SCM_UNPACK (x) > SCM_T_SIGNED_BITS_MAX       \
-   ? -1 - (scm_t_inum) (~SCM_UNPACK (x) >> 2)   \
-   : (scm_t_inum) (SCM_UNPACK (x) >> 2))
+# define SCM_I_INUM(x)                                             \
+  (SCM_UNPACK (x) > SCM_T_SIGNED_BITS_MAX                          \
+   ? -1 - (scm_t_inum) (~SCM_UNPACK (x) >> scm_fixnum_tag_size)    \
+   : (scm_t_inum) (SCM_UNPACK (x) >> scm_fixnum_tag_size))
 #endif
 
-#define SCM_I_INUMP(x)	(2 & SCM_UNPACK (x))
+#define SCM_I_INUMP(x)	((SCM_UNPACK (x) & scm_fixnum_tag_mask) == scm_fixnum_tag)
 #define SCM_I_NINUMP(x) (!SCM_I_INUMP (x))
 #define SCM_I_MAKINUM(x) \
-  (SCM_PACK ((((scm_t_bits) (x)) << 2) + scm_tc2_int))
+  (SCM_PACK ((((scm_t_bits) (x)) << scm_fixnum_tag_size) + scm_fixnum_tag))
 
 /* SCM_FIXABLE is true if its long argument can be encoded in an SCM_INUM. */
 #define SCM_POSFIXABLE(n) ((n) <= SCM_MOST_POSITIVE_FIXNUM)
@@ -130,19 +130,20 @@ typedef long scm_t_inum;
  */
 
 
-/* Note that scm_tc16_real and scm_tc16_complex are given tc16-codes that only
- * differ in one bit: This way, checking if an object is an inexact number can
- * be done quickly (using the TYP16S macro).  */
+/* Note that scm_tc16_double and scm_tc16_complex are given tc16-codes that
+ * only differ in one bit: This way, checking if an object is an inexact
+ * number can be done quickly.  */
 
-/* Number subtype 1 to 3 (note the dependency on the predicates SCM_INEXACTP
- * and SCM_NUMP)  */
-#define scm_tc16_big		(scm_tc7_number + 1 * 256L)
-#define scm_tc16_real           (scm_tc7_number + 2 * 256L)
-#define scm_tc16_complex        (scm_tc7_number + 3 * 256L)
-#define scm_tc16_fraction       (scm_tc7_number + 4 * 256L)
+/* Number subtype 1 to 4 (note the dependency on SCM_INEXACTP) */
+#define scm_tc16_big           (scm_tc11_number + (1 << 12))
+#define scm_tc16_real          (scm_tc11_number + (2 << 12))
+#define scm_tc16_complex       (scm_tc11_number + (3 << 12))
+#define scm_tc16_fraction      (scm_tc11_number + (4 << 12))
 
-#define SCM_INEXACTP(x) \
-  (!SCM_IMP (x) && (0xfeff & SCM_CELL_TYPE (x)) == scm_tc16_real)
+#define SCM_INEXACTP(x)                                            \
+  (SCM_NIMP (x)                                                    \
+    && ((SCM_TYP16 (x) & ~(scm_tc16_real ^ scm_tc16_complex))  \
+        == (scm_tc16_real & scm_tc16_complex)))
 #define SCM_REALP(x) (SCM_HAS_TYP16 (x, scm_tc16_real))
 #define SCM_COMPLEXP(x) (SCM_HAS_TYP16 (x, scm_tc16_complex))
 
@@ -155,7 +156,7 @@ typedef long scm_t_inum;
 #define SCM_BIGP(x) (SCM_HAS_TYP16 (x, scm_tc16_big))
 
 #define SCM_NUMBERP(x) (SCM_I_INUMP(x) || SCM_NUMP(x))
-#define SCM_NUMP(x) (SCM_HAS_TYP7 (x, scm_tc7_number))
+#define SCM_NUMP(x) (SCM_HAS_TYP11 (x, scm_tc11_number))
 
 #define SCM_FRACTIONP(x) (SCM_HAS_TYP16 (x, scm_tc16_fraction))
 #define SCM_FRACTION_NUMERATOR(x) (SCM_CELL_OBJECT_1 (x))

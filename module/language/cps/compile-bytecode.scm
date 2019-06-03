@@ -166,8 +166,8 @@
                        (from-sp (slot idx))))
         (($ $primcall 'scm-ref/tag annotation (obj))
          (let ((tag (match annotation
-                      ('pair %tc1-pair)
-                      ('struct %tc3-struct))))
+                      ('pair 0)
+                      ('struct %tc5-struct))))
            (emit-scm-ref/tag asm (from-sp dst) (from-sp (slot obj)) tag)))
         (($ $primcall 'scm-ref/immediate (annotation . idx) (obj))
          (emit-scm-ref/immediate asm (from-sp dst) (from-sp (slot obj)) idx))
@@ -298,8 +298,8 @@
                         (from-sp (slot val))))
         (($ $primcall 'scm-set!/tag annotation (obj val))
          (let ((tag (match annotation
-                      ('pair %tc1-pair)
-                      ('struct %tc3-struct))))
+                      ('pair 0)
+                      ('struct %tc5-struct))))
            (emit-scm-set!/tag asm (from-sp (slot obj)) tag
                               (from-sp (slot val)))))
         (($ $primcall 'scm-set!/immediate (annotation . idx) (obj val))
@@ -464,7 +464,7 @@
         (#('false? #f (a)) (unary emit-false? a))
         (#('nil? #f (a)) (unary emit-nil? a))
         ;; Heap type tag predicates.
-        (#('pair? #f (a)) (unary emit-pair? a))
+        (#('non-pair-heap-object? #f (a)) (unary emit-non-pair-heap-object? a))
         (#('struct? #f (a)) (unary emit-struct? a))
         (#('symbol? #f (a)) (unary emit-symbol? a))
         (#('variable? #f (a)) (unary emit-variable? a))

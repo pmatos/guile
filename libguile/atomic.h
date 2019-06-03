@@ -29,7 +29,7 @@
 static inline int
 scm_is_atomic_box (SCM obj)
 {
-  return SCM_HAS_TYP7 (obj, scm_tc7_atomic_box);
+  return SCM_HAS_TYP11 (obj, scm_tc11_atomic_box);
 }
 
 static inline SCM*

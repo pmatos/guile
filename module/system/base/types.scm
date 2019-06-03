@@ -1,5 +1,5 @@
 ;;; 'SCM' type tag decoding.
-;;; Copyright (C) 2014, 2015, 2017, 2018 Free Software Foundation, Inc.
+;;; Copyright (C) 2014, 2015, 2017, 2018, 2019 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or modify it
 ;;; under the terms of the GNU Lesser General Public License as published by
@@ -308,16 +308,24 @@ KIND/SUB-KIND."
                           (lambda (io port)
                             (match io
                               (($ <inferior-object> kind sub-kind address)
-                               (format port "#<~a ~:[~*~;~a ~]~x>"
+                               (format port "#<~a~:[~*~; ~a~]~:[~*~; ~x~]>"
                                        kind sub-kind sub-kind
-                                       address)))))
+                                       address address)))))
 
-(define (inferior-smob backend type-number address)
+(define (inferior-smob backend type-number flags word1 address)
   "Return an object representing the SMOB at ADDRESS whose type is
 TYPE-NUMBER."
-  (inferior-object 'smob
-                   (or (type-number->name backend 'smob type-number)
-                       type-number)
+  (inferior-object (let ((type-name (or (type-number->name backend 'smob
+                                                           type-number)
+                                        (string->symbol
+                                         (string-append "smob-" (number->string type-number))))))
+                     (if (zero? flags)
+                         type-name
+                         (string->symbol (string-append
+                                          (symbol->string type-name)
+                                          "/"
+                                          (number->string flags 16)))))
+                   (number->string word1 16)
                    address))
 
 (define (inferior-port-type backend address)
@@ -393,32 +401,32 @@ using BACKEND."
   (or (and=> (vhash-assv address (%visited-cells)) cdr) ; circular object
       (let ((port (memory-port backend address)))
         (match-cell port
-          (((vtable-address & 7 = %tc3-struct))
+          (((vtable-address & #x1f = %tc5-struct))
            (address->inferior-struct address
-                                     (- vtable-address %tc3-struct)
+                                     (- vtable-address %tc5-struct)
                                      backend))
-          (((_ & #x7f = %tc7-symbol) buf hash props)
+          (((_ & #x7ff = %tc11-symbol) buf hash props)
            (match (cell->object buf backend)
              (($ <stringbuf> string)
               (string->symbol string))))
-          (((_ & #x7f = %tc7-variable) obj)
+          (((_ & #x7ff = %tc11-variable) obj)
            (inferior-object 'variable address))
-          (((_ & #x7f = %tc7-string) buf start len)
+          (((_ & #x7ff = %tc11-string) buf start len)
            (match (cell->object buf backend)
              (($ <stringbuf> string)
               (substring string start (+ start len)))))
-          (((_ & #x047f = %tc7-stringbuf) len (bytevector buf len))
+          (((_ & #x047ff = %tc11-stringbuf) len (bytevector buf len))
            (stringbuf (iconv:bytevector->string buf "ISO-8859-1")))
-          (((_ & #x047f = (bitwise-ior #x400 %tc7-stringbuf))
+          (((_ & #x047ff = (bitwise-ior #x4000 %tc11-stringbuf))
             len (bytevector buf (* 4 len)))
            (stringbuf (iconv:bytevector->string buf
                                                 (match (native-endianness)
                                                   ('little "UTF-32LE")
                                                   ('big "UTF-32BE")))))
-          (((_ & #x7f = %tc7-bytevector) len address)
+          (((_ & #x7ff = %tc11-bytevector) len address)
            (let ((bv-port (memory-port backend address len)))
              (get-bytevector-n bv-port len)))
-          ((((len << 8) || %tc7-vector))
+          ((((len << 12) || %tc11-vector))
            (let ((words  (get-bytevector-n port (* len %word-size)))
                  (vector (make-vector len)))
              (visited (address -> vector)
@@ -430,16 +438,33 @@ using BACKEND."
                           (bytevector->uint-list words (native-endianness)
                                                  %word-size)))
                vector)))
-          (((_ & #x7f = %tc7-weak-vector))
+          (((_ & #x7ff = %tc11-weak-vector))
            (inferior-object 'weak-vector address))   ; TODO: show elements
-          (((_ & #x7f = %tc7-fluid) init-value)
+          (((_ & #x7ff = %tc11-fluid) init-value)
            (inferior-object 'fluid address))
-          (((_ & #x7f = %tc7-dynamic-state))
+          (((_ & #x7ff = %tc11-dynamic-state))
            (inferior-object 'dynamic-state address))
-          ((((flags << 8) || %tc7-port))
+          ((((flags << 12) || %tc11-port))
            (inferior-port backend (logand flags #xff) address))
-          (((_ & #x7f = %tc7-program))
-           (inferior-object 'program address))
+          (((bits & #x7ff = %tc11-program) code)
+           (let ((num-free-vars (ash bits -20))
+                 (flags (filter-map (match-lambda
+                                      ((mask . flag-name)
+                                       (and (logtest mask bits) flag-name)))
+                                    '((#x01000 . boot)
+                                      (#x02000 . prim)
+                                      (#x04000 . prim-generic)
+                                      (#x08000 . cont)
+                                      (#x10000 . partial-cont)
+                                      (#x20000 . foreign)))))
+             (inferior-object (cons* 'program flags
+                                     (unfold zero?
+                                             (lambda (n)
+                                               (number->string (get-word port) 16))
+                                             1-
+                                             num-free-vars))
+                              (number->string code 16)
+                              address)))
           (((_ & #xffff = %tc16-bignum))
            (inferior-object 'bignum address))
           (((_ & #xffff = %tc16-flonum) pad)
@@ -447,57 +472,64 @@ using BACKEND."
                   (port    (memory-port backend address (sizeof double)))
                   (words   (get-bytevector-n port (sizeof double))))
              (bytevector-ieee-double-ref words 0 (native-endianness))))
-          (((_ & #x7f = %tc7-heap-number) mpi)
+          (((_ & #x7ff = %tc11-heap-number) mpi)
            (inferior-object 'number address))
-          (((_ & #x7f = %tc7-hash-table) buckets meta-data unused)
+          (((_ & #x7ff = %tc11-hash-table) buckets meta-data unused)
            (inferior-object 'hash-table address))
-          (((_ & #x7f = %tc7-pointer) address)
+          (((_ & #x7ff = %tc11-pointer) address)
            (make-pointer address))
-          (((_ & #x7f = %tc7-keyword) symbol)
+          (((_ & #x7ff = %tc11-keyword) symbol)
            (symbol->keyword (cell->object symbol backend)))
-          (((_ & #x7f = %tc7-syntax) expression wrap module)
+          (((_ & #x7ff = %tc11-syntax) expression wrap module)
            (cond-expand
              (guile-2.2
-              (make-syntax (cell->object expression backend)
-                           (cell->object wrap backend)
-                           (cell->object module backend)))
+              (make-syntax (scm->object expression backend)
+                           (scm->object wrap backend)
+                           (scm->object module backend)))
              (else
-              (inferior-object 'syntax address))))
-          (((_ & #x7f = %tc7-vm-continuation))
+              (vector 'syntax-object
+                      (scm->object expression backend)
+                      (scm->object wrap backend)
+                      (scm->object module backend)))))
+          (((_ & #x7ff = %tc11-vm-continuation))
            (inferior-object 'vm-continuation address))
-          (((_ & #x7f = %tc7-weak-set))
+          (((_ & #x7ff = %tc11-weak-set))
            (inferior-object 'weak-set address))
-          (((_ & #x7f = %tc7-weak-table))
+          (((_ & #x7ff = %tc11-weak-table))
            (inferior-object 'weak-table address))
-          (((_ & #x7f = %tc7-array))
+          (((_ & #x7ff = %tc11-array))
            (inferior-object 'array address))
-          (((_ & #x7f = %tc7-bitvector))
+          (((_ & #x7ff = %tc11-bitvector))
            (inferior-object 'bitvector address))
-          ((((smob-type << 8) || %tc7-smob) word1)
-           (inferior-smob backend smob-type address))))))
+          (((bits & #x7f = %tc7-smob) word1)
+           (let ((smob-type (bit-extract bits 8 16))
+                 (flags     (ash bits -16)))
+             (inferior-smob backend smob-type flags word1 address)))))))
 
 
 (define* (scm->object bits #:optional (backend %ffi-memory-backend))
   "Return the Scheme object corresponding to BITS, the bits of an 'SCM'
 object."
   (match-scm bits
-    (((integer << 2) || %tc2-fixnum)
+    (((integer << %fixnum-tag-size) || %fixnum-tag)
      integer)
     ((address & 7 = %tc3-heap-object)
-     (let* ((type  (dereference-word backend address))
-            (pair? (= (logand type #b1) %tc1-pair)))
-       (if pair?
-           (or (and=> (vhash-assv address (%visited-cells)) cdr)
-               (let ((car    type)
-                     (cdrloc (+ address %word-size))
-                     (pair   (cons *unspecified* *unspecified*)))
-                 (visited (address -> pair)
-                   (set-car! pair (scm->object car backend))
-                   (set-cdr! pair
-                             (scm->object (dereference-word backend cdrloc)
-                                          backend))
-                   pair)))
-           (cell->object address backend))))
+     (if (zero? address)
+         (inferior-object 'NULL #f)   ; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+         (let* ((type  (dereference-word backend address))
+                (pair? (not (= (logand type 15) %tc4-non-pair-heap-object))))
+           (if pair?
+               (or (and=> (vhash-assv address (%visited-cells)) cdr)
+                   (let ((car    type)
+                         (cdrloc (+ address %word-size))
+                         (pair   (cons *unspecified* *unspecified*)))
+                     (visited (address -> pair)
+                       (set-car! pair (scm->object car backend))
+                       (set-cdr! pair
+                                 (scm->object (dereference-word backend cdrloc)
+                                              backend))
+                       pair)))
+               (cell->object address backend)))))
     (((char << 8) || %tc8-char)
      (integer->char char))
     ((= %tc16-false) #f)

@@ -41,7 +41,7 @@ SCM_DEFINE (scm_make_atomic_box, "make-atomic-box", 1, 0, 0,
             "Return an atomic box initialized to value @var{init}.")
 #define FUNC_NAME s_scm_make_atomic_box
 {
-  SCM ret = scm_cell (scm_tc7_atomic_box, SCM_UNPACK (SCM_UNDEFINED));
+  SCM ret = scm_cell (scm_tc11_atomic_box, SCM_UNPACK (SCM_UNDEFINED));
   scm_atomic_box_set_x (ret, init);
   return ret;
 }

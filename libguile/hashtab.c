@@ -97,7 +97,7 @@ make_hash_table (unsigned long k, const char *func_name)
   t->upper = 9 * n / 10;
 
   /* FIXME: we just need two words of storage, not three */
-  return scm_double_cell (scm_tc7_hashtable, SCM_UNPACK (vector),
+  return scm_double_cell (scm_tc11_hashtable, SCM_UNPACK (vector),
                           (scm_t_bits)t, 0);
 }
 

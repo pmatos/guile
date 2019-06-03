@@ -288,7 +288,7 @@ typedef uintptr_t scm_t_bits;
 
    Heap Objects
 
-   All object types not mentioned above in the list of immediate objects
+   All object types not mentioned above in the list of immedate objects
    are represented as heap objects.  The amount of memory referenced by
    a heap object depends on the object's type, namely on the set of
    attributes that have to be stored with objects of that type.  Every
@@ -420,28 +420,25 @@ typedef uintptr_t scm_t_bits;
 
 
 
-/* Checking if a SCM variable holds an immediate or a heap object.  This
-   check can either be performed by checking for tc3==000 or tc3==00x,
-   since for a SCM variable it is known that tc1==0.  */
-#define SCM_IMP(x) 		(6 & SCM_UNPACK (x))
+/* Checking if a SCM variable holds an immediate or a heap object.  */
+#define SCM_IMP(x) 		(7 & SCM_UNPACK (x))
 #define SCM_NIMP(x) 		(!SCM_IMP (x))
 #define SCM_HEAP_OBJECT_P(x)    (SCM_NIMP (x))
-
-/* Checking if a SCM variable holds an immediate integer: See numbers.h
-   for the definition of the following macros: SCM_I_FIXNUM_BIT,
-   SCM_MOST_POSITIVE_FIXNUM, SCM_I_INUMP, SCM_I_MAKINUM, SCM_I_INUM.  */
 
 /* Checking if a SCM variable holds a pair (for historical reasons, in
    Guile also known as a cons-cell): This is done by first checking that
    the SCM variable holds a heap object, and second, by checking that
    tc1==0 holds for the SCM_CELL_TYPE of the SCM variable.  */
-#define SCM_I_CONSP(x)  (!SCM_IMP (x) && ((1 & SCM_CELL_TYPE (x)) == 0))
+#define SCM_I_CONSP(x) \
+  (!SCM_IMP (x) && ((15 & SCM_CELL_TYPE (x)) != scm_tc4_non_pair_heap_object))
 
 
 
-/* Definitions for tc2: */
+/* Definitions for immediate numbers: */
 
-#define scm_tc2_int              2
+#define scm_fixnum_tag           15
+#define scm_fixnum_tag_mask      15
+#define scm_fixnum_tag_size      4
 
 
 /* Definitions for tc3: */
@@ -449,63 +446,83 @@ typedef uintptr_t scm_t_bits;
 #define SCM_ITAG3(x) 		 (7 & SCM_UNPACK (x))
 #define SCM_TYP3(x) 		 (7 & SCM_CELL_TYPE (x))
 
-#define scm_tc3_cons	 	 0
-#define scm_tc3_struct    	 1
-#define scm_tc3_int_1		 (scm_tc2_int + 0)
-#define scm_tc3_unused		 3
-#define scm_tc3_imm24		 4
-#define scm_tc3_tc7_1		 5
-#define scm_tc3_int_2		 (scm_tc2_int + 4)
-#define scm_tc3_tc7_2		 7
+#define scm_tc3_cons		 0
+#define scm_tc3_imm24		 6
+#define scm_tcs_fixnums		 7
+
+
+/* Definitions for tc4: */
+
+#define scm_tc4_non_pair_heap_object  0xe
+
+
+/* Definitions for tc5: */
+
+#define scm_tc5_struct          (scm_tc4_non_pair_heap_object + 0x10)
+
+
+/* Definitions for tc6: */
+
+#define scm_tc6_misc_heap       (scm_tc4_non_pair_heap_object + 0x20)
 
 
 /* Definitions for tc7: */
 
+#define scm_tc7_smob            (scm_tc4_non_pair_heap_object + 0x40)
+
 #define SCM_ITAG7(x) 		(0x7f & SCM_UNPACK (x))
 #define SCM_TYP7(x) 		(0x7f & SCM_CELL_TYPE (x))
+#define SCM_HAS_TYP7(x, tag)    (SCM_NIMP (x) && SCM_TYP7 (x) == (tag))
+
+
+/* Definitions for tc11: */
+
+#define SCM_ITAG11(x) 		(0x7ff & SCM_UNPACK (x))
+#define SCM_TYP11(x) 		(0x7ff & SCM_CELL_TYPE (x))
 #define SCM_HAS_HEAP_TYPE(x, type, tag)                         \
   (SCM_NIMP (x) && type (x) == (tag))
-#define SCM_HAS_TYP7(x, tag)    (SCM_HAS_HEAP_TYPE (x, SCM_TYP7, tag))
+#define SCM_HAS_TYP11(x, tag)   (SCM_HAS_HEAP_TYPE (x, SCM_TYP11, tag))
+
+#define SCM_MAKE_HEAP_TYPE(x)   (((x) << 6) + scm_tc6_misc_heap)
 
 /* These type codes form part of the ABI and cannot be changed in a
-   stable series.  The low bits of each must have the tc3 of a heap
-   object type code (see above).  If you do change them in a development
-   series, change them also in (system vm assembler) and (system base
-   types).  Bonus points if you change the build to define these tag
-   values in only one place!  */
+   stable series.  If you do change them in a development series,
+   change them also in (system vm assembler) and (system base types).
+   Bonus points if you change the build to define these tag values
+   in only one place!  */
 
-#define scm_tc7_symbol		0x05
-#define scm_tc7_variable        0x07
-#define scm_tc7_vector		0x0d
-#define scm_tc7_wvect		0x0f
-#define scm_tc7_string		0x15
-#define scm_tc7_number		0x17
-#define scm_tc7_hashtable	0x1d
-#define scm_tc7_pointer		0x1f
-#define scm_tc7_fluid		0x25
-#define scm_tc7_stringbuf       0x27
-#define scm_tc7_dynamic_state	0x2d
-#define scm_tc7_frame		0x2f
-#define scm_tc7_keyword		0x35
-#define scm_tc7_atomic_box	0x37
-#define scm_tc7_syntax		0x3d
-#define scm_tc7_values		0x3f
-#define scm_tc7_program		0x45
-#define scm_tc7_vm_cont		0x47
-#define scm_tc7_bytevector	0x4d
-#define scm_tc7_unused_4f	0x4f
-#define scm_tc7_weak_set	0x55
-#define scm_tc7_weak_table	0x57
-#define scm_tc7_array		0x5d
-#define scm_tc7_bitvector	0x5f
-#define scm_tc7_unused_65	0x65
-#define scm_tc7_unused_67	0x67
-#define scm_tc7_unused_6d	0x6d
-#define scm_tc7_unused_6f	0x6f
-#define scm_tc7_unused_75	0x75
-#define scm_tc7_smob		0x77
-#define scm_tc7_port		0x7d
-#define scm_tc7_unused_7f	0x7f
+#define scm_tc11_symbol           SCM_MAKE_HEAP_TYPE (0)
+#define scm_tc11_variable         SCM_MAKE_HEAP_TYPE (1)
+#define scm_tc11_vector           SCM_MAKE_HEAP_TYPE (2)
+#define scm_tc11_wvect            SCM_MAKE_HEAP_TYPE (3)
+#define scm_tc11_string           SCM_MAKE_HEAP_TYPE (4)
+#define scm_tc11_number           SCM_MAKE_HEAP_TYPE (5)
+#define scm_tc11_hashtable        SCM_MAKE_HEAP_TYPE (6)
+#define scm_tc11_pointer          SCM_MAKE_HEAP_TYPE (7)
+#define scm_tc11_fluid            SCM_MAKE_HEAP_TYPE (8)
+#define scm_tc11_stringbuf        SCM_MAKE_HEAP_TYPE (9)
+#define scm_tc11_dynamic_state    SCM_MAKE_HEAP_TYPE (10)
+#define scm_tc11_frame            SCM_MAKE_HEAP_TYPE (11)
+#define scm_tc11_keyword          SCM_MAKE_HEAP_TYPE (12)
+#define scm_tc11_atomic_box       SCM_MAKE_HEAP_TYPE (13)
+#define scm_tc11_syntax           SCM_MAKE_HEAP_TYPE (14)
+#define scm_tc11_values           SCM_MAKE_HEAP_TYPE (15)
+#define scm_tc11_program          SCM_MAKE_HEAP_TYPE (16)
+#define scm_tc11_vm_cont          SCM_MAKE_HEAP_TYPE (17)
+#define scm_tc11_bytevector       SCM_MAKE_HEAP_TYPE (18)
+#define scm_tc11_weak_set         SCM_MAKE_HEAP_TYPE (19)
+#define scm_tc11_weak_table       SCM_MAKE_HEAP_TYPE (20)
+#define scm_tc11_array            SCM_MAKE_HEAP_TYPE (21)
+#define scm_tc11_bitvector        SCM_MAKE_HEAP_TYPE (22)
+#define scm_tc11_port             SCM_MAKE_HEAP_TYPE (23)
+#define scm_tc11_unused_24        SCM_MAKE_HEAP_TYPE (24)
+#define scm_tc11_unused_25        SCM_MAKE_HEAP_TYPE (25)
+#define scm_tc11_unused_26        SCM_MAKE_HEAP_TYPE (26)
+#define scm_tc11_unused_27        SCM_MAKE_HEAP_TYPE (27)
+#define scm_tc11_unused_28        SCM_MAKE_HEAP_TYPE (28)
+#define scm_tc11_unused_29        SCM_MAKE_HEAP_TYPE (29)
+#define scm_tc11_unused_30        SCM_MAKE_HEAP_TYPE (30)
+#define scm_tc11_unused_31        SCM_MAKE_HEAP_TYPE (31)
 
 
 /* Definitions for tc16: */
@@ -521,9 +538,9 @@ typedef uintptr_t scm_t_bits;
 enum scm_tc8_tags
 {
   scm_tc8_flag = scm_tc3_imm24 + 0x00,  /* special objects ('flags') */
-  scm_tc8_char = scm_tc3_imm24 + 0x08,  /* characters */
-  scm_tc8_unused_0 = scm_tc3_imm24 + 0x10,
-  scm_tc8_unused_1 = scm_tc3_imm24 + 0x18
+  scm_tc8_char = scm_tc3_imm24 + 0x10,  /* characters */
+  scm_tc8_unused_0 = scm_tc3_imm24 + 0x20,
+  scm_tc8_unused_1 = scm_tc3_imm24 + 0x30
 };
 
 #define SCM_ITAG8(X)		(SCM_UNPACK (X) & 0xff)
@@ -644,65 +661,54 @@ enum scm_tc8_tags
 
 /* Dispatching aids:
 
-   When switching on SCM_TYP7 of a SCM value, use these fake case
-   labels to catch types that use fewer than 7 bits for tagging.  */
+   When switching on SCM_TYP11 of a SCM value, use these fake case
+   labels to catch types that use fewer than 11 bits for tagging.  */
 
-/* Pairs with immediate values in the CAR.  */
-#define scm_tcs_cons_imcar \
-       scm_tc2_int + 0:   case scm_tc2_int + 4:   case scm_tc3_imm24 + 0:\
-  case scm_tc2_int + 8:   case scm_tc2_int + 12:  case scm_tc3_imm24 + 8:\
-  case scm_tc2_int + 16:  case scm_tc2_int + 20:  case scm_tc3_imm24 + 16:\
-  case scm_tc2_int + 24:  case scm_tc2_int + 28:  case scm_tc3_imm24 + 24:\
-  case scm_tc2_int + 32:  case scm_tc2_int + 36:  case scm_tc3_imm24 + 32:\
-  case scm_tc2_int + 40:  case scm_tc2_int + 44:  case scm_tc3_imm24 + 40:\
-  case scm_tc2_int + 48:  case scm_tc2_int + 52:  case scm_tc3_imm24 + 48:\
-  case scm_tc2_int + 56:  case scm_tc2_int + 60:  case scm_tc3_imm24 + 56:\
-  case scm_tc2_int + 64:  case scm_tc2_int + 68:  case scm_tc3_imm24 + 64:\
-  case scm_tc2_int + 72:  case scm_tc2_int + 76:  case scm_tc3_imm24 + 72:\
-  case scm_tc2_int + 80:  case scm_tc2_int + 84:  case scm_tc3_imm24 + 80:\
-  case scm_tc2_int + 88:  case scm_tc2_int + 92:  case scm_tc3_imm24 + 88:\
-  case scm_tc2_int + 96:  case scm_tc2_int + 100: case scm_tc3_imm24 + 96:\
-  case scm_tc2_int + 104: case scm_tc2_int + 108: case scm_tc3_imm24 + 104:\
-  case scm_tc2_int + 112: case scm_tc2_int + 116: case scm_tc3_imm24 + 112:\
-  case scm_tc2_int + 120: case scm_tc2_int + 124: case scm_tc3_imm24 + 120
-
-/* Pairs with heap objects in the CAR.  */
-#define scm_tcs_cons_nimcar \
-       scm_tc3_cons + 0:\
-  case scm_tc3_cons + 8:\
-  case scm_tc3_cons + 16:\
-  case scm_tc3_cons + 24:\
-  case scm_tc3_cons + 32:\
-  case scm_tc3_cons + 40:\
-  case scm_tc3_cons + 48:\
-  case scm_tc3_cons + 56:\
-  case scm_tc3_cons + 64:\
-  case scm_tc3_cons + 72:\
-  case scm_tc3_cons + 80:\
-  case scm_tc3_cons + 88:\
-  case scm_tc3_cons + 96:\
-  case scm_tc3_cons + 104:\
-  case scm_tc3_cons + 112:\
-  case scm_tc3_cons + 120
+/* Smobs.  */
+#define scm_tcs_smob \
+       scm_tc7_smob + 0x000:  case scm_tc7_smob + 0x080:\
+  case scm_tc7_smob + 0x100:  case scm_tc7_smob + 0x180:\
+  case scm_tc7_smob + 0x200:  case scm_tc7_smob + 0x280:\
+  case scm_tc7_smob + 0x300:  case scm_tc7_smob + 0x380:\
+  case scm_tc7_smob + 0x400:  case scm_tc7_smob + 0x480:\
+  case scm_tc7_smob + 0x500:  case scm_tc7_smob + 0x580:\
+  case scm_tc7_smob + 0x600:  case scm_tc7_smob + 0x680:\
+  case scm_tc7_smob + 0x700:  case scm_tc7_smob + 0x780
 
 /* Structs.  */
 #define scm_tcs_struct \
-       scm_tc3_struct + 0:\
-  case scm_tc3_struct + 8:\
-  case scm_tc3_struct + 16:\
-  case scm_tc3_struct + 24:\
-  case scm_tc3_struct + 32:\
-  case scm_tc3_struct + 40:\
-  case scm_tc3_struct + 48:\
-  case scm_tc3_struct + 56:\
-  case scm_tc3_struct + 64:\
-  case scm_tc3_struct + 72:\
-  case scm_tc3_struct + 80:\
-  case scm_tc3_struct + 88:\
-  case scm_tc3_struct + 96:\
-  case scm_tc3_struct + 104:\
-  case scm_tc3_struct + 112:\
-  case scm_tc3_struct + 120
+       scm_tc5_struct + 0x00:   case scm_tc5_struct + 0x20:\
+  case scm_tc5_struct + 0x40:   case scm_tc5_struct + 0x60:\
+  case scm_tc5_struct + 0x80:   case scm_tc5_struct + 0xa0:\
+  case scm_tc5_struct + 0xc0:   case scm_tc5_struct + 0xe0:\
+  case scm_tc5_struct + 0x100:  case scm_tc5_struct + 0x120:\
+  case scm_tc5_struct + 0x140:  case scm_tc5_struct + 0x160:\
+  case scm_tc5_struct + 0x180:  case scm_tc5_struct + 0x1a0:\
+  case scm_tc5_struct + 0x1c0:  case scm_tc5_struct + 0x1e0:\
+  case scm_tc5_struct + 0x200:  case scm_tc5_struct + 0x220:\
+  case scm_tc5_struct + 0x240:  case scm_tc5_struct + 0x260:\
+  case scm_tc5_struct + 0x280:  case scm_tc5_struct + 0x2a0:\
+  case scm_tc5_struct + 0x2c0:  case scm_tc5_struct + 0x2e0:\
+  case scm_tc5_struct + 0x300:  case scm_tc5_struct + 0x320:\
+  case scm_tc5_struct + 0x340:  case scm_tc5_struct + 0x360:\
+  case scm_tc5_struct + 0x380:  case scm_tc5_struct + 0x3a0:\
+  case scm_tc5_struct + 0x3c0:  case scm_tc5_struct + 0x3e0:\
+  case scm_tc5_struct + 0x400:  case scm_tc5_struct + 0x420:\
+  case scm_tc5_struct + 0x440:  case scm_tc5_struct + 0x460:\
+  case scm_tc5_struct + 0x480:  case scm_tc5_struct + 0x4a0:\
+  case scm_tc5_struct + 0x4c0:  case scm_tc5_struct + 0x4e0:\
+  case scm_tc5_struct + 0x500:  case scm_tc5_struct + 0x520:\
+  case scm_tc5_struct + 0x540:  case scm_tc5_struct + 0x560:\
+  case scm_tc5_struct + 0x580:  case scm_tc5_struct + 0x5a0:\
+  case scm_tc5_struct + 0x5c0:  case scm_tc5_struct + 0x5e0:\
+  case scm_tc5_struct + 0x600:  case scm_tc5_struct + 0x620:\
+  case scm_tc5_struct + 0x640:  case scm_tc5_struct + 0x660:\
+  case scm_tc5_struct + 0x680:  case scm_tc5_struct + 0x6a0:\
+  case scm_tc5_struct + 0x6c0:  case scm_tc5_struct + 0x6e0:\
+  case scm_tc5_struct + 0x700:  case scm_tc5_struct + 0x720:\
+  case scm_tc5_struct + 0x740:  case scm_tc5_struct + 0x760:\
+  case scm_tc5_struct + 0x780:  case scm_tc5_struct + 0x7a0:\
+  case scm_tc5_struct + 0x7c0:  case scm_tc5_struct + 0x7e0
 
 
 

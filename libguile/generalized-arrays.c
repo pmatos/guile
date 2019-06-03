@@ -49,13 +49,13 @@ scm_is_array (SCM obj)
   if (!SCM_HEAP_OBJECT_P (obj))
     return 0;
 
-  switch (SCM_TYP7 (obj))
+  switch (SCM_TYP11 (obj))
     {
-    case scm_tc7_string:
-    case scm_tc7_vector:
-    case scm_tc7_bitvector:
-    case scm_tc7_bytevector:
-    case scm_tc7_array:
+    case scm_tc11_string:
+    case scm_tc11_vector:
+    case scm_tc11_bitvector:
+    case scm_tc11_bytevector:
+    case scm_tc11_array:
       return 1;
     default:
       return 0;

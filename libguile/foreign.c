@@ -173,7 +173,7 @@ scm_from_pointer (void *ptr, scm_t_pointer_finalizer finalizer)
     ret = null_pointer;
   else
     {
-      ret = scm_cell (scm_tc7_pointer, (scm_t_bits) ptr);
+      ret = scm_cell (scm_tc11_pointer, (scm_t_bits) ptr);
 
       if (finalizer)
         scm_i_set_finalizer (SCM2PTR (ret), pointer_finalizer_trampoline,
@@ -860,7 +860,7 @@ cif_to_procedure (SCM cif, SCM func_ptr, int with_errno)
 
   c_cif = (ffi_cif *) SCM_POINTER_VALUE (cif);
 
-  ret = scm_words (scm_tc7_program | (nfree << 16) | flags, nfree + 2);
+  ret = scm_words (scm_tc11_program | (nfree << 20) | flags, nfree + 2);
   SCM_SET_CELL_WORD_1 (ret, get_foreign_stub_code (c_cif->nargs, with_errno));
   SCM_PROGRAM_FREE_VARIABLE_SET (ret, 0, cif);
   SCM_PROGRAM_FREE_VARIABLE_SET (ret, 1, func_ptr);
@@ -1295,7 +1295,7 @@ scm_init_foreign (void)
 #endif
 	      );
 
-  null_pointer = scm_cell (scm_tc7_pointer, 0);
+  null_pointer = scm_cell (scm_tc11_pointer, 0);
   scm_define (sym_null, null_pointer);
 }
 

@@ -133,8 +133,8 @@ enum scm_vm_frame_kind
     SCM_VM_FRAME_KIND_CONT
   };
 
-#define SCM_VM_FRAME_P(x)	(SCM_HAS_TYP7 (x, scm_tc7_frame))
-#define SCM_VM_FRAME_KIND(x)	((enum scm_vm_frame_kind) (SCM_CELL_WORD_0 (x) >> 8))
+#define SCM_VM_FRAME_P(x)	(SCM_HAS_TYP11 (x, scm_tc11_frame))
+#define SCM_VM_FRAME_KIND(x)	((enum scm_vm_frame_kind) (SCM_CELL_WORD_0 (x) >> 12))
 #define SCM_VM_FRAME_DATA(x)	((struct scm_frame *)SCM_CELL_WORD_1 (x))
 #define SCM_VM_FRAME_STACK_HOLDER(f)	SCM_VM_FRAME_DATA (f)->stack_holder
 #define SCM_VM_FRAME_FP_OFFSET(f)	SCM_VM_FRAME_DATA (f)->fp_offset

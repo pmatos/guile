@@ -40,16 +40,16 @@ SCM_INTERNAL SCM scm_i_port_weak_set;
    there is a flag indicating whether the port is open or not, and then
    some "mode bits": flags indicating whether the port is an input
    and/or an output port and how Guile should buffer the port.  */
-#define SCM_OPN		(1U<<8) /* Is the port open? */
-#define SCM_RDNG	(1U<<9) /* Is it a readable port? */
-#define SCM_WRTNG	(1U<<10) /* Is it writable? */
-#define SCM_BUF0	(1U<<11) /* Is it unbuffered? */
-#define SCM_BUFLINE     (1U<<12) /* Is it line-buffered? */
+#define SCM_OPN         (1U<<12) /* Is the port open? */
+#define SCM_RDNG        (1U<<13) /* Is it a readable port? */
+#define SCM_WRTNG       (1U<<14) /* Is it writable? */
+#define SCM_BUF0        (1U<<15) /* Is it unbuffered? */
+#define SCM_BUFLINE     (1U<<16) /* Is it line-buffered? */
 #ifdef BUILDING_LIBGUILE
-#define SCM_F_PORT_FINALIZING (1U<<13) /* Port is being closed via GC. */
+#define SCM_F_PORT_FINALIZING (1U<<17) /* Port is being closed via GC. */
 #endif
 
-#define SCM_PORTP(x) (SCM_HAS_TYP7 (x, scm_tc7_port))
+#define SCM_PORTP(x) (SCM_HAS_TYP11 (x, scm_tc11_port))
 #define SCM_OPPORTP(x) (SCM_PORTP (x) && (SCM_CELL_WORD_0 (x) & SCM_OPN))
 #define SCM_INPUT_PORT_P(x) (SCM_PORTP (x) && (SCM_CELL_WORD_0 (x) & SCM_RDNG))
 #define SCM_OUTPUT_PORT_P(x) (SCM_PORTP (x) && (SCM_CELL_WORD_0 (x) & SCM_WRTNG))

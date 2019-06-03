@@ -152,7 +152,7 @@ typedef struct {
 } scm_t_weak_table;
 
 
-#define SCM_WEAK_TABLE_P(x) (SCM_HAS_TYP7 (x, scm_tc7_weak_table))
+#define SCM_WEAK_TABLE_P(x) (SCM_HAS_TYP11 (x, scm_tc11_weak_table))
 #define SCM_VALIDATE_WEAK_TABLE(pos, arg) \
   SCM_MAKE_VALIDATE_MSG (pos, arg, WEAK_TABLE_P, "weak-table")
 #define SCM_WEAK_TABLE(x) ((scm_t_weak_table *) SCM_CELL_WORD_1 (x))
@@ -444,7 +444,7 @@ make_weak_table (unsigned long k, scm_t_weak_table_kind kind)
   table->last_gc_no = GC_get_gc_no ();
   scm_i_pthread_mutex_init (&table->lock, NULL);
 
-  return scm_cell (scm_tc7_weak_table, (scm_t_bits)table);
+  return scm_cell (scm_tc11_weak_table, (scm_t_bits)table);
 }
 
 void

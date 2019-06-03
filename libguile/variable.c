@@ -52,7 +52,7 @@ scm_i_variable_print (SCM exp, SCM port, scm_print_state *pstate)
 static SCM
 make_variable (SCM init)
 {
-  return scm_cell (scm_tc7_variable, SCM_UNPACK (init));
+  return scm_cell (scm_tc11_variable, SCM_UNPACK (init));
 }
 
 SCM_DEFINE (scm_make_variable, "make-variable", 1, 0, 0, 

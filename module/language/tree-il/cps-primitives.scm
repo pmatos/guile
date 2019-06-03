@@ -157,6 +157,10 @@
 (visit-immediate-tags define-immediate-type-predicate)
 (visit-heap-tags define-heap-type-predicate)
 
+;; Special case handling for 'pair?'.  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+(hashq-set! *heap-type-predicates* 'pair? #t)
+(define-branching-primitive 'pair? 1)
+
 (define (branching-primitive? name)
   "Is @var{name} a primitive that can only appear in $branch CPS terms?"
   (hashq-ref *branching-primitive-arities* name))

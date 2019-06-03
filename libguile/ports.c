@@ -760,7 +760,7 @@ scm_c_make_port_with_encoding (scm_t_port_type *ptob, unsigned long mode_bits,
 
   pt = scm_gc_typed_calloc (scm_t_port);
 
-  ret = scm_words (scm_tc7_port | mode_bits | SCM_OPN, 4);
+  ret = scm_words (scm_tc11_port | mode_bits | SCM_OPN, 4);
   SCM_SET_CELL_WORD_1 (ret, stream);
   SCM_SET_CELL_WORD_2 (ret, (scm_t_bits) pt);
   SCM_SET_CELL_WORD_3 (ret, (scm_t_bits) ptob);

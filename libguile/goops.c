@@ -205,8 +205,7 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 {
   switch (SCM_ITAG3 (x))
     {
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
+    case scm_tcs_fixnums:
       return class_integer;
 
     case scm_tc3_imm24:
@@ -220,45 +219,43 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
         return class_unknown;
 
     case scm_tc3_cons:
-      switch (SCM_TYP7 (x))
+      switch (SCM_TYP11 (x))
 	{
-	case scm_tcs_cons_nimcar:
-	  return class_pair;
-	case scm_tc7_symbol:
+	case scm_tc11_symbol:
 	  return class_symbol;
-	case scm_tc7_vector:
-	case scm_tc7_wvect:
+	case scm_tc11_vector:
+	case scm_tc11_wvect:
 	  return class_vector;
-	case scm_tc7_pointer:
+	case scm_tc11_pointer:
 	  return class_foreign;
-	case scm_tc7_hashtable:
+	case scm_tc11_hashtable:
 	  return class_hashtable;
-	case scm_tc7_fluid:
+	case scm_tc11_fluid:
 	  return class_fluid;
-	case scm_tc7_dynamic_state:
+	case scm_tc11_dynamic_state:
 	  return class_dynamic_state;
-        case scm_tc7_frame:
+        case scm_tc11_frame:
 	  return class_frame;
-        case scm_tc7_keyword:
+        case scm_tc11_keyword:
 	  return class_keyword;
-        case scm_tc7_syntax:
+        case scm_tc11_syntax:
 	  return class_syntax;
-        case scm_tc7_atomic_box:
+        case scm_tc11_atomic_box:
 	  return class_atomic_box;
-        case scm_tc7_vm_cont:
+        case scm_tc11_vm_cont:
 	  return class_vm_cont;
-	case scm_tc7_bytevector:
+	case scm_tc11_bytevector:
           if (SCM_BYTEVECTOR_ELEMENT_TYPE (x) == SCM_ARRAY_ELEMENT_TYPE_VU8)
             return class_bytevector;
           else
             return class_uvec;
-	case scm_tc7_array:
+	case scm_tc11_array:
           return class_array;
-	case scm_tc7_bitvector:
+	case scm_tc11_bitvector:
           return class_bitvector;
-	case scm_tc7_string:
+	case scm_tc11_string:
 	  return class_string;
-        case scm_tc7_number:
+        case scm_tc11_number:
           switch SCM_TYP16 (x) {
           case scm_tc16_big:
             return class_integer;
@@ -269,14 +266,14 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	  case scm_tc16_fraction:
 	    return class_fraction;
           }
-	case scm_tc7_program:
+	case scm_tc11_program:
 	  if (SCM_PROGRAM_IS_PRIMITIVE_GENERIC (x)
               && SCM_UNPACK (*SCM_SUBR_GENERIC (x)))
 	    return class_primitive_generic;
 	  else
 	    return class_procedure;
 
-	case scm_tc7_smob:
+	case scm_tcs_smob:
 	  {
 	    scm_t_bits type = SCM_TYP16 (x);
 	    if (type != scm_tc16_port_with_ps)
@@ -284,7 +281,7 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	    x = SCM_PORT_WITH_PS_PORT (x);
 	    /* fall through to ports */
 	  }
-	case scm_tc7_port:
+	case scm_tc11_port:
           {
             scm_t_port_type *ptob = SCM_PORT_TYPE (x);
             if (SCM_INPUT_PORT_P (x))
@@ -330,13 +327,6 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	  else
 	    return class_unknown;
 	}
-
-    case scm_tc3_struct:
-    case scm_tc3_tc7_1:
-    case scm_tc3_tc7_2:
-      /* case scm_tc3_unused: */
-      /* Never reached */
-      break;
     }
   return class_unknown;
 }

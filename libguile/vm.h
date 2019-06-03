@@ -113,7 +113,7 @@ struct scm_vm_cont {
   uint32_t flags;
 };
 
-#define SCM_VM_CONT_P(OBJ)	(SCM_HAS_TYP7 (OBJ, scm_tc7_vm_cont))
+#define SCM_VM_CONT_P(OBJ)	(SCM_HAS_TYP11 (OBJ, scm_tc11_vm_cont))
 #define SCM_VM_CONT_DATA(CONT)	((struct scm_vm_cont *) SCM_CELL_WORD_1 (CONT))
 #define SCM_VM_CONT_PARTIAL_P(CONT) (SCM_VM_CONT_DATA (CONT)->flags & SCM_F_VM_CONT_PARTIAL)
 #define SCM_VM_CONT_REWINDABLE_P(CONT) (SCM_VM_CONT_DATA (CONT)->flags & SCM_F_VM_CONT_REWINDABLE)

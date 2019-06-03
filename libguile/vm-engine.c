@@ -333,8 +333,8 @@ VM_NAME (scm_thread *thread)
         {
           uint32_t n;
           SYNC_IP ();
-          VM_ASSERT (nvals <= (UINTPTR_MAX >> 8), abort ());
-          ret = scm_words ((nvals << 8) | scm_tc7_values, nvals + 1);
+          VM_ASSERT (nvals <= (UINTPTR_MAX >> 12), abort ());
+          ret = scm_words ((nvals << 12) | scm_tc11_values, nvals + 1);
           for (n = 0; n < nvals; n++)
             SCM_SET_CELL_OBJECT (ret, n+1, FP_REF (first_value + n));
         }

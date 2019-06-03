@@ -66,35 +66,34 @@ SCM_DEFINE (scm_self_evaluating_p, "self-evaluating?", 1, 0, 0,
 {
   switch (SCM_ITAG3 (obj))
     {
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
-      /* inum */
+    case scm_tcs_fixnums:
+      /* immediate numbers */
       return SCM_BOOL_T;
     case scm_tc3_imm24:
-	/* characters, booleans, other immediates */
+      /* characters, booleans, other immediates */
       return scm_from_bool (!scm_is_null_and_not_nil (obj));
     case scm_tc3_cons:
-      switch (SCM_TYP7 (obj))
+      switch (SCM_TYP11 (obj))
 	{
-	case scm_tc7_vector:
-	case scm_tc7_wvect:
-	case scm_tc7_pointer:
-	case scm_tc7_hashtable:
-	case scm_tc7_weak_set:
-	case scm_tc7_weak_table:
-	case scm_tc7_fluid:
-	case scm_tc7_dynamic_state:
-        case scm_tc7_frame:
-        case scm_tc7_keyword:
-        case scm_tc7_syntax:
-        case scm_tc7_vm_cont:
-	case scm_tc7_number:
-	case scm_tc7_string:
-	case scm_tc7_smob:
-	case scm_tc7_program:
-	case scm_tc7_bytevector:
-	case scm_tc7_array:
-	case scm_tc7_bitvector:
+	case scm_tc11_vector:
+	case scm_tc11_wvect:
+	case scm_tc11_pointer:
+	case scm_tc11_hashtable:
+	case scm_tc11_weak_set:
+	case scm_tc11_weak_table:
+	case scm_tc11_fluid:
+	case scm_tc11_dynamic_state:
+	case scm_tc11_frame:
+	case scm_tc11_keyword:
+	case scm_tc11_syntax:
+	case scm_tc11_vm_cont:
+	case scm_tc11_number:
+	case scm_tc11_string:
+	case scm_tc11_program:
+	case scm_tc11_bytevector:
+	case scm_tc11_array:
+	case scm_tc11_bitvector:
+	case scm_tcs_smob:
 	case scm_tcs_struct:
 	  return SCM_BOOL_T;
 	default:

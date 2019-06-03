@@ -36,7 +36,7 @@
    dynamic state, you can use fluids for thread local storage.
  */
 
-#define SCM_FLUID_P(x)          (SCM_HAS_TYP7 (x, scm_tc7_fluid))
+#define SCM_FLUID_P(x)          (SCM_HAS_TYP11 (x, scm_tc11_fluid))
 
 #define SCM_VALIDATE_FLUID(pos, fluid) \
   SCM_I_MAKE_VALIDATE_MSG2 (pos, fluid, scm_is_fluid, "fluid")

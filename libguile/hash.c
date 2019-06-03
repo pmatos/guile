@@ -287,13 +287,13 @@ scm_raw_ihash (SCM obj, size_t depth)
   if (SCM_IMP (obj))
     return scm_raw_ihashq (SCM_UNPACK (obj));
 
-  switch (SCM_TYP7(obj))
+  switch (SCM_TYP11(obj))
     {
       /* FIXME: do better for structs, variables, ...  Also the hashes
          are currently associative, which ain't the right thing.  */
-    case scm_tc7_smob:
+    case scm_tcs_smob:
       return scm_raw_ihashq (SCM_TYP16 (obj));
-    case scm_tc7_number:
+    case scm_tc11_number:
       if (scm_is_integer (obj))
         {
           SCM n = SCM_I_MAKINUM (SCM_MOST_POSITIVE_FIXNUM);
@@ -303,14 +303,14 @@ scm_raw_ihash (SCM obj, size_t depth)
         }
       else
         return scm_i_string_hash (scm_number_to_string (obj, scm_from_int (10)));
-    case scm_tc7_string:
+    case scm_tc11_string:
       return scm_i_string_hash (obj);
-    case scm_tc7_symbol:
+    case scm_tc11_symbol:
       return scm_i_symbol_hash (obj);
-    case scm_tc7_pointer:
+    case scm_tc11_pointer:
       return scm_raw_ihashq ((uintptr_t) SCM_POINTER_VALUE (obj));
-    case scm_tc7_wvect:
-    case scm_tc7_vector:
+    case scm_tc11_wvect:
+    case scm_tc11_vector:
       {
 	size_t len = SCM_SIMPLE_VECTOR_LENGTH (obj);
         size_t i = depth / 2;
@@ -320,7 +320,7 @@ scm_raw_ihash (SCM obj, size_t depth)
             h ^= scm_raw_ihash (scm_c_vector_ref (obj, h % len), i);
         return h;
       }
-    case scm_tc7_syntax:
+    case scm_tc11_syntax:
       {
         unsigned long h;
         h = scm_raw_ihash (scm_syntax_expression (obj), depth);
@@ -328,17 +328,19 @@ scm_raw_ihash (SCM obj, size_t depth)
         h ^= scm_raw_ihash (scm_syntax_module (obj), depth);
         return h;
       }
-    case scm_tcs_cons_imcar: 
-    case scm_tcs_cons_nimcar:
-      if (depth)
-        return (scm_raw_ihash (SCM_CAR (obj), depth / 2)
-                ^ scm_raw_ihash (SCM_CDR (obj), depth / 2));
-      else
-        return scm_raw_ihashq (scm_tc3_cons);
     case scm_tcs_struct:
       return scm_i_struct_hash (obj, depth);
     default:
-      return scm_raw_ihashq (SCM_CELL_WORD_0 (obj));
+      if (scm_is_pair (obj))
+        {
+          if (depth)
+            return (scm_raw_ihash (SCM_CAR (obj), depth / 2)
+                    ^ scm_raw_ihash (SCM_CDR (obj), depth / 2));
+          else
+            return scm_raw_ihashq (0);
+        }
+      else
+        return scm_raw_ihashq (SCM_CELL_WORD_0 (obj));
     }
 }
 

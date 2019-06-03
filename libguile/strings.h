@@ -193,7 +193,7 @@ SCM_API SCM scm_makfromstrs (int argc, char **argv);
   }							\
   c_name =						\
     {							\
-      scm_tc7_stringbuf,                                \
+      scm_tc11_stringbuf,				\
       sizeof (contents) - 1,				\
       contents						\
     }
@@ -201,7 +201,7 @@ SCM_API SCM scm_makfromstrs (int argc, char **argv);
 #define SCM_IMMUTABLE_STRING(c_name, contents)				\
   SCM_IMMUTABLE_STRINGBUF (scm_i_paste (c_name, _stringbuf), contents);	\
   SCM_IMMUTABLE_DOUBLE_CELL (c_name,					\
-			     scm_tc7_ro_string,				\
+			     scm_tc11_ro_string,			\
 			     (scm_t_bits) &scm_i_paste (c_name,		\
 							_stringbuf),	\
 			     (scm_t_bits) 0,				\
@@ -214,11 +214,11 @@ SCM_API SCM scm_makfromstrs (int argc, char **argv);
 /* internal constants */
 
 /* Type tag for read-only strings.  */
-#define scm_tc7_ro_string             (scm_tc7_string + 0x200)
+#define scm_tc11_ro_string            (scm_tc11_string + 0x2000)
 
 /* Flags for shared and wide strings.  */
-#define SCM_I_STRINGBUF_F_WIDE        0x400
-#define SCM_I_STRINGBUF_F_MUTABLE     0x800
+#define SCM_I_STRINGBUF_F_WIDE        0x4000
+#define SCM_I_STRINGBUF_F_MUTABLE     0x8000
 
 SCM_INTERNAL void scm_i_print_stringbuf (SCM exp, SCM port,
                                          scm_print_state *pstate);
@@ -290,7 +290,7 @@ SCM_API SCM scm_sys_stringbuf_hist (void);
 SCM_INLINE_IMPLEMENTATION int
 scm_is_string (SCM x)
 {
-  return SCM_HAS_TYP7 (x, scm_tc7_string);
+  return SCM_HAS_TYP11 (x, scm_tc11_string);
 }
 
 #endif

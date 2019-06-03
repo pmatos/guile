@@ -104,8 +104,8 @@
             ($continue kcast src
               ($primcall 'assume-u64 `(0 . ,(target-max-vector-length)) (ulen)))))
     (letk krsh
-          ($kargs ('w0) (w0)
-            ($continue kassume src ($primcall 'ursh/immediate 8 (w0)))))
+          ($kargs ('w0) (w0)                     ;TAGS-SENSITIVE
+            ($continue kassume src ($primcall 'ursh/immediate 12 (w0)))))
     (letk kv
           ($kargs () ()
             ($continue krsh src
@@ -313,7 +313,7 @@
       (letk ktag0
             ($kargs ('v) (v)
               ($continue ktag1 src
-                ($primcall 'load-u64 (+ %tc7-vector (ash size 8)) ()))))
+                ($primcall 'load-u64 (+ %tc11-vector (ash size 12)) ()))))
       (build-term
         ($continue ktag0 src
           ($primcall 'allocate-words/immediate `(vector . ,nwords) ()))))))
@@ -338,11 +338,11 @@
          (letk ktag1
                ($kargs ('w0-high) (w0-high)
                  ($continue ktag2 src
-                   ($primcall 'uadd/immediate %tc7-vector (w0-high)))))
+                   ($primcall 'uadd/immediate %tc11-vector (w0-high)))))
          (letk ktag0
                ($kargs ('v) (v)
                  ($continue ktag1 src
-                   ($primcall 'ulsh/immediate 8 (usize)))))
+                   ($primcall 'ulsh/immediate 12 (usize)))))  ;TAGS-SENSITIVE
          (letk kalloc
                ($kargs ('nwords) (nwords)
                  ($continue ktag0 src
@@ -403,7 +403,7 @@
       (letk ktag0
             ($kargs ('v) (v)
               ($continue ktag1 src
-                ($primcall 'load-u64 (+ %tc7-vector (ash size 8)) ()))))
+                ($primcall 'load-u64 (+ %tc11-vector (ash size 12)) ()))))
       (build-term
         ($continue ktag0 src
           ($primcall 'allocate-words/immediate `(vector . ,nwords) ()))))))
@@ -415,12 +415,18 @@
        "Wrong type argument in position 1 (expecting pair): ~S")
       ('mutable-pair?
        "Wrong type argument in position 1 (expecting mutable pair): ~S")))
+  (define pred*
+    (match pred
+      ('pair?
+       'non-pair-heap-object?)
+      ('mutable-pair?
+       (error "ensure-pair: mutable pairs support not yet implemented"))))
   (define not-pair (vector 'wrong-type-arg (symbol->string op) msg))
   (with-cps cps
     (letk knot-pair ($kargs () () ($throw src 'throw/value+data not-pair (x))))
     (let$ body (is-pair))
     (letk k ($kargs () () ,body))
-    (letk kheap-object ($kargs () () ($branch knot-pair k src pred #f (x))))
+    (letk kheap-object ($kargs () () ($branch k knot-pair src pred* #f (x))))
     (build-term ($branch knot-pair kheap-object src 'heap-object? #f (x)))))
 
 (define-primcall-converter cons
@@ -502,7 +508,7 @@
       (letk ktag0
             ($kargs ('obj) (obj)
               ($continue ktag1 src
-                ($primcall 'load-u64 %tc7-variable ()))))
+                ($primcall 'load-u64 %tc11-variable ()))))
       (build-term
         ($continue ktag0 src
           ($primcall 'allocate-words/immediate '(box . 2) ()))))))
@@ -1133,7 +1139,7 @@
   (lambda (cps k src op param s idx)
     (define out-of-range
       #(out-of-range string-ref "Argument 2 out of range: ~S"))
-    (define stringbuf-f-wide #x400)
+    (define stringbuf-f-wide #x4000)  ;TAGS-SENSITIVE
     (ensure-string
      cps src op s
      (lambda (cps ulen)
@@ -1203,7 +1209,7 @@
   (lambda (cps k src op param s idx ch)
     (define out-of-range
       #(out-of-range string-ref "Argument 2 out of range: ~S"))
-    (define stringbuf-f-wide #x400)
+    (define stringbuf-f-wide #x4000)  ;TAGS-SENSITIVE
     (ensure-string
      cps src op s
      (lambda (cps ulen)
@@ -1312,7 +1318,7 @@
       (letk ktag0
             ($kargs ('obj) (obj)
               ($continue ktag1 src
-                ($primcall 'load-u64 %tc7-atomic-box ()))))
+                ($primcall 'load-u64 %tc11-atomic-box ()))))
       (build-term
         ($continue ktag0 src
           ($primcall 'allocate-words/immediate '(atomic-box . 2) ()))))))
@@ -2132,11 +2138,17 @@
           (convert-args cps args
             (lambda (cps args)
               (if (heap-type-predicate? name)
-                  (with-cps cps
-                    (letk kt* ($kargs () ()
-                                ($branch kf kt src name #f args)))
-                    (build-term
-                      ($branch kf kt* src 'heap-object? #f args)))
+                  (if (eq? name 'pair?)  ;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                      (with-cps cps
+                        (letk kt* ($kargs () ()
+                                    ($branch kt kf src 'non-pair-heap-object? #f args)))
+                        (build-term
+                          ($branch kf kt* src 'heap-object? #f args)))
+                      (with-cps cps
+                        (letk kt* ($kargs () ()
+                                    ($branch kf kt src name #f args)))
+                        (build-term
+                          ($branch kf kt* src 'heap-object? #f args))))
                   (with-cps cps
                     (build-term ($branch kf kt src name #f args)))))))
          (($ <conditional> src test consequent alternate)

@@ -1228,7 +1228,7 @@ emit_load_fp_slot (scm_jit_state *j, jit_gpr_t dst, uint32_t slot)
 static jit_reloc_t
 emit_branch_if_immediate (scm_jit_state *j, jit_gpr_t r)
 {
-  return jit_bmsi (j->jit, r, 6);
+  return jit_bmsi (j->jit, r, 7);   /* TAGS-SENSITIVE */
 }
 
 static void
@@ -1263,10 +1263,10 @@ emit_branch_if_heap_object_not_tc (scm_jit_state *j, jit_gpr_t r, jit_gpr_t t,
 }
 
 static jit_reloc_t
-emit_branch_if_heap_object_not_tc7 (scm_jit_state *j, jit_gpr_t r, jit_gpr_t t,
-                                    scm_t_bits tc7)
+emit_branch_if_heap_object_not_tc11 (scm_jit_state *j, jit_gpr_t r, jit_gpr_t t,
+                                     scm_t_bits tc11)
 {
-  return emit_branch_if_heap_object_not_tc (j, r, t, 0x7f, tc7);
+  return emit_branch_if_heap_object_not_tc (j, r, t, 0x7ff, tc11);
 }
 
 static void
@@ -1638,7 +1638,7 @@ compile_subr_call (scm_jit_state *j, uint32_t idx)
   jit_retval (j->jit, ret);
 
   immediate = emit_branch_if_immediate (j, ret);
-  not_values = emit_branch_if_heap_object_not_tc7 (j, ret, t, scm_tc7_values);
+  not_values = emit_branch_if_heap_object_not_tc11 (j, ret, t, scm_tc11_values);
   emit_call_2 (j, scm_vm_intrinsics.unpack_values_object, thread_operand (),
                jit_operand_gpr (JIT_OPERAND_ABI_POINTER, ret));
   emit_reload_fp (j);
@@ -2194,16 +2194,16 @@ compile_call_scm_from_scm_scm (scm_jit_state *j, uint8_t dst, uint8_t a, uint8_t
         emit_sp_ref_scm (j, T1, b);
         op_a = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T0);
         op_b = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T1);
-        jit_reloc_t a_not_inum = jit_bmci (j->jit, T0, scm_tc2_int);
-        jit_reloc_t b_not_inum = jit_bmci (j->jit, T1, scm_tc2_int);
-        jit_subi (j->jit, T0, T0, scm_tc2_int);
+        jit_subi (j->jit, T0, T0, scm_fixnum_tag);
+        jit_subi (j->jit, T2, T1, scm_fixnum_tag);
+        jit_orr (j->jit, T2, T2, T0);   /* TAGS-SENSITIVE */
+        jit_reloc_t not_inum = jit_bmsi (j->jit, T2, scm_fixnum_tag_mask);
         fast = jit_bxaddr (j->jit, T0, T1);
         has_fast = 1;
         /* Restore previous value before slow path.  */
         jit_subr (j->jit, T0, T0, T1);
-        jit_addi (j->jit, T0, T0, scm_tc2_int);
-        jit_patch_here (j->jit, a_not_inum);
-        jit_patch_here (j->jit, b_not_inum);
+        jit_patch_here (j->jit, not_inum);
+        jit_addi (j->jit, T0, T0, scm_fixnum_tag);
         break;
       }
     case SCM_VM_INTRINSIC_SUB:
@@ -2212,16 +2212,16 @@ compile_call_scm_from_scm_scm (scm_jit_state *j, uint8_t dst, uint8_t a, uint8_t
         emit_sp_ref_scm (j, T1, b);
         op_a = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T0);
         op_b = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T1);
-        jit_reloc_t a_not_inum = jit_bmci (j->jit, T0, scm_tc2_int);
-        jit_reloc_t b_not_inum = jit_bmci (j->jit, T1, scm_tc2_int);
-        jit_subi (j->jit, T1, T1, scm_tc2_int);
+        jit_subi (j->jit, T1, T1, scm_fixnum_tag);
+        jit_subi (j->jit, T2, T0, scm_fixnum_tag);
+        jit_orr (j->jit, T2, T2, T1);   /* TAGS-SENSITIVE */
+        jit_reloc_t not_inum = jit_bmsi (j->jit, T2, scm_fixnum_tag_mask);
         fast = jit_bxsubr (j->jit, T0, T1);
         has_fast = 1;
         /* Restore previous values before slow path.  */
         jit_addr (j->jit, T0, T0, T1);
-        jit_addi (j->jit, T1, T1, scm_tc2_int);
-        jit_patch_here (j->jit, a_not_inum);
-        jit_patch_here (j->jit, b_not_inum);
+        jit_patch_here (j->jit, not_inum);
+        jit_addi (j->jit, T1, T1, scm_fixnum_tag);
         break;
       }
     default:
@@ -2254,8 +2254,9 @@ compile_call_scm_from_scm_uimm (scm_jit_state *j, uint8_t dst, uint8_t a, uint8_
       {
         emit_sp_ref_scm (j, T0, a);
         op_a = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T0);
-        scm_t_bits addend = b << 2;
-        jit_reloc_t not_inum = jit_bmci (j->jit, T0, 2);
+        scm_t_bits addend = b << scm_fixnum_tag_size;
+        jit_comr (j->jit, T1, T0); /* TAGS-SENSITIVE */
+        jit_reloc_t not_inum = jit_bmsi (j->jit, T1, scm_fixnum_tag_mask);
         fast = jit_bxaddi (j->jit, T0, addend);
         has_fast = 1;
         /* Restore previous value before slow path.  */
@@ -2267,8 +2268,9 @@ compile_call_scm_from_scm_uimm (scm_jit_state *j, uint8_t dst, uint8_t a, uint8_
       {
         emit_sp_ref_scm (j, T0, a);
         op_a = jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T0);
-        scm_t_bits subtrahend = b << 2;
-        jit_reloc_t not_inum = jit_bmci (j->jit, T0, 2);
+        scm_t_bits subtrahend = b << scm_fixnum_tag_size;
+        jit_comr (j->jit, T1, T0); /* TAGS-SENSITIVE */
+        jit_reloc_t not_inum = jit_bmsi (j->jit, T1, scm_fixnum_tag_mask);
         fast = jit_bxsubi (j->jit, T0, subtrahend);
         has_fast = 1;
         /* Restore previous value before slow path.  */
@@ -2463,7 +2465,7 @@ compile_tag_char (scm_jit_state *j, uint16_t dst, uint16_t src)
 #else
   emit_sp_ref_u64_lower_half (j, T0, src);
 #endif
-  emit_lshi (j, T0, T0, 8);
+  emit_lshi (j, T0, T0, 8);  /* TAGS-SENSITIVE */
   emit_addi (j, T0, T0, scm_tc8_char);
   emit_sp_set_scm (j, dst, T0);
 }
@@ -2472,7 +2474,7 @@ static void
 compile_untag_char (scm_jit_state *j, uint16_t dst, uint16_t src)
 {
   emit_sp_ref_scm (j, T0, src);
-  emit_rshi (j, T0, T0, 8);
+  emit_rshi (j, T0, T0, 8);  /* TAGS-SENSITIVE */
 #if SIZEOF_UINTPTR_T >= 8
   emit_sp_set_u64 (j, dst, T0);
 #else
@@ -3295,8 +3297,10 @@ compile_less (scm_jit_state *j, uint16_t a, uint16_t b)
   emit_sp_ref_scm (j, T0, a);
   emit_sp_ref_scm (j, T1, b);
 
+  /* TAGS-SENSITIVE */
   emit_andr (j, T2, T0, T1);
-  fast = jit_bmsi (j->jit, T2, scm_tc2_int);
+  emit_comr (j, T2, T2);
+  fast = jit_bmci (j->jit, T2, scm_fixnum_tag_mask);
 
   emit_call_2 (j, scm_vm_intrinsics.less_p,
                jit_operand_gpr (JIT_OPERAND_ABI_POINTER, T0),
@@ -3411,7 +3415,7 @@ compile_check_positional_arguments (scm_jit_state *j, uint32_t nreq, uint32_t ex
      head);
   jit_patch_there
     (j->jit,
-     emit_branch_if_heap_object_not_tc7 (j, obj, obj, scm_tc7_keyword),
+     emit_branch_if_heap_object_not_tc11 (j, obj, obj, scm_tc11_keyword),
      head);
   jit_patch_here (j->jit, lt);
   add_inter_instruction_patch (j, gt, target);
@@ -3557,11 +3561,11 @@ static void
 compile_untag_fixnum (scm_jit_state *j, uint16_t dst, uint16_t a)
 {
   emit_sp_ref_scm (j, T0, a);
-  emit_rshi (j, T0, T0, 2);
+  emit_rshi (j, T0, T0, scm_fixnum_tag_size);
 #if SIZEOF_UINTPTR_T >= 8
   emit_sp_set_s64 (j, dst, T0);
 #else
-  /* FIXME: Untested!  */
+  /* FIXME: Untested!, and also not updated for new tagging XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX */
   emit_rshi (j, T1, T0, 31);
   emit_sp_set_s64 (j, dst, T0, T1);
 #endif
@@ -3575,8 +3579,8 @@ compile_tag_fixnum (scm_jit_state *j, uint16_t dst, uint16_t a)
 #else
   emit_sp_ref_s32 (j, T0, a);
 #endif
-  emit_lshi (j, T0, T0, 2);
-  emit_addi (j, T0, T0, scm_tc2_int);
+  emit_lshi (j, T0, T0, scm_fixnum_tag_size);
+  emit_addi (j, T0, T0, scm_fixnum_tag);
   emit_sp_set_scm (j, dst, T0);
 }
 

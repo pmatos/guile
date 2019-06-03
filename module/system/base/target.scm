@@ -1,6 +1,6 @@
 ;;; Compilation targets
 
-;; Copyright (C) 2011-2014,2017-2018 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2014,2017-2019 Free Software Foundation, Inc.
 
 ;; This library is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU Lesser General Public
@@ -172,23 +172,33 @@ SCM words."
   ;; address space.
   (/ (target-max-size-t) (target-word-size)))
 
+;; TAGS-SENSITIVE
 (define (target-max-vector-length)
   "Return the maximum vector length of the target platform, in units of
 SCM words."
-  ;; Vector size fits in first word; the low 8 bits are taken by the
+  ;; Vector size fits in first word; the low 12 bits are taken by the
   ;; type tag.  Additionally, restrict to 48-bit address space.
-  (1- (ash 1 (min (- (* (target-word-size) 8) 8) 48))))
+  (1- (ash 1 (min (- (* (target-word-size) 8) 12) 48))))
 
+;; TAGS-SENSITIVE
 (define (target-most-negative-fixnum)
   "Return the most negative integer representable as a fixnum on the
 target platform."
-  (- (ash 1 (- (* (target-word-size) 8) 3))))
+  (case (target-word-size)
+    ((4) #x-40000000)
+    ((8) #x-800000000000000)
+    (else (error "unexpected word size"))))
 
+;; TAGS-SENSITIVE
 (define (target-most-positive-fixnum)
   "Return the most positive integer representable as a fixnum on the
 target platform."
-  (1- (ash 1 (- (* (target-word-size) 8) 3))))
+  (case (target-word-size)
+    ((4) #x3fffffff)
+    ((8) #x7ffffffFFFFFFFF)
+    (else (error "unexpected word size"))))
 
+;; TAGS-SENSITIVE
 (define (target-fixnum? n)
   (and (exact-integer? n)
        (<= (target-most-negative-fixnum)

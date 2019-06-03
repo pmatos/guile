@@ -96,11 +96,11 @@ SCM_DEFINE (scm_values, "values", 0, 0, 1,
     {
       size_t i;
 
-      if ((size_t) n > (size_t) (UINTPTR_MAX >> 8))
+      if ((size_t) n > (size_t) (UINTPTR_MAX >> 12))
         scm_error (scm_out_of_range_key, FUNC_NAME, "Too many values",
                    SCM_EOL, SCM_EOL);
 
-      result = scm_words ((((scm_t_bits) n) << 8) | scm_tc7_values, n + 1);
+      result = scm_words ((((scm_t_bits) n) << 12) | scm_tc11_values, n + 1);
       for (i = 0; i < n; i++, args = SCM_CDR (args))
         SCM_SET_CELL_OBJECT (result, i + 1, SCM_CAR (args));
     }
@@ -122,7 +122,7 @@ scm_c_values (SCM *base, size_t nvalues)
     scm_error (scm_out_of_range_key, "scm_c_values", "Too many values",
                SCM_EOL, SCM_EOL);
 
-  ret = scm_words ((((scm_t_bits) nvalues) << 8) | scm_tc7_values, nvalues + 1);
+  ret = scm_words ((((scm_t_bits) nvalues) << 12) | scm_tc11_values, nvalues + 1);
 
   for (i = 0; i < nvalues; i++)
     SCM_SET_CELL_OBJECT (ret, i + 1, base[i]);
@@ -135,7 +135,7 @@ scm_values_2 (SCM a, SCM b)
 {
   SCM ret;
 
-  ret = scm_words ((2 << 8) | scm_tc7_values, 3);
+  ret = scm_words ((2 << 12) | scm_tc11_values, 3);
   SCM_SET_CELL_OBJECT_1 (ret, a);
   SCM_SET_CELL_OBJECT_2 (ret, b);
 
@@ -147,7 +147,7 @@ scm_values_3 (SCM a, SCM b, SCM c)
 {
   SCM ret;
 
-  ret = scm_words ((3 << 8) | scm_tc7_values, 4);
+  ret = scm_words ((3 << 12) | scm_tc11_values, 4);
   SCM_SET_CELL_OBJECT_1 (ret, a);
   SCM_SET_CELL_OBJECT_2 (ret, b);
   SCM_SET_CELL_OBJECT_3 (ret, c);

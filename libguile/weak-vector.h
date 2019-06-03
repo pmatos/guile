@@ -27,7 +27,7 @@
 
 /* Weak vectors.  */
 
-#define SCM_I_WVECTP(x) (SCM_HAS_TYP7 (x, scm_tc7_wvect))
+#define SCM_I_WVECTP(x) (SCM_HAS_TYP11 (x, scm_tc11_wvect))
 
 SCM_API SCM scm_make_weak_vector (SCM len, SCM fill);
 SCM_API SCM scm_weak_vector (SCM l);

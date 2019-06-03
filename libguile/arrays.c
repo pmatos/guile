@@ -138,7 +138,7 @@ verify (sizeof (scm_t_array_dim) == 3*sizeof (scm_t_bits));
 SCM
 scm_i_make_array (int ndim)
 {
-  SCM ra = scm_words (((scm_t_bits) ndim << 17) + scm_tc7_array, 3 + ndim*3);
+  SCM ra = scm_words (((scm_t_bits) ndim << 17) + scm_tc11_array, 3 + ndim*3);
   SCM_I_ARRAY_SET_V (ra, SCM_BOOL_F);
   SCM_I_ARRAY_SET_BASE (ra, 0);
   /* dimensions are unset */

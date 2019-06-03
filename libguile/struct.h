@@ -109,7 +109,7 @@
 
 typedef void (*scm_t_struct_finalize) (SCM obj);
 
-#define SCM_STRUCTP(X)  		(!SCM_IMP(X) && (SCM_TYP3(X) == scm_tc3_struct))
+#define SCM_STRUCTP(X)  		(SCM_NIMP(X) && (SCM_CELL_TYPE(X) & 0x1f) == scm_tc5_struct)
 #define SCM_STRUCT_SLOTS(X) 		(SCM_CELL_OBJECT_LOC(X, 1))
 #define SCM_STRUCT_SLOT_REF(X,I) 	(SCM_STRUCT_SLOTS (X)[(I)])
 #define SCM_STRUCT_SLOT_SET(X,I,V) 	SCM_STRUCT_SLOTS (X)[(I)]=(V)
@@ -142,7 +142,7 @@ typedef void (*scm_t_struct_finalize) (SCM obj);
 #define SCM_VTABLE_UNBOXED_FIELDS(X)    ((uint32_t*) SCM_STRUCT_DATA_REF (X, scm_vtable_index_unboxed_fields))
 #define SCM_VTABLE_FIELD_IS_UNBOXED(X,F) (SCM_VTABLE_UNBOXED_FIELDS (X)[(F)>>5]&(1U<<((F)&31)))
 
-#define SCM_STRUCT_VTABLE(X)            (SCM_PACK (SCM_CELL_WORD_0 (X) - scm_tc3_struct))
+#define SCM_STRUCT_VTABLE(X)            (SCM_PACK (SCM_CELL_WORD_0 (X) - scm_tc5_struct))
 #define SCM_STRUCT_LAYOUT(X) 	        (SCM_VTABLE_LAYOUT (SCM_STRUCT_VTABLE (X)))
 #define SCM_STRUCT_SIZE(X) 	        (SCM_VTABLE_SIZE (SCM_STRUCT_VTABLE (X)))
 #define SCM_STRUCT_PRINTER(X) 	        (SCM_VTABLE_INSTANCE_PRINTER (SCM_STRUCT_VTABLE (X)))

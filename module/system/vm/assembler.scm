@@ -110,7 +110,7 @@
             (emit-throw/value* . emit-throw/value)
             (emit-throw/value+data* . emit-throw/value+data)
 
-            emit-pair?
+            emit-non-pair-heap-object?
             emit-struct?
             emit-symbol?
             emit-variable?
@@ -1097,28 +1097,36 @@ lists.  This procedure can be called many times before calling
 (define (immediate-bits asm x)
   "Return the bit pattern to write into the buffer if @var{x} is
 immediate, and @code{#f} otherwise."
-  (define tc2-int 2)
   (if (exact-integer? x)
       ;; Object is an immediate if it is a fixnum on the target.
       (call-with-values (lambda ()
                           (case (asm-word-size asm)
-                            ((4) (values    (- #x20000000)
-                                            #x1fffffff))
-                            ((8) (values    (- #x2000000000000000)
-                                            #x1fffffffFFFFFFFF))
+                            ;; TAGS-SENSITIVE
+                            ((4) (values    #x-40000000
+                                            #x3fffffff
+                                            1   ;fixint tag
+                                            1)) ;fixint shift
+                            ((8) (values    #x-800000000000000
+                                            #x7ffffffFFFFFFFF
+                                            15  ;fixint tag
+                                            4)) ;fixint shift
                             (else (error "unexpected word size"))))
-        (lambda (fixnum-min fixnum-max)
-          (and (<= fixnum-min x fixnum-max)
-               (let ((fixnum-bits (if (negative? x)
-                                      (+ fixnum-max 1 (logand x fixnum-max))
+        (lambda (fixint-min fixint-max fixint-tag fixint-shift)
+          (and (<= fixint-min x fixint-max)
+               (let ((fixint-bits (if (negative? x)
+                                      (+ fixint-max 1 (logand x fixint-max))
                                       x)))
-                 (logior (ash fixnum-bits 2) tc2-int)))))
+                 (logior (ash fixint-bits fixint-shift) fixint-tag)))))
       ;; Otherwise, the object will be immediate on the target if and
       ;; only if it is immediate on the host.  Except for integers,
       ;; which we handle specially above, any immediate value is an
       ;; immediate on both 32-bit and 64-bit targets.
+      ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      ;; XXX in the new tagging scheme, the following will rarely if
+      ;; ever be sufficient when cross-compiling.
       (let ((bits (object-address x)))
-        (and (not (zero? (logand bits 6)))
+        ;; TAGS-SENSITIVE
+        (and (not (= (logand bits 7) %tc3-heap-object))
              bits))))
 
 (define-record-type <stringbuf>
@@ -1603,27 +1611,31 @@ should be .data or .rodata), and return the resulting linker object.
     (+ address
        (modulo (- alignment (modulo address alignment)) alignment)))
 
-  (define tc7-vector #x0d)
-  (define vector-immutable-flag #x80)
+  ;; TAGS-SENSITIVE
+  (define (htag x)
+    (+ #x2e (ash x 6)))  ;temporarily hacked for 64-bit only! XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-  (define tc7-string #x15)
-  (define string-read-only-flag #x200)
+  (define tc11-vector (htag 2))
+  (define vector-immutable-flag #x800)
 
-  (define tc7-stringbuf #x27)
-  (define stringbuf-wide-flag #x400)
+  (define tc11-string (htag 4))
+  (define string-read-only-flag #x2000)
 
-  (define tc7-syntax #x3d)
+  (define tc11-stringbuf (htag 9))
+  (define stringbuf-wide-flag #x4000)
 
-  (define tc7-program #x45)
+  (define tc11-syntax (htag 14))
 
-  (define tc7-bytevector #x4d)
-  ;; This flag is intended to be left-shifted by 7 bits.
+  (define tc11-program (htag 16))
+
+  (define tc11-bytevector (htag 18))
+  ;; This flag is intended to be left-shifted by 11 bits.
   (define bytevector-immutable-flag #x200)
 
-  (define tc7-array #x5d)
+  (define tc11-array (htag 21))
 
-  (define tc7-bitvector #x5f)
-  (define bitvector-immutable-flag #x80)
+  (define tc11-bitvector (htag 22))
+  (define bitvector-immutable-flag #x800)
 
   (let ((word-size (asm-word-size asm))
         (endianness (asm-endianness asm)))
@@ -1673,7 +1685,7 @@ should be .data or .rodata), and return the resulting linker object.
        ((stringbuf? obj)
         (let* ((x (stringbuf-string obj))
                (len (string-length x))
-               (tag (logior tc7-stringbuf
+               (tag (logior tc11-stringbuf
                             (if (= (string-bytes-per-char x) 1)
                                 0
                                 stringbuf-wide-flag))))
@@ -1707,10 +1719,10 @@ should be .data or .rodata), and return the resulting linker object.
        ((static-procedure? obj)
         (case word-size
           ((4)
-           (bytevector-u32-set! buf pos tc7-program endianness)
+           (bytevector-u32-set! buf pos tc11-program endianness)
            (bytevector-u32-set! buf (+ pos 4) 0 endianness))
           ((8)
-           (bytevector-u64-set! buf pos tc7-program endianness)
+           (bytevector-u64-set! buf pos tc11-program endianness)
            (bytevector-u64-set! buf (+ pos 8) 0 endianness))
           (else (error "bad word size"))))
 
@@ -1722,7 +1734,7 @@ should be .data or .rodata), and return the resulting linker object.
         (values))
 
        ((string? obj)
-        (let ((tag (logior tc7-string string-read-only-flag)))
+        (let ((tag (logior tc11-string string-read-only-flag)))
           (case word-size
             ((4)
              (bytevector-u32-set! buf pos tag endianness)
@@ -1742,7 +1754,7 @@ should be .data or .rodata), and return the resulting linker object.
 
        ((simple-vector? obj)
         (let* ((len (vector-length obj))
-               (tag (logior tc7-vector vector-immutable-flag (ash len 8))))
+               (tag (logior tc11-vector vector-immutable-flag (ash len 12))))
           (case word-size
             ((4) (bytevector-u32-set! buf pos tag endianness))
             ((8) (bytevector-u64-set! buf pos tag endianness))
@@ -1762,8 +1774,8 @@ should be .data or .rodata), and return the resulting linker object.
 
        ((syntax? obj)
         (case word-size
-          ((4) (bytevector-u32-set! buf pos tc7-syntax endianness))
-          ((8) (bytevector-u64-set! buf pos tc7-syntax endianness))
+          ((4) (bytevector-u32-set! buf pos tc11-syntax endianness))
+          ((8) (bytevector-u64-set! buf pos tc11-syntax endianness))
           (else (error "bad word size")))
         (write-constant-reference buf (+ pos (* 1 word-size))
                                   (syntax-expression obj))
@@ -1777,14 +1789,14 @@ should be .data or .rodata), and return the resulting linker object.
 
        ((simple-uniform-vector? obj)
         (let ((tag (if (bitvector? obj)
-                       (logior tc7-bitvector
+                       (logior tc11-bitvector
                                bitvector-immutable-flag)
-                       (logior tc7-bytevector
+                       (logior tc11-bytevector
                                ;; Bytevector immutable flag also shifted
-                               ;; left.
+                               ;; left.  TAGS-SENSITIVE
                                (ash (logior bytevector-immutable-flag
                                             (array-type-code obj))
-                                    7)))))
+                                    11)))))
           (case word-size
             ((4)
              (bytevector-u32-set! buf pos tag endianness)
@@ -1820,7 +1832,7 @@ should be .data or .rodata), and return the resulting linker object.
        ((array? obj)
         (let-values
             ;; array tag + rank + contp flag: see libguile/arrays.h .
-            (((tag) (logior tc7-array (ash (array-rank obj) 17) (ash 1 16)))
+            (((tag) (logior tc11-array (ash (array-rank obj) 17) (ash 1 16)))
              ((bv-set! bvs-set!)
               (case word-size
                 ((4) (values bytevector-u32-set! bytevector-s32-set!))

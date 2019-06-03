@@ -182,7 +182,7 @@ capture_stack (union scm_vm_stack_element *stack_top,
   memcpy (p->stack_bottom, sp, p->stack_size * sizeof (*p->stack_bottom));
   p->dynstack = dynstack;
   p->flags = flags;
-  return scm_cell (scm_tc7_vm_cont, (scm_t_bits) p);
+  return scm_cell (scm_tc11_vm_cont, (scm_t_bits) p);
 }
 
 SCM
@@ -301,7 +301,7 @@ invoke_hook (scm_thread *thread, SCM hook)
   frame = alloca (sizeof (*frame) + 8);
   frame = (scm_t_cell *) ROUND_UP ((uintptr_t) frame, 8UL);
 
-  frame->word_0 = SCM_PACK (scm_tc7_frame | (SCM_VM_FRAME_KIND_VM << 8));
+  frame->word_0 = SCM_PACK (scm_tc11_frame | (SCM_VM_FRAME_KIND_VM << 12));
   frame->word_1 = SCM_PACK_POINTER (&c_frame);
 
   scm_frame = SCM_PACK_POINTER (frame);
@@ -485,7 +485,7 @@ define_vm_builtins (void)
     size_t sz = sizeof (builtin##_code);                                \
     vm_builtin_##builtin##_code = instrumented_code (builtin##_code, sz); \
     vm_builtin_##builtin =                                              \
-      scm_cell (scm_tc7_program | SCM_F_PROGRAM_IS_PRIMITIVE,           \
+      scm_cell (scm_tc11_program | SCM_F_PROGRAM_IS_PRIMITIVE,          \
                 (scm_t_bits)vm_builtin_##builtin##_code);               \
   }
   FOR_EACH_VM_BUILTIN (DEFINE_BUILTIN);

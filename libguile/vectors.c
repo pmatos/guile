@@ -250,7 +250,7 @@ scm_c_make_vector (size_t k, SCM fill)
 
   SCM_ASSERT_RANGE (1, scm_from_size_t (k), k <= VECTOR_MAX_LENGTH);
 
-  vector = scm_words ((k << 8) | scm_tc7_vector, k + 1);
+  vector = scm_words ((k << 12) | scm_tc11_vector, k + 1);
 
   for (j = 0; j < k; ++j)
     SCM_SIMPLE_VECTOR_SET (vector, j, fill);

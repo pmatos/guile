@@ -479,7 +479,7 @@ scm_storage_prehistory ()
      higher bits of the type tag are used to store a pointer (that is, a
      pointer to an 8-octet aligned region).  */
   GC_REGISTER_DISPLACEMENT (scm_tc3_cons);
-  GC_REGISTER_DISPLACEMENT (scm_tc3_struct);
+  GC_REGISTER_DISPLACEMENT (scm_tc5_struct);
   /* GC_REGISTER_DISPLACEMENT (scm_tc3_unused); */
 
   /* Sanity check.  */

@@ -175,30 +175,30 @@ scm_array_get_handle (SCM array, scm_t_array_handle *h)
 
   h->array = array;
 
-  switch (SCM_TYP7 (array))
+  switch (SCM_TYP11 (array))
     {
-    case scm_tc7_string:
+    case scm_tc11_string:
       initialize_vector_handle (h, scm_c_string_length (array),
                                 SCM_ARRAY_ELEMENT_TYPE_CHAR,
                                 scm_c_string_ref, scm_c_string_set_x,
                                 NULL,
                                 scm_i_string_is_mutable (array));
       break;
-    case scm_tc7_vector:
+    case scm_tc11_vector:
       initialize_vector_handle (h, scm_c_vector_length (array),
                                 SCM_ARRAY_ELEMENT_TYPE_SCM,
                                 scm_c_vector_ref, scm_c_vector_set_x,
                                 SCM_I_VECTOR_WELTS (array),
                                 SCM_I_IS_MUTABLE_VECTOR (array));
       break;
-    case scm_tc7_bitvector:
+    case scm_tc11_bitvector:
       initialize_vector_handle (h, scm_c_bitvector_length (array),
                                 SCM_ARRAY_ELEMENT_TYPE_BIT,
                                 scm_c_bitvector_ref, scm_c_bitvector_set_x,
                                 scm_i_bitvector_bits (array),
                                 scm_i_is_mutable_bitvector (array));
       break;
-    case scm_tc7_bytevector:
+    case scm_tc11_bytevector:
       {
         size_t length;
         scm_t_array_element_type element_type;
@@ -244,7 +244,7 @@ scm_array_get_handle (SCM array, scm_t_array_handle *h)
                                   SCM_MUTABLE_BYTEVECTOR_P (array));
       }
       break;
-    case scm_tc7_array:
+    case scm_tc11_array:
       scm_array_get_handle (SCM_I_ARRAY_V (array), h);
       h->array = array;
       h->base = SCM_I_ARRAY_BASE (array);

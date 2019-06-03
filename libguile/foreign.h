@@ -25,7 +25,7 @@
 
 /* A "foreign pointer" is a wrapped C pointer.  It is represented by a
    cell whose second word is a pointer.  The first word has the
-   `scm_tc7_pointer' type code.
+   `scm_tc11_pointer' type code.
 
    The basic idea is that we can help the programmer to avoid cutting herself,
    but we won't take away her knives.  */
@@ -50,14 +50,14 @@ typedef enum scm_t_foreign_type scm_t_foreign_type;
 
 typedef void (*scm_t_pointer_finalizer) (void *);
 
-#define SCM_POINTER_P(x) (SCM_HAS_TYP7 (x, scm_tc7_pointer))
+#define SCM_POINTER_P(x) (SCM_HAS_TYP11 (x, scm_tc11_pointer))
 #define SCM_VALIDATE_POINTER(pos, x)		\
   SCM_MAKE_VALIDATE (pos, x, POINTER_P)
 #define SCM_POINTER_VALUE(x)			\
   ((void *) SCM_CELL_WORD_1 (x))
 
 #define SCM_IMMUTABLE_POINTER(c_name, ptr)		\
-  SCM_IMMUTABLE_CELL (c_name, scm_tc7_pointer, ptr)
+  SCM_IMMUTABLE_CELL (c_name, scm_tc11_pointer, ptr)
 
 SCM_API void *scm_to_pointer (SCM pointer);
 SCM_API SCM scm_from_pointer (void *, scm_t_pointer_finalizer);

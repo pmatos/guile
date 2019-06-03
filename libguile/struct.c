@@ -328,7 +328,12 @@ scm_i_alloc_struct (scm_t_bits vtable_bits, int n_words)
 {
   SCM ret;
 
-  ret = scm_words (vtable_bits | scm_tc3_struct, n_words + 1);
+  /* FIXME: only vtables need this alignment, but for now we apply it to  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+     all structs. */
+  assert ((vtable_bits & 0x1f) == 0);
+  ret = scm_words (vtable_bits | scm_tc5_struct,
+                   (n_words + 1 + 0x1f) & ~0x1f);  /* XXX Alignment hack, might not work reliably. */
+  assert ((SCM_UNPACK (ret) & 0x1f) == 0);  /* XXX alignment check */
 
   /* vtable_bits can be 0 when making a vtable vtable */
   if (vtable_bits && SCM_VTABLE_INSTANCE_FINALIZER (SCM_PACK (vtable_bits)))
@@ -441,7 +446,12 @@ SCM_DEFINE (scm_make_struct_simple, "make-struct/simple", 1, 0, 1,
   if (n_init != SCM_VTABLE_SIZE (vtable))
     SCM_MISC_ERROR ("Wrong number of initializers.", SCM_EOL);
 
-  ret = scm_words (SCM_UNPACK (vtable) | scm_tc3_struct, n_init + 1);
+  /* FIXME: only vtables need this alignment, but for now we apply it to  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+     all structs. */
+  assert ((SCM_UNPACK (vtable) & 0x1f) == 0);
+  ret = scm_words (SCM_UNPACK (vtable) | scm_tc5_struct,
+                   (n_init + 1 + 0x1f) & ~0x1f);  /* XXX Alignment hack, might not work reliably. */
+  assert ((SCM_UNPACK (ret) & 0x1f) == 0);  /* XXX alignment check */
 
   for (i = 0; i < n_init; i++, init = scm_cdr (init))
     {
@@ -509,7 +519,8 @@ scm_i_make_vtable_vtable (SCM fields)
 
   obj = scm_i_alloc_struct (0, nfields);
   /* Make it so that the vtable of OBJ is itself.  */
-  SCM_SET_CELL_WORD_0 (obj, SCM_UNPACK (obj) | scm_tc3_struct);
+  assert ((SCM_UNPACK (obj) & 0x1f) == 0);
+  SCM_SET_CELL_WORD_0 (obj, SCM_UNPACK (obj) | scm_tc5_struct);
   /* Manually initialize fields.  */
   SCM_STRUCT_SLOT_SET (obj, scm_vtable_index_layout, layout);
   set_vtable_access_fields (obj);

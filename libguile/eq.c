@@ -224,11 +224,11 @@ SCM scm_eqv_p (SCM x, SCM y)
   /* this ensures that types and scm_length are the same. */
   if (SCM_CELL_TYPE (x) != SCM_CELL_TYPE (y))
     return SCM_BOOL_F;
-  switch (SCM_TYP7 (x))
+  switch (SCM_TYP11 (x))
     {
     default:
       break;
-    case scm_tc7_number:
+    case scm_tc11_number:
       return scm_from_bool (scm_i_heap_numbers_equal_p (x, y));
     }
   return SCM_BOOL_F;
@@ -332,7 +332,7 @@ scm_equal_p (SCM x, SCM y)
 
       return SCM_BOOL_F;
     }
-  switch (SCM_TYP7 (x))
+  switch (SCM_TYP11 (x))
     {
     default:
       /* Check equality between structs of equal type (see cell-type test above). */
@@ -344,7 +344,7 @@ scm_equal_p (SCM x, SCM y)
 	    return scm_i_struct_equalp (x, y);
 	}
       break;
-    case scm_tc7_number:
+    case scm_tc11_number:
       switch SCM_TYP16 (x)
         {
         case scm_tc16_big:
@@ -359,20 +359,20 @@ scm_equal_p (SCM x, SCM y)
           /* assert not reached? */
           return SCM_BOOL_F;
         }
-    case scm_tc7_pointer:
+    case scm_tc11_pointer:
       return scm_from_bool (SCM_POINTER_VALUE (x) == SCM_POINTER_VALUE (y));
-    case scm_tc7_string:
+    case scm_tc11_string:
       return scm_string_equal_p (x, y);
-    case scm_tc7_bytevector:
+    case scm_tc11_bytevector:
       return scm_bytevector_eq_p (x, y);
-    case scm_tc7_array:
+    case scm_tc11_array:
       return scm_array_equal_p (x, y);
-    case scm_tc7_bitvector:
+    case scm_tc11_bitvector:
       return scm_i_bitvector_equal_p (x, y);
-    case scm_tc7_vector:
-    case scm_tc7_wvect:
+    case scm_tc11_vector:
+    case scm_tc11_wvect:
       return scm_i_vector_equal_p (x, y);
-    case scm_tc7_syntax:
+    case scm_tc11_syntax:
       if (scm_is_false (scm_equal_p (scm_syntax_wrap (x),
                                      scm_syntax_wrap (y))))
         return SCM_BOOL_F;

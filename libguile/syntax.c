@@ -40,7 +40,7 @@
 static int
 scm_is_syntax (SCM x)
 {
-  return SCM_HAS_TYP7 (x, scm_tc7_syntax);
+  return SCM_HAS_TYP11 (x, scm_tc11_syntax);
 }
 
 #define SCM_VALIDATE_SYNTAX(pos, scm) \
@@ -61,7 +61,7 @@ SCM_DEFINE (scm_make_syntax, "make-syntax", 3, 0, 0,
 	    "Make a new syntax object.")
 #define FUNC_NAME s_scm_make_syntax
 {
-  return scm_double_cell (scm_tc7_syntax, SCM_UNPACK (exp),
+  return scm_double_cell (scm_tc11_syntax, SCM_UNPACK (exp),
                           SCM_UNPACK (wrap), SCM_UNPACK (module));
 }
 #undef FUNC_NAME

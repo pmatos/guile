@@ -51,7 +51,7 @@ scm_c_make_frame (enum scm_vm_frame_kind kind, const struct scm_frame *frame)
   p->fp_offset = frame->fp_offset;
   p->sp_offset = frame->sp_offset;
   p->ip = frame->ip;
-  return scm_cell (scm_tc7_frame | (kind << 8), (scm_t_bits)p);
+  return scm_cell (scm_tc11_frame | (kind << 12), (scm_t_bits)p);
 }
 
 void

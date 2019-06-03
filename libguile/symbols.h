@@ -30,12 +30,12 @@
 
 
 
-#define scm_is_symbol(x)            (SCM_HAS_TYP7 (x, scm_tc7_symbol))
+#define scm_is_symbol(x)            (SCM_HAS_TYP11 (x, scm_tc11_symbol))
 #define scm_i_symbol_hash(x)        ((unsigned long) SCM_CELL_WORD_2 (x))
 #define scm_i_symbol_is_interned(x) \
   (!(SCM_CELL_WORD_0 (x) & SCM_I_F_SYMBOL_UNINTERNED))
 
-#define SCM_I_F_SYMBOL_UNINTERNED   0x100
+#define SCM_I_F_SYMBOL_UNINTERNED   0x1000
 
 #define SCM_VALIDATE_SYMBOL(pos, str) \
   do { \

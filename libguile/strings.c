@@ -88,7 +88,7 @@ SCM_SYMBOL (sym_error, "error");
 #define STRINGBUF_F_WIDE        SCM_I_STRINGBUF_F_WIDE
 #define STRINGBUF_F_MUTABLE     SCM_I_STRINGBUF_F_MUTABLE
 
-#define STRINGBUF_TAG           scm_tc7_stringbuf
+#define STRINGBUF_TAG           scm_tc11_stringbuf
 #define STRINGBUF_WIDE(buf)     (SCM_CELL_WORD_0(buf) & STRINGBUF_F_WIDE)
 #define STRINGBUF_MUTABLE(buf)  (SCM_CELL_WORD_0(buf) & STRINGBUF_F_MUTABLE)
 
@@ -232,7 +232,7 @@ narrow_stringbuf (SCM buf)
 /* Copy-on-write strings.
  */
 
-#define STRING_TAG            scm_tc7_string
+#define STRING_TAG            scm_tc11_string
 
 #define STRING_STRINGBUF(str) (SCM_CELL_OBJECT_1(str))
 #define STRING_START(str)     ((size_t)SCM_CELL_WORD_2(str))
@@ -241,18 +241,18 @@ narrow_stringbuf (SCM buf)
 #define SET_STRING_STRINGBUF(str,buf) (SCM_SET_CELL_OBJECT_1(str,buf))
 #define SET_STRING_START(str,start) (SCM_SET_CELL_WORD_2(str,start))
 
-#define IS_STRING(str)        (SCM_HAS_TYP7 (str, STRING_TAG))
+#define IS_STRING(str)        (SCM_HAS_TYP11 (str, STRING_TAG))
 
 /* Read-only strings.
  */
 
-#define RO_STRING_TAG         scm_tc7_ro_string
+#define RO_STRING_TAG         scm_tc11_ro_string
 #define IS_RO_STRING(str)     (SCM_CELL_TYPE(str)==RO_STRING_TAG)
 
 /* Mutation-sharing substrings
  */
 
-#define SH_STRING_TAG       (scm_tc7_string + 0x100)
+#define SH_STRING_TAG       (scm_tc11_string + 0x1000)
 
 #define SH_STRING_STRING(sh) (SCM_CELL_OBJECT_1(sh))
 /* START and LENGTH as for STRINGs. */
@@ -754,7 +754,7 @@ scm_i_make_symbol (SCM name, scm_t_bits flags,
 
   name = scm_i_substring_copy (name, 0, length);
   buf = STRING_STRINGBUF (name);
-  return scm_double_cell (scm_tc7_symbol | flags, SCM_UNPACK (buf),
+  return scm_double_cell (scm_tc11_symbol | flags, SCM_UNPACK (buf),
 			  (scm_t_bits) hash, SCM_UNPACK (props));
 }
 
@@ -765,7 +765,7 @@ scm_i_c_make_symbol (const char *name, size_t len,
   SCM buf = make_stringbuf (len);
   memcpy (STRINGBUF_CHARS (buf), name, len);
 
-  return scm_double_cell (scm_tc7_symbol | flags, SCM_UNPACK (buf),
+  return scm_double_cell (scm_tc11_symbol | flags, SCM_UNPACK (buf),
                           (scm_t_bits) hash, SCM_UNPACK (props));
 }
 

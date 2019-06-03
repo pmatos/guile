@@ -345,7 +345,7 @@ create_subr (int define, const char *name,
   flags = SCM_F_PROGRAM_IS_PRIMITIVE;
   flags |= generic_loc ? SCM_F_PROGRAM_IS_PRIMITIVE_GENERIC : 0;
 
-  ret = scm_words (scm_tc7_program | (nfree << 16) | flags, nfree + 2);
+  ret = scm_words (scm_tc11_program | (nfree << 20) | flags, nfree + 2);
   SCM_SET_CELL_WORD_1 (ret, get_subr_stub_code (idx, nreq, nopt, rest));
   record_subr_name (idx, sname);
   if (generic_loc)

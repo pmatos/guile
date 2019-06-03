@@ -43,7 +43,7 @@
 
 static SCM keyword_obarray;
 
-#define SCM_KEYWORDP(x) (SCM_HAS_TYP7 (x, scm_tc7_keyword))
+#define SCM_KEYWORDP(x) (SCM_HAS_TYP11 (x, scm_tc11_keyword))
 #define SCM_KEYWORD_SYMBOL(x) (SCM_CELL_OBJECT_1 (x))
 
 SCM_DEFINE (scm_keyword_p, "keyword?", 1, 0, 0, 
@@ -72,7 +72,7 @@ SCM_DEFINE (scm_symbol_to_keyword, "symbol->keyword", 1, 0, 0,
   keyword = scm_hashq_ref (keyword_obarray, symbol, SCM_BOOL_F);
   if (scm_is_false (keyword))
     {
-      keyword = scm_cell (scm_tc7_keyword, SCM_UNPACK (symbol));
+      keyword = scm_cell (scm_tc11_keyword, SCM_UNPACK (symbol));
       scm_hashq_set_x (keyword_obarray, symbol, keyword);
     }
   scm_dynwind_end ();
