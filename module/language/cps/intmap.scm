@@ -89,7 +89,7 @@
 
 (define *absent* (list 'absent))
 (define-inlinable (absent? x)
-  (eq? x *absent*))
+  (eqv? x *absent*))
 (define-inlinable (present? x)
   (not (absent? x)))
 
@@ -106,11 +106,11 @@
     (vector-set! new i elt)
     new))
 (define-inlinable (assert-readable! root-edit)
-  (unless (eq? (get-atomic-reference root-edit) (current-thread))
+  (unless (eqv? (get-atomic-reference root-edit) (current-thread))
     (error "Transient intmap owned by another thread" root-edit)))
 (define-inlinable (writable-branch branch root-edit)
   (let ((edit (vector-ref branch *edit-index*)))
-    (if (eq? root-edit edit)
+    (if (eqv? root-edit edit)
         branch
         (clone-branch-with-edit branch root-edit))))
 (define (branch-empty? branch)
@@ -190,7 +190,7 @@
             (vector-set! root idx v)
             v)
           (let ((v* (writable-branch v edit)))
-            (unless (eq? v v*)
+            (unless (eqv? v v*)
               (vector-set! root idx v*))
             v*))))
   (define (adjoin! i shift root)
@@ -198,7 +198,7 @@
            (idx (logand (ash i (- shift)) *branch-mask*)))
       (if (zero? shift)
           (let ((node (vector-ref root idx)))
-            (unless (eq? node val)
+            (unless (eqv? node val)
               (vector-set! root idx (if (present? node) (meet node val) val))))
           (adjoin! i shift (ensure-branch! root idx)))))
   (match map
@@ -215,10 +215,10 @@
       ((and (<= min i) (< i (+ min (ash 1 shift))))
        ;; Add element to map; level will not change.
        (if (zero? shift)
-           (unless (eq? root val)
+           (unless (eqv? root val)
              (set-transient-intmap-root! map (meet root val)))
            (let ((root* (writable-branch root edit)))
-             (unless (eq? root root*)
+             (unless (eqv? root root*)
                (set-transient-intmap-root! map root*))
              (adjoin! (- i min) shift root*))))
       (else
@@ -247,7 +247,7 @@
   (define (adjoin i shift root)
     (if (zero? shift)
         (cond
-         ((eq? root val) root)
+         ((eqv? root val) root)
          ((absent? root) val)
          (else (meet root val)))
         (let* ((shift (- shift *branch-bits*))
@@ -259,7 +259,7 @@
                 root*)
               (let* ((node (vector-ref root idx))
                      (node* (adjoin i shift node)))
-                (if (eq? node node*)
+                (if (eqv? node node*)
                     root
                     (clone-branch-and-set root idx node*)))))))
   (match map
@@ -275,7 +275,7 @@
        ;; Add element to map; level will not change.
        (let ((old-root root)
              (root (adjoin (- i min) shift root)))
-         (if (eq? root old-root)
+         (if (eqv? root old-root)
              map
              (make-intmap min shift root))))
       ((< i min)
@@ -297,7 +297,7 @@ already, and always calls the meet procedure."
           (v (vector-ref root idx)))
       (when (absent? v) (not-found))
       (let ((v* (writable-branch v edit)))
-        (unless (eq? v v*)
+        (unless (eqv? v v*)
           (vector-set! root idx v*))
         v*)))
   (define (adjoin! i shift root)
@@ -319,7 +319,7 @@ already, and always calls the meet procedure."
        (if (zero? shift)
            (set-transient-intmap-root! map (meet root val))
            (let ((root* (writable-branch root edit)))
-             (unless (eq? root root*)
+             (unless (eqv? root root*)
                (set-transient-intmap-root! map root*))
              (adjoin! (- i min) shift root*))))
       (else
@@ -344,7 +344,7 @@ already, and always calls the meet procedure."
               (not-found)
               (let* ((node (vector-ref root idx))
                      (node* (adjoin i shift node)))
-                (if (eq? node node*)
+                (if (eqv? node node*)
                     root
                     (clone-branch-and-set root idx node*)))))))
   (match map
@@ -356,7 +356,7 @@ already, and always calls the meet procedure."
       ((and (present? root) (<= min i) (< i (+ min (ash 1 shift))))
        (let ((old-root root)
              (root (adjoin (- i min) shift root)))
-         (if (eq? root old-root)
+         (if (eqv? root old-root)
              map
              (make-intmap min shift root))))
       (else (not-found))))
@@ -374,7 +374,7 @@ already, and always calls the meet procedure."
         (if (absent? node)
             root
             (let ((node* (remove i shift node)))
-              (if (eq? node node*)
+              (if (eqv? node node*)
                   root
                   (clone-branch-and-set root idx node*))))))))
   (match map
@@ -384,7 +384,7 @@ already, and always calls the meet procedure."
       ((and (<= min i) (< i (+ min (ash 1 shift))))
        ;; Add element to map; level will not change.
        (let ((root* (remove (- i min) shift root)))
-         (if (eq? root root*)
+         (if (eqv? root root*)
              map
              (if (absent? root*)
                  empty-intmap
@@ -544,48 +544,48 @@ already, and always calls the meet procedure."
           (vector-set! fresh i (union shift a-child b-child))
           (lp (1+ i))))
        (else fresh))))
-  ;; Union A and B from index I; the result may be eq? to A.
+  ;; Union A and B from index I; the result may be eqv? to A.
   (define (union-branches/a shift a b i)
     (let lp ((i i))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (union shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (lp (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (union-branches/fresh shift a b (1+ i) result))))))))
        (else a))))
-  ;; Union A and B; the may could be eq? to either.
+  ;; Union A and B; the may could be eqv? to either.
   (define (union-branches shift a b)
     (let lp ((i 0))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (union shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (union-branches/a shift a b (1+ i)))
-                 ((eq? b-child child)
+                 ((eqv? b-child child)
                   (union-branches/a shift b a (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (union-branches/fresh shift a b (1+ i) result))))))))
-       ;; Seems they are the same but not eq?.  Odd.
+       ;; Seems they are the same but not eqv?.  Odd.
        (else a))))
   (define (union shift a-node b-node)
     (cond
      ((absent? a-node) b-node)
      ((absent? b-node) a-node)
-     ((eq? a-node b-node) a-node)
+     ((eqv? a-node b-node) a-node)
      ((zero? shift) (meet a-node b-node))
      (else (union-branches (- shift *branch-bits*) a-node b-node))))
   (match (cons a b)
@@ -608,8 +608,8 @@ already, and always calls the meet procedure."
        ;; At this point, A and B cover the same range.
        (let ((root (union a-shift a-root b-root)))
          (cond
-          ((eq? root a-root) a)
-          ((eq? root b-root) b)
+          ((eqv? root a-root) a)
+          ((eqv? root b-root) b)
           (else (make-intmap a-min a-shift root)))))))))
 
 (define* (intmap-intersect a b #:optional (meet meet-error))
@@ -624,47 +624,47 @@ already, and always calls the meet procedure."
           (lp (1+ i))))
        ((branch-empty? fresh) *absent*)
        (else fresh))))
-  ;; Intersect A and B from index I; the result may be eq? to A.
+  ;; Intersect A and B from index I; the result may be eqv? to A.
   (define (intersect-branches/a shift a b i)
     (let lp ((i i))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (intersect shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (lp (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (intersect-branches/fresh shift a b (1+ i) result))))))))
        (else a))))
-  ;; Intersect A and B; the may could be eq? to either.
+  ;; Intersect A and B; the may could be eqv? to either.
   (define (intersect-branches shift a b)
     (let lp ((i 0))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (intersect shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (intersect-branches/a shift a b (1+ i)))
-                 ((eq? b-child child)
+                 ((eqv? b-child child)
                   (intersect-branches/a shift b a (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (intersect-branches/fresh shift a b (1+ i) result))))))))
-       ;; Seems they are the same but not eq?.  Odd.
+       ;; Seems they are the same but not eqv?.  Odd.
        (else a))))
   (define (intersect shift a-node b-node)
     (cond
      ((or (absent? a-node) (absent? b-node)) *absent*)
-     ((eq? a-node b-node) a-node)
+     ((eqv? a-node b-node) a-node)
      ((zero? shift) (meet a-node b-node))
      (else (intersect-branches (- shift *branch-bits*) a-node b-node))))
 
@@ -717,8 +717,8 @@ already, and always calls the meet procedure."
        ;; At this point, A and B cover the same range.
        (let ((root (intersect a-shift a-root b-root)))
          (cond
-          ((eq? root a-root) a)
-          ((eq? root b-root) b)
+          ((eqv? root a-root) a)
+          ((eqv? root b-root) b)
           (else (make-intmap/prune a-min a-shift root)))))))))
 
 (define (intmap->alist intmap)

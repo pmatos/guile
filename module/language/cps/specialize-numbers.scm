@@ -284,7 +284,7 @@ BITS indicating the significant bits needed for a variable.  BITS may be
          (let ((worklist (intset-remove worklist label))
                (visited* (intset-add visited label)))
            (define (continue out*)
-             (if (and (eq? out out*) (eq? visited visited*))
+             (if (and (eqv? out out*) (eqv? visited visited*))
                  (lp worklist visited out)
                  (lp (intset-union worklist (intmap-ref preds label))
                      visited* out*)))
@@ -988,7 +988,7 @@ BITS indicating the significant bits needed for a variable.  BITS may be
      (let* ((preds (compute-predecessors cps kfun #:labels body))
             (defs (compute-defs cps body))
             (phis (compute-specializable-phis cps body preds defs)))
-       (if (eq? phis empty-intmap)
+       (if (eqv? phis empty-intmap)
            cps
            (apply-specialization cps kfun body preds defs phis))))
    (compute-reachable-functions cps)

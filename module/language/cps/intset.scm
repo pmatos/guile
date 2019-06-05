@@ -20,7 +20,7 @@
 ;;; A persistent, functional data structure representing a set of
 ;;; integers as a tree whose branches are vectors and whose leaves are
 ;;; fixnums.  Intsets are careful to preserve sub-structure, in the
-;;; sense of eq?, whereever possible.
+;;; sense of eqv?, whereever possible.
 ;;;
 ;;; Code:
 
@@ -128,11 +128,11 @@
     (vector-set! new i elt)
     new))
 (define-inlinable (assert-readable! root-edit)
-  (unless (eq? (get-atomic-reference root-edit) (current-thread))
+  (unless (eqv? (get-atomic-reference root-edit) (current-thread))
     (error "Transient intset owned by another thread" root-edit)))
 (define-inlinable (writable-branch branch root-edit)
   (let ((edit (vector-ref branch *edit-index*)))
-    (if (eq? root-edit edit)
+    (if (eqv? root-edit edit)
         branch
         (clone-branch-and-set branch *edit-index* root-edit))))
 (define (branch-empty? branch)
@@ -211,7 +211,7 @@
               (vector-set! root idx v)
               v))
         (v (let ((v* (writable-branch v edit)))
-             (unless (eq? v v*)
+             (unless (eqv? v v*)
                (vector-set! root idx v*))
              v*)))))
   (define (adjoin-branch! i shift root)
@@ -240,7 +240,7 @@
        (if (= shift *leaf-bits*)
            (set-transient-intset-root! bs (adjoin-leaf (- i min) root))
            (let ((root* (writable-branch root edit)))
-             (unless (eq? root root*)
+             (unless (eqv? root root*)
                (set-transient-intset-root! bs root*))
              (adjoin-branch! (- i min) shift root*))))
       (else
@@ -279,7 +279,7 @@
              (idx (logand (ash i (- shift)) *branch-mask*))
              (node (and root (vector-ref root idx)))
              (new-node (adjoin i shift node)))
-        (if (eq? node new-node)
+        (if (eqv? node new-node)
             root
             (clone-branch-and-set root idx new-node))))))
   (match bs
@@ -297,7 +297,7 @@
        ;; Add element to set; level will not change.
        (let ((old-root root)
              (root (adjoin (- i min) shift root)))
-         (if (eq? root old-root)
+         (if (eqv? root old-root)
              bs
              (make-intset min shift root))))
       ((< i min)
@@ -328,7 +328,7 @@
          ((vector-ref root idx)
           => (lambda (node)
                (let ((new-node (remove i shift node)))
-                 (if (eq? node new-node)
+                 (if (eqv? node new-node)
                      root
                      (let ((root (clone-branch-and-set root idx new-node)))
                        (and (or new-node (not (branch-empty? root)))
@@ -341,7 +341,7 @@
       ((and (<= min i) (< i (+ min (ash 1 shift))))
        (let ((old-root root)
              (root (remove (- i min) shift root)))
-         (if (eq? root old-root)
+         (if (eqv? root old-root)
              bs
              (make-intset/prune min shift root))))
       (else bs)))))
@@ -511,48 +511,48 @@
           (vector-set! fresh i (union shift a-child b-child))
           (lp (1+ i))))
        (else fresh))))
-  ;; Union A and B from index I; the result may be eq? to A.
+  ;; Union A and B from index I; the result may be eqv? to A.
   (define (union-branches/a shift a b i)
     (let lp ((i i))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (union shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (lp (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (union-branches/fresh shift a b (1+ i) result))))))))
        (else a))))
-  ;; Union A and B; the may could be eq? to either.
+  ;; Union A and B; the may could be eqv? to either.
   (define (union-branches shift a b)
     (let lp ((i 0))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (union shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (union-branches/a shift a b (1+ i)))
-                 ((eq? b-child child)
+                 ((eqv? b-child child)
                   (union-branches/a shift b a (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (union-branches/fresh shift a b (1+ i) result))))))))
-       ;; Seems they are the same but not eq?.  Odd.
+       ;; Seems they are the same but not eqv?.  Odd.
        (else a))))
   (define (union shift a-node b-node)
     (cond
      ((not a-node) b-node)
      ((not b-node) a-node)
-     ((eq? a-node b-node) a-node)
+     ((eqv? a-node b-node) a-node)
      ((= shift *leaf-bits*) (union-leaves a-node b-node))
      (else (union-branches (- shift *branch-bits*) a-node b-node))))
   (match (cons a b)
@@ -576,8 +576,8 @@
        ;; At this point, A and B cover the same range.
        (let ((root (union a-shift a-root b-root)))
          (cond
-          ((eq? root a-root) a)
-          ((eq? root b-root) b)
+          ((eqv? root a-root) a)
+          ((eqv? root b-root) b)
           (else (make-intset a-min a-shift root)))))))))
 
 (define (intset-intersect a b)
@@ -596,47 +596,47 @@
           (lp (1+ i))))
        ((branch-empty? fresh) #f)
        (else fresh))))
-  ;; Intersect A and B from index I; the result may be eq? to A.
+  ;; Intersect A and B from index I; the result may be eqv? to A.
   (define (intersect-branches/a shift a b i)
     (let lp ((i i))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (intersect shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (lp (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (intersect-branches/fresh shift a b (1+ i) result))))))))
        (else a))))
-  ;; Intersect A and B; the may could be eq? to either.
+  ;; Intersect A and B; the may could be eqv? to either.
   (define (intersect-branches shift a b)
     (let lp ((i 0))
       (cond
        ((< i *branch-size*)
         (let* ((a-child (vector-ref a i))
                (b-child (vector-ref b i)))
-          (if (eq? a-child b-child)
+          (if (eqv? a-child b-child)
               (lp (1+ i))
               (let ((child (intersect shift a-child b-child)))
                 (cond
-                 ((eq? a-child child)
+                 ((eqv? a-child child)
                   (intersect-branches/a shift a b (1+ i)))
-                 ((eq? b-child child)
+                 ((eqv? b-child child)
                   (intersect-branches/a shift b a (1+ i)))
                  (else
                   (let ((result (clone-branch-and-set a i child)))
                     (intersect-branches/fresh shift a b (1+ i) result))))))))
-       ;; Seems they are the same but not eq?.  Odd.
+       ;; Seems they are the same but not eqv?.  Odd.
        (else a))))
   (define (intersect shift a-node b-node)
     (cond
      ((or (not a-node) (not b-node)) #f)
-     ((eq? a-node b-node) a-node)
+     ((eqv? a-node b-node) a-node)
      ((= shift *leaf-bits*) (intersect-leaves a-node b-node))
      (else (intersect-branches (- shift *branch-bits*) a-node b-node))))
 
@@ -691,8 +691,8 @@
        ;; At this point, A and B cover the same range.
        (let ((root (intersect a-shift a-root b-root)))
          (cond
-          ((eq? root a-root) a)
-          ((eq? root b-root) b)
+          ((eqv? root a-root) a)
+          ((eqv? root b-root) b)
           (else (make-intset/prune a-min a-shift root)))))))))
 
 (define (intset-subtract a b)
@@ -711,7 +711,7 @@
           (lp (1+ i))))
        ((branch-empty? fresh) #f)
        (else fresh))))
-  ;; Subtract B from A.  The result may be eq? to A.
+  ;; Subtract B from A.  The result may be eqv? to A.
   (define (subtract-branches shift a b)
     (let lp ((i 0))
       (cond
@@ -720,7 +720,7 @@
                (b-child (vector-ref b i)))
           (let ((child (subtract-nodes shift a-child b-child)))
             (cond
-             ((eq? a-child child)
+             ((eqv? a-child child)
               (lp (1+ i)))
              (else
               (let ((result (clone-branch-and-set a i child)))
@@ -729,7 +729,7 @@
   (define (subtract-nodes shift a-node b-node)
     (cond
      ((or (not a-node) (not b-node)) a-node)
-     ((eq? a-node b-node) #f)
+     ((eqv? a-node b-node) #f)
      ((= shift *leaf-bits*) (subtract-leaves a-node b-node))
      (else (subtract-branches (- shift *branch-bits*) a-node b-node))))
 
@@ -737,7 +737,7 @@
     ((($ <intset> a-min a-shift a-root) . ($ <intset> b-min b-shift b-root))
      (define (return root)
        (cond
-        ((eq? root a-root) a)
+        ((eqv? root a-root) a)
         (else (make-intset/prune a-min a-shift root))))
      (cond
       ((<= a-shift b-shift)
@@ -769,7 +769,7 @@
                                (< a-idx *branch-size*)
                                (vector-ref a-root a-idx)))
                      (new (lp a-min a-shift old)))
-                (if (eq? old new)
+                (if (eqv? old new)
                     a-root
                     (let ((root (clone-branch-and-set a-root a-idx new)))
                       (and (or new (not (branch-empty? root)))
