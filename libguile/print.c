@@ -594,7 +594,10 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
   switch (SCM_ITAG3 (exp))
     {
     case scm_tcs_fixnums:
-      scm_intprint (SCM_I_INUM (exp), 10, port);
+      if (SCM_I_INUMP (exp))
+        scm_intprint (SCM_I_INUM (exp), 10, port);
+      else
+        scm_i_print_fraction (exp, port, pstate);
       break;
 #ifdef scm_tcs_iflo
     case scm_tcs_iflo:

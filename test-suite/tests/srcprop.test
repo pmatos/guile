@@ -45,7 +45,7 @@
     (pass-if "null string"     (reads-with-srcprops? "\"\""))
 
     (pass-if "floats"          (reads-with-srcprops? "3.1415e200"))
-    (pass-if "fractions"       (reads-with-srcprops? "1/2"))
+    (pass-if "fractions"       (reads-with-srcprops? "1/111111111111111111111111111111111111"))
     (pass-if "complex numbers" (reads-with-srcprops? "1+1i"))
     (pass-if "bignums"
       (and (reads-with-srcprops? (number->string (1+ most-positive-fixnum)))

@@ -167,13 +167,53 @@ typedef long scm_t_inum;
 #define SCM_I_BIG_MPZ(x) (*((mpz_t *) (SCM_CELL_OBJECT_LOC((x),1))))
 #define SCM_BIGP(x) (SCM_HAS_TYP16 (x, scm_tc16_big))
 
-#define SCM_NUMBERP(x) \
-  (SCM_IMP (x) ? SCM_I_INUMP(x) || SCM_I_IFLO_P (x) : SCM_NUMP(x))
+#define SCM_I_FIXRAT_P(x)                                       \
+  ((SCM_UNPACK (x) & scm_fixrat_tag_mask) == scm_fixrat_tag)
+#define SCM_I_FIXRAT_RANK(x)                                    \
+  ((SCM_UNPACK (x) >> (SCM_SIZEOF_UINTPTR_T * 8                 \
+                       - 1 - scm_fixrat_rank_size))             \
+   & ~((scm_t_bits) -1 << scm_fixrat_rank_size))
+
+/* XXX Assumes that any fixrat numerator is an inum, and that doubles
+   are in IEEE-754 binary-64 format.  Verify this. */
+/* XXX Assumes 64-bit word size. */
+#define SCM_I_FIXRAT_DENOMINATOR(x)                             \
+  ((scm_t_inum)                                                 \
+   ((const union { double f; uint64_t u; })                     \
+    { .u = (((SCM_UNPACK (x) >> 5)                              \
+             & 0x3ffffffffffffff)                               \
+            | 0x4000000000000000) } .f))
+#define SCM_I_FIXRAT_NUMERATOR(x)                               \
+  ((SCM_UNPACK (x) >> 63)                                       \
+   ? -(scm_t_inum) ((SCM_UNPACK (x)                             \
+                     & ((scm_t_bits) -1                         \
+                        >> (scm_fixrat_rank_size + 2            \
+                            + SCM_I_FIXRAT_RANK(x))))           \
+                    >> scm_fixrat_tag_size)                     \
+   : (scm_t_inum) ((SCM_UNPACK (x)                              \
+                    & ((scm_t_bits) -1                          \
+                       >> (scm_fixrat_rank_size + 2             \
+                           + SCM_I_FIXRAT_RANK(x))))            \
+                   >> scm_fixrat_tag_size))
+
+#define SCM_NUMBERP(x)                                          \
+  (SCM_IMP (x)                                                  \
+   ? SCM_I_INUMP(x) || SCM_I_IFLO_P (x) || SCM_I_FIXRAT_P(x)    \
+   : SCM_NUMP(x))
 #define SCM_NUMP(x) (SCM_HAS_TYP11 (x, scm_tc11_number))
 
-#define SCM_FRACTIONP(x) (SCM_HAS_TYP16 (x, scm_tc16_fraction))
-#define SCM_FRACTION_NUMERATOR(x) (SCM_CELL_OBJECT_1 (x))
-#define SCM_FRACTION_DENOMINATOR(x) (SCM_CELL_OBJECT_2 (x))
+#define SCM_FRACTIONP(x)                                        \
+  (SCM_IMP (x)                                                  \
+   ? SCM_I_FIXRAT_P (x)                                         \
+   : SCM_HAS_TYP16 (x, scm_tc16_fraction))
+#define SCM_FRACTION_NUMERATOR(x)                               \
+  (SCM_IMP (x)                                                  \
+   ? SCM_I_MAKINUM (SCM_I_FIXRAT_NUMERATOR (x))                 \
+   : SCM_CELL_OBJECT_1 (x))
+#define SCM_FRACTION_DENOMINATOR(x)                             \
+  (SCM_IMP (x)                                                  \
+   ? SCM_I_MAKINUM (SCM_I_FIXRAT_DENOMINATOR (x))               \
+   : SCM_CELL_OBJECT_2 (x))
 
 
 

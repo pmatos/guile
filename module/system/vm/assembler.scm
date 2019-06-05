@@ -1133,12 +1133,40 @@ immediate, and @code{#f} otherwise."
                                          (+ fixint-max 1 (logand x fixint-max))
                                          x)))
                     (logior (ash fixint-bits fixint-shift) fixint-tag))))))
-        ((and (number? x) (inexact? x) (real? x))
-         (case (asm-word-size asm)
-           ;; TAGS-SENSITIVE
-           ((4) #f)
-           ((8) (pack-iflo x))
-           (else (error "unexpected word size"))))
+        ((and (number? x) (real? x))
+         (cond ((inexact? x)
+                (case (asm-word-size asm)
+                  ;; TAGS-SENSITIVE
+                  ((4) #f)
+                  ((8) (pack-iflo x))
+                  (else (error "unexpected word size"))))
+               ((rational? x)
+                (call-with-values (lambda ()
+                                    (case (asm-word-size asm)
+                                      ;; TAGS-SENSITIVE
+                                      ((4) (values 2 2 5 25))
+                                      ((8) (values 7 4 6 54))
+                                      (else (error "unexpected word size"))))
+                  (lambda (fixrat-tag tag-bits rank-bits data-bits)
+                    (let ((numer (numerator x))
+                          (denom (denominator x)))
+                      (let* ((sign-bit  (if (negative? numer) 1 0))
+                             (numer^    (abs numer))
+                             (numer-len (integer-length numer^))
+                             (denom-len (integer-length denom))
+                             (rank      (- denom-len 2))
+                             (denom^    (- denom (ash 1 (+ rank 1)))))
+                        (and (>= data-bits (+ numer-len denom-len))
+                             (logior fixrat-tag
+                                     (ash (logior numer^
+                                                  (ash (logior denom^
+                                                               (ash (logior rank
+                                                                            (ash sign-bit
+                                                                                 rank-bits))
+                                                                    (+ rank 1)))
+                                                       (- data-bits denom-len)))
+                                          tag-bits))))))))
+               (else #f)))
         (else
          ;; Otherwise, the object will be immediate on the target if and
          ;; only if it is immediate on the host.  Except for integers,

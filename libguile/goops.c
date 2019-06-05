@@ -206,7 +206,10 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
   switch (SCM_ITAG3 (x))
     {
     case scm_tcs_fixnums:
-      return class_integer;
+      if (SCM_I_INUMP (x))
+        return class_integer;
+      else
+        return class_fraction;
 
 #ifdef scm_tcs_iflo
     case scm_tcs_iflo:

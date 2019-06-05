@@ -464,6 +464,24 @@ scm_i_make_ratio_already_reduced (SCM numerator, SCM denominator)
   if (scm_is_eq (denominator, SCM_INUM1))
     return numerator;
 
+  if (SCM_I_INUMP (numerator) && SCM_I_INUMP (denominator)
+      && (SCM_I_INUM (denominator) < ((scm_t_inum) 1 << 53)))  /* assumes 64-bit XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX */
+    {
+      scm_t_inum nn = SCM_I_INUM (numerator);
+      int neg = (nn < 0);
+      scm_t_bits abs_nn = neg ? -nn : nn;
+      union { double f; uint64_t u; } dd;
+      int rank;
+
+      dd.f = SCM_I_INUM (denominator);
+      rank = (dd.u >> 52) & 63;  /* assumes 64-bit XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX */
+      if ((abs_nn >> (52 - rank)) == 0)
+        return SCM_PACK (scm_fixrat_tag
+                         | (abs_nn << scm_fixrat_tag_size)
+                         | (dd.u << (11 - scm_fixrat_rank_size))
+                         | ((uint64_t) neg << 63));
+    }
+
   return scm_double_cell (scm_tc16_fraction,
 			  SCM_UNPACK (numerator),
 			  SCM_UNPACK (denominator), 0);
@@ -8065,7 +8083,7 @@ scm_product (SCM x, SCM y)
 					   0.0 * SCM_COMPLEX_IMAG (y));
 	  /* we've already handled inexact numbers,
 	     so y must be exact, and we return exact0 */
-	  else if (SCM_NUMP (y))
+	  else if (SCM_NUMBERP (y))
 	    return SCM_INUM0;
 	  else
 	    return scm_wta_dispatch_2 (g_product, x, y, SCM_ARGn, s_product);

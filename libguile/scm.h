@@ -440,6 +440,11 @@ typedef uintptr_t scm_t_bits;
 #define scm_fixnum_tag_mask      15
 #define scm_fixnum_tag_size      4
 
+#define scm_fixrat_tag           7
+#define scm_fixrat_tag_mask      15
+#define scm_fixrat_tag_size      4
+#define scm_fixrat_rank_size     6
+
 
 /* Definitions for tc3: */
 
