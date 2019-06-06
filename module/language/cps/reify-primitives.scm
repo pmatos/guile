@@ -323,7 +323,7 @@
       string->symbol
       symbol->keyword
       class-of
-      scm->f64
+      scm->f64 f64->scm
       s64->u64 s64->scm scm->s64
       u64->s64 u64->scm scm->u64 scm->u64/truncate
       wind unwind
@@ -368,37 +368,6 @@
           ($ $continue k src ($ $primcall 'call-thunk/no-inline #f (proc))))
        (with-cps cps
          (setk label ($kargs names vars ($continue k src ($call proc ()))))))
-      (($ $kargs names vars
-          ($ $continue k src ($ $primcall 'f64->scm #f (f64))))
-       (with-cps cps
-         (letv scm tag ptr uidx)
-         (letk kdone ($kargs () ()
-                       ($continue k src ($values (scm)))))
-         (letk kinit ($kargs ('uidx) (uidx)
-                       ($continue kdone src
-                         ($primcall 'f64-set! 'flonum (scm ptr uidx f64)))))
-         (letk kidx ($kargs ('ptr) (ptr)
-                      ($continue kinit src ($primcall 'load-u64 0 ()))))
-         (letk kptr ($kargs () ()
-                      ($continue kidx src
-                        ($primcall 'tail-pointer-ref/immediate
-                                   `(flonum . ,(match (target-word-size)
-                                                 (4 2)
-                                                 (8 1)))
-                                   (scm)))))
-         (letk ktag1 ($kargs ('tag) (tag)
-                       ($continue kptr src
-                         ($primcall 'word-set!/immediate '(flonum . 0) (scm tag)))))
-         (letk ktag0 ($kargs ('scm) (scm)
-                      ($continue ktag1 src
-                        ($primcall 'load-u64 %tc16-flonum ()))))
-         (setk label ($kargs names vars
-                       ($continue ktag0 src
-                         ($primcall 'allocate-words/immediate
-                                    `(flonum . ,(match (target-word-size)
-                                                  (4 4)
-                                                  (8 2)))
-                                    ()))))))
       (($ $kargs names vars
           ($ $continue k src ($ $primcall 'u64->scm/unlikely #f (u64))))
        (with-cps cps

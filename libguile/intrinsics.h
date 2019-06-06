@@ -34,6 +34,7 @@ typedef SCM (*scm_t_scm_from_scm_uimm_intrinsic) (SCM, uint8_t);
 typedef void (*scm_t_scm_sz_u32_intrinsic) (SCM, size_t, uint32_t);
 typedef SCM (*scm_t_scm_from_scm_intrinsic) (SCM);
 typedef double (*scm_t_f64_from_scm_intrinsic) (SCM);
+typedef SCM (*scm_t_scm_from_f64_intrinsic) (double);
 
 /* If we don't have 64-bit registers, the intrinsics will take and
    return 64-bit values by reference.  */
@@ -161,6 +162,7 @@ typedef uint32_t* scm_t_vcode_intrinsic;
   M(thread_u8_scm_sp_vra_mra, push_prompt, "push-prompt", PUSH_PROMPT)     \
   M(thread_scm, unpack_values_object, "unpack-values-object", UNPACK_VALUES_OBJECT) \
   M(vcode, handle_interrupt_code, "%handle-interrupt-code", HANDLE_INTERRUPT_CODE) \
+  M(scm_from_f64, f64_to_scm, "f64->scm", F64_TO_SCM) \
   /* Add new intrinsics here; also update scm_bootstrap_intrinsics.  */
 
 enum scm_vm_intrinsic

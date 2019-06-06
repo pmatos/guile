@@ -983,6 +983,14 @@ emit_sp_set_sz (scm_jit_state *j, uint32_t dst, jit_gpr_t src)
 }
 
 static jit_operand_t
+sp_f64_operand (scm_jit_state *j, uint32_t slot)
+{
+  ASSERT_HAS_REGISTER_STATE (SP_IN_REGISTER);
+
+  return jit_operand_mem (JIT_OPERAND_ABI_DOUBLE, SP, 8 * slot);
+}
+
+static jit_operand_t
 sp_u64_operand (scm_jit_state *j, uint32_t slot)
 {
   ASSERT_HAS_REGISTER_STATE (SP_IN_REGISTER);
@@ -2433,6 +2441,18 @@ static void
 compile_call_s64_from_scm (scm_jit_state *j, uint16_t dst, uint16_t a, uint32_t idx)
 {
   compile_call_u64_from_scm (j, dst, a, idx);
+}
+
+static void
+compile_call_scm_from_f64 (scm_jit_state *j, uint16_t dst, uint16_t src, uint32_t idx)
+{
+  void *intrinsic = ((void **) &scm_vm_intrinsics)[idx];
+
+  emit_store_current_ip (j, T0);
+  emit_call_1 (j, intrinsic, sp_f64_operand (j, src));
+  emit_retval (j, T0);
+  emit_reload_sp (j);
+  emit_sp_set_scm (j, dst, T0);
 }
 
 static void

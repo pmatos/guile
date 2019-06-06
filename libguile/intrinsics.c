@@ -459,6 +459,7 @@ scm_bootstrap_intrinsics (void)
   scm_vm_intrinsics.symbol_to_keyword = scm_symbol_to_keyword;
   scm_vm_intrinsics.class_of = scm_class_of;
   scm_vm_intrinsics.scm_to_f64 = scm_to_double;
+  scm_vm_intrinsics.f64_to_scm = scm_from_double;
 #if INDIRECT_INT64_INTRINSICS
   scm_vm_intrinsics.scm_to_u64 = indirect_scm_to_uint64;
   scm_vm_intrinsics.scm_to_u64_truncate = indirect_scm_to_uint64_truncate;

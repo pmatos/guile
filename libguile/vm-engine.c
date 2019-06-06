@@ -3231,7 +3231,31 @@ VM_NAME (scm_thread *thread)
   VM_DEFINE_OP (153, f64_set, "f64-set!", OP1 (X8_S8_S8_S8))
     PTR_SET (double, F64);
 
-  VM_DEFINE_OP (154, unused_154, NULL, NOP)
+  /* call-scm<-f64 dst:12 a:12 IDX:32
+   *
+   * Call the SCM-returning instrinsic with index IDX, passing the
+   * f64 local A as argument.  Place the SCM result in DST.
+   */
+  VM_DEFINE_OP (154, call_scm_from_f64, "call-scm<-f64", DOP2 (X8_S12_S12, C32))
+    {
+      uint16_t dst, src;
+      SCM res;
+      scm_t_scm_from_f64_intrinsic intrinsic;
+
+      UNPACK_12_12 (op, dst, src);
+      intrinsic = intrinsics[ip[1]];
+
+      SYNC_IP ();
+      res = intrinsic (SP_REF_F64 (src));
+      SP_SET (dst, res);
+
+      /* No CACHE_SP () after the intrinsic, as the indirect variants
+         pass stack pointers directly; stack relocation during this kind
+         of intrinsic is not supported!  */
+
+      NEXT (2);
+    }
+
   VM_DEFINE_OP (155, unused_155, NULL, NOP)
   VM_DEFINE_OP (156, unused_156, NULL, NOP)
   VM_DEFINE_OP (157, unused_157, NULL, NOP)
