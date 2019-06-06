@@ -85,6 +85,15 @@ typedef long scm_t_inum;
 #define SCM_NEGFIXABLE(n) ((n) >= SCM_MOST_NEGATIVE_FIXNUM)
 #define SCM_FIXABLE(n) (SCM_POSFIXABLE (n) && SCM_NEGFIXABLE (n))
 
+/* Immediate doubles with exponent <= 255 */
+#define SCM_I_IFLO(x)                                         \
+  ((const union { double _f; uint64_t _u; })                  \
+   { ._u = (((SCM_UNPACK (x) >> 4) | (SCM_UNPACK (x) << 60))  \
+            - 0x1010000000000000) } ._f)
+
+#define SCM_I_IFLO_P(x) (((SCM_UNPACK (x) + 2) & 7) > 2)
+#define SCM_MOST_POSITIVE_IFLO 0x1.fffffffffffffp255 /* 1.1579208923731618e77 */
+#define SCM_MOST_NEGATIVE_IFLO (-SCM_MOST_POSITIVE_IFLO)
 
 #define SCM_INUM0 (SCM_I_MAKINUM (0))  /* A name for 0 */
 #define SCM_INUM1 (SCM_I_MAKINUM (1))  /* A name for 1 */
@@ -140,14 +149,17 @@ typedef long scm_t_inum;
 #define scm_tc16_complex       (scm_tc11_number + (3 << 12))
 #define scm_tc16_fraction      (scm_tc11_number + (4 << 12))
 
-#define SCM_INEXACTP(x)                                            \
-  (SCM_NIMP (x)                                                    \
-    && ((SCM_TYP16 (x) & ~(scm_tc16_real ^ scm_tc16_complex))  \
-        == (scm_tc16_real & scm_tc16_complex)))
-#define SCM_REALP(x) (SCM_HAS_TYP16 (x, scm_tc16_real))
+#define SCM_INEXACTP(x)                                             \
+  (SCM_IMP (x)                                                      \
+   ? SCM_I_IFLO_P (x)                                               \
+   : ((SCM_TYP16 (x) & ~(scm_tc16_real ^ scm_tc16_complex))         \
+      == (scm_tc16_real & scm_tc16_complex)))
+#define SCM_REALP(x) \
+  (SCM_IMP (x) ? SCM_I_IFLO_P (x) : SCM_HAS_TYP16 (x, scm_tc16_real))
 #define SCM_COMPLEXP(x) (SCM_HAS_TYP16 (x, scm_tc16_complex))
 
-#define SCM_REAL_VALUE(x) (((scm_t_double *) SCM2PTR (x))->real)
+#define SCM_REAL_VALUE(x) \
+  (SCM_IMP (x) ? SCM_I_IFLO(x) : (((scm_t_double *) SCM2PTR (x))->real))
 #define SCM_COMPLEX_REAL(x) (((scm_t_complex *) SCM2PTR (x))->real)
 #define SCM_COMPLEX_IMAG(x) (((scm_t_complex *) SCM2PTR (x))->imag)
 
@@ -155,7 +167,8 @@ typedef long scm_t_inum;
 #define SCM_I_BIG_MPZ(x) (*((mpz_t *) (SCM_CELL_OBJECT_LOC((x),1))))
 #define SCM_BIGP(x) (SCM_HAS_TYP16 (x, scm_tc16_big))
 
-#define SCM_NUMBERP(x) (SCM_I_INUMP(x) || SCM_NUMP(x))
+#define SCM_NUMBERP(x) \
+  (SCM_IMP (x) ? SCM_I_INUMP(x) || SCM_I_IFLO_P (x) : SCM_NUMP(x))
 #define SCM_NUMP(x) (SCM_HAS_TYP11 (x, scm_tc11_number))
 
 #define SCM_FRACTIONP(x) (SCM_HAS_TYP16 (x, scm_tc16_fraction))

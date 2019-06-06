@@ -140,8 +140,9 @@
 
 ;; Auxiliary predicate used by test-eqv?
 (define (test-real-eqv? x y)
-  (cond ((or (exact? x) (nan? x) (inf? x))
+  (cond ((or (exact? x) (inf? x))
 	 (eqv? x y))
+        ((nan? x) (nan? y))
 	(else (and (inexact? y) (> test-epsilon (abs (- x y)))))))
 
 ;; return true if OBJ is a real NaN

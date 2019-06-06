@@ -653,14 +653,24 @@ scm_i_fraction2double (SCM z)
 static SCM
 scm_i_from_double (double val)
 {
-  SCM z;
+  union { double f64; uint64_t u64; } u;
+  uint64_t bits;
+  SCM result;
 
-  z = SCM_PACK_POINTER (scm_gc_malloc_pointerless (sizeof (scm_t_double), "real"));
+  u.f64 = val;
+  bits = u.u64 + 0x1010000000000000;
+  bits = (bits << 4) | (bits >> 60);
+  result = SCM_PACK (bits);
 
-  SCM_SET_CELL_TYPE (z, scm_tc16_real);
-  SCM_REAL_VALUE (z) = val;
+  if (!SCM_I_IFLO_P (result))
+  {
+    result = SCM_PACK_POINTER (scm_gc_malloc_pointerless (sizeof (scm_t_double), "real"));
 
-  return z;
+    SCM_SET_CELL_TYPE (result, scm_tc16_real);
+    ((scm_t_double *) SCM2PTR (result))->real = val;
+  }
+
+  return result;
 }
 
 SCM_PRIMITIVE_GENERIC (scm_exact_p, "exact?", 1, 0, 0, 

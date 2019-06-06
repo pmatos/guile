@@ -596,6 +596,11 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
     case scm_tcs_fixnums:
       scm_intprint (SCM_I_INUM (exp), 10, port);
       break;
+#ifdef scm_tcs_iflo
+    case scm_tcs_iflo:
+      scm_print_real (exp, port, pstate);
+      break;
+#endif
     case scm_tc3_imm24:
       if (SCM_CHARP (exp))
 	{

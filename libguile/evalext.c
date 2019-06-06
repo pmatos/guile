@@ -67,6 +67,9 @@ SCM_DEFINE (scm_self_evaluating_p, "self-evaluating?", 1, 0, 0,
   switch (SCM_ITAG3 (obj))
     {
     case scm_tcs_fixnums:
+#ifdef scm_tcs_iflo
+    case scm_tcs_iflo:
+#endif
       /* immediate numbers */
       return SCM_BOOL_T;
     case scm_tc3_imm24:

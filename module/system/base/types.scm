@@ -348,6 +348,15 @@ TYPE-NUMBER."
                                          (dereference-word backend address)))
                    address))
 
+(define (inferior-iflo bits)
+  (let ((dbl-bits (modulo (- (rotate-bit-field bits -4 0 64)
+                             (ash 1 60)
+                             (ash 1 52))
+                          (ash 1 64)))
+        (bv (make-bytevector 8)))
+    (bytevector-u64-native-set! bv 0 dbl-bits)
+    (bytevector-ieee-double-native-ref bv 0)))
+
 (define %visited-cells
   ;; Vhash of mapping addresses of already visited cells to the
   ;; corresponding inferior object.  This is used to detect and represent
@@ -538,7 +547,12 @@ object."
     ((= %tc16-true) #t)
     ((= %tc16-unspecified) (if #f #f))
     ((= %tc16-undefined) (inferior-object 'undefined bits))
-    ((= %tc16-eof) (eof-object))))
+    ((= %tc16-eof) (eof-object))
+    ((_ & 7 = 1) (inferior-iflo bits))  ; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    ((_ & 7 = 2) (inferior-iflo bits))
+    ((_ & 7 = 3) (inferior-iflo bits))
+    ((_ & 7 = 4) (inferior-iflo bits))
+    ((_ & 7 = 5) (inferior-iflo bits))))
 
 ;;; Local Variables:
 ;;; eval: (put 'match-scm 'scheme-indent-function 1)

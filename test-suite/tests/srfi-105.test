@@ -184,7 +184,7 @@
     (pass-if "singleton curly-infix list"
       (let ((sexp (with-read-options '(curly-infix positions)
                     (lambda ()
-                      (read-string " { 1.0 }")))))
+                      (read-string " { 1e200 }")))))
         (and (equal? (source-property sexp 'line) 0)
              (equal? (source-property sexp 'column) 3))))
     (pass-if "neoteric expression"

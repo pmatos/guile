@@ -208,6 +208,11 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
     case scm_tcs_fixnums:
       return class_integer;
 
+#ifdef scm_tcs_iflo
+    case scm_tcs_iflo:
+      return class_real;
+#endif
+
     case scm_tc3_imm24:
       if (SCM_CHARP (x))
 	return class_char;

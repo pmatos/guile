@@ -58,6 +58,7 @@
   #:use-module (srfi srfi-4)
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-11)
+  #:use-module (srfi srfi-60)
   #:export (make-assembler
 
             (emit-receive* . emit-receive)
@@ -1095,40 +1096,61 @@ lists.  This procedure can be called many times before calling
 ;;; to the table.
 ;;;
 
+(define (double-repl x)
+  (let ((bv (make-bytevector 8)))
+    (bytevector-ieee-double-native-set! bv 0 x)
+    (bytevector-u64-native-ref bv 0)))
+
+;; TAGS-SENSITIVE
+(define (pack-iflo x)
+  (let* ((dbl-bits (double-repl x))
+         (bits (rotate-bit-field (logand (+ (ash 1 60) (ash 1 52) dbl-bits)
+                                         (lognot (ash -1 64)))
+                                 4 0 64)))
+    (and (< 0 (logand bits 7) 6)
+         bits)))
+
 (define (immediate-bits asm x)
   "Return the bit pattern to write into the buffer if @var{x} is
 immediate, and @code{#f} otherwise."
-  (if (exact-integer? x)
-      ;; Object is an immediate if it is a fixnum on the target.
-      (call-with-values (lambda ()
-                          (case (asm-word-size asm)
-                            ;; TAGS-SENSITIVE
-                            ((4) (values    #x-40000000
-                                            #x3fffffff
-                                            1   ;fixint tag
-                                            1)) ;fixint shift
-                            ((8) (values    #x-800000000000000
-                                            #x7ffffffFFFFFFFF
-                                            15  ;fixint tag
-                                            4)) ;fixint shift
-                            (else (error "unexpected word size"))))
-        (lambda (fixint-min fixint-max fixint-tag fixint-shift)
-          (and (<= fixint-min x fixint-max)
-               (let ((fixint-bits (if (negative? x)
-                                      (+ fixint-max 1 (logand x fixint-max))
-                                      x)))
-                 (logior (ash fixint-bits fixint-shift) fixint-tag)))))
-      ;; Otherwise, the object will be immediate on the target if and
-      ;; only if it is immediate on the host.  Except for integers,
-      ;; which we handle specially above, any immediate value is an
-      ;; immediate on both 32-bit and 64-bit targets.
-      ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      ;; XXX in the new tagging scheme, the following will rarely if
-      ;; ever be sufficient when cross-compiling.
-      (let ((bits (object-address x)))
-        ;; TAGS-SENSITIVE
-        (and (not (= (logand bits 7) %tc3-heap-object))
-             bits))))
+  (cond ((exact-integer? x)
+         ;; Object is an immediate if it is a fixnum on the target.
+         (call-with-values (lambda ()
+                             (case (asm-word-size asm)
+                               ;; TAGS-SENSITIVE
+                               ((4) (values    #x-40000000
+                                               #x3fffffff
+                                               1   ;fixint tag
+                                               1)) ;fixint shift
+                               ((8) (values    #x-800000000000000
+                                               #x7ffffffFFFFFFFF
+                                               15  ;fixint tag
+                                               4)) ;fixint shift
+                               (else (error "unexpected word size"))))
+           (lambda (fixint-min fixint-max fixint-tag fixint-shift)
+             (and (<= fixint-min x fixint-max)
+                  (let ((fixint-bits (if (negative? x)
+                                         (+ fixint-max 1 (logand x fixint-max))
+                                         x)))
+                    (logior (ash fixint-bits fixint-shift) fixint-tag))))))
+        ((and (number? x) (inexact? x) (real? x))
+         (case (asm-word-size asm)
+           ;; TAGS-SENSITIVE
+           ((4) #f)
+           ((8) (pack-iflo x))
+           (else (error "unexpected word size"))))
+        (else
+         ;; Otherwise, the object will be immediate on the target if and
+         ;; only if it is immediate on the host.  Except for integers,
+         ;; which we handle specially above, any immediate value is an
+         ;; immediate on both 32-bit and 64-bit targets.
+         ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+         ;; XXX in the new tagging scheme, the following will rarely if
+         ;; ever be sufficient when cross-compiling.
+         (let ((bits (object-address x)))
+           ;; TAGS-SENSITIVE
+           (and (not (= (logand bits 7) %tc3-heap-object))
+                bits)))))
 
 (define-record-type <stringbuf>
   (make-stringbuf string)

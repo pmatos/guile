@@ -449,6 +449,7 @@ typedef uintptr_t scm_t_bits;
 #define scm_tc3_cons		 0
 #define scm_tc3_imm24		 6
 #define scm_tcs_fixnums		 7
+#define scm_tcs_iflo		 1: case 2: case 3: case 4: case 5
 
 
 /* Definitions for tc4: */

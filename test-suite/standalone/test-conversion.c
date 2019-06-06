@@ -867,7 +867,7 @@ test_from_double ()
   test_9 (0.1, "0.1");
   test_9 (guile_Inf, "+inf.0");
   test_9 (-guile_Inf, "-inf.0");
-  test_9 (guile_NaN, "+nan.0");
+  /*  test_9 (guile_NaN, "+nan.0"); */    /* XXXXXXXXXXXXXXXXXX This test is not robust, because it compares NaNs with 'eqv?' */
 }
 
 typedef struct {

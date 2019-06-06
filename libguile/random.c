@@ -552,9 +552,10 @@ vector_scale_x (SCM v, double c)
         }
       else if (handle.element_type == SCM_ARRAY_ELEMENT_TYPE_SCM)
         {
+          SCM cc = scm_from_double (c);
           SCM *elts = (SCM *)(handle.writable_elements) + handle.base;
           for (i = dims[0].lbnd; i <= ubnd; ++i, elts += inc)
-            SCM_REAL_VALUE (*elts) *= c;
+            *elts = scm_product (*elts, cc);
           return;
         }
     }
