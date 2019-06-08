@@ -1170,7 +1170,7 @@ table, its existing label is used directly."
     (let ((src (recur obj)))
       (if src
           (if (statically-allocatable? obj)
-              `((static-patch! ,dst ,n ,src))
+              `((static-patch! 0 ,dst ,n ,src))
               `((static-ref 1 ,src)
                 (static-set! 1 ,dst ,n)))
           '())))
@@ -1192,7 +1192,7 @@ table, its existing label is used directly."
               (field label 3 (syntax-module obj))))
      ((stringbuf? obj) '())
      ((static-procedure? obj)
-      `((static-patch! ,label 1 ,(static-procedure-code obj))))
+      `((static-patch! 0 ,label 1 ,(static-procedure-code obj))))
      ((cache-cell? obj) '())
      ((symbol? obj)
       (unless (symbol-interned? obj)
@@ -1201,7 +1201,7 @@ table, its existing label is used directly."
         (string->symbol 1 1)
         (static-set! 1 ,label 0)))
      ((string? obj)
-      `((static-patch! ,label 1 ,(recur (make-stringbuf obj)))))
+      `((static-patch! 0 ,label 1 ,(recur (make-stringbuf obj)))))
      ((keyword? obj)
       `((static-ref 1 ,(recur (keyword->symbol obj)))
         (symbol->keyword 1 1)
@@ -1222,12 +1222,12 @@ table, its existing label is used directly."
                      ((u64 s64 f64 c64) 8)
                      (else
                       (error "unhandled array type" obj)))))
-        `((static-patch! ,label 2
+        `((static-patch! 0 ,label 2
                          ,(recur (make-uniform-vector-backing-store
                                   (uniform-array->bytevector obj)
                                   width))))))
      ((array? obj)
-      `((static-patch! ,label 1 ,(recur (shared-array-root obj)))))
+      `((static-patch! 0 ,label 1 ,(recur (shared-array-root obj)))))
      (else
       (error "don't know how to intern" obj))))
   (cond

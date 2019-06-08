@@ -2385,9 +2385,11 @@ compile_static_set (scm_jit_state *j, uint32_t obj, void *loc)
 }
 
 static void
-compile_static_patch (scm_jit_state *j, void *dst, const void *src)
+compile_static_patch (scm_jit_state *j, uint32_t tag, void *dst, const void *src)
 {
   emit_movi (j, T0, (uintptr_t) src);
+  if (tag)
+    emit_addi (j, T0, T0, tag);
   jit_sti (j->jit, dst, T0);
 }
 
@@ -4390,6 +4392,14 @@ compile_f64_set (scm_jit_state *j, uint8_t ptr, uint8_t idx, uint8_t v)
   {                                                                     \
     int32_t a = j->ip[1], b = j->ip[2];                                 \
     comp (j, j->ip + a, j->ip + b);                                     \
+  }
+
+#define COMPILE_X8_S24__LO32__L32(j, comp)                              \
+  {                                                                     \
+    uint32_t a;                                                         \
+    int32_t b = j->ip[1], c = j->ip[2];                                 \
+    UNPACK_24 (j->ip[0], a);                                            \
+    comp (j, a, j->ip + b, j->ip + c);                                  \
   }
 
 #define COMPILE_X8_F24__X8_C24__L32(j, comp)                            \

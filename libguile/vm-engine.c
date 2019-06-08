@@ -2192,23 +2192,26 @@ VM_NAME (scm_thread *thread)
       NEXT (2);
     }
 
-  /* static-patch! _:24 dst-offset:32 src-offset:32
+  /* static-patch! tag:24 dst-offset:32 src-offset:32
    *
-   * Patch a pointer at DST-OFFSET to point to SRC-OFFSET.  Both offsets
-   * are signed 32-bit values, indicating a memory address as a number
-   * of 32-bit words away from the current instruction pointer.
+   * Patch a pointer at DST-OFFSET to point to SRC-OFFSET, with TAG
+   * added in the low bits.  Both offsets are signed 32-bit values,
+   * indicating a memory address as a number of 32-bit words away from
+   * the current instruction pointer.
    */
-  VM_DEFINE_OP (86, static_patch, "static-patch!", OP3 (X32, LO32, L32))
+  VM_DEFINE_OP (86, static_patch, "static-patch!", OP3 (X8_S24, LO32, L32))
     {
       int32_t dst_offset, src_offset;
       void *src;
       void** dst_loc;
+      uint32_t tag;
 
+      UNPACK_24 (op, tag);
       dst_offset = ip[1];
       src_offset = ip[2];
 
       dst_loc = (void **) (ip + dst_offset);
-      src = ip + src_offset;
+      src = (char *) (ip + src_offset) + tag;
       VM_ASSERT (ALIGNED_P (dst_loc, void*), abort());
 
       *dst_loc = src;
