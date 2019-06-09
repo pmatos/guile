@@ -162,7 +162,7 @@
   (hashq-ref *branching-primitive-arities* name))
 
 (define (heap-type-predicate? name)
-  "Is @var{name} a predicate that needs guarding by @code{heap-object?}
+  "Is @var{name} a predicate that needs guarding by @code{thob?}
  before it is lowered to CPS?"
   (hashq-ref *heap-type-predicates* name))
 

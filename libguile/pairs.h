@@ -67,11 +67,11 @@
 /* #nil is null. */
 #define scm_is_null(x)		(scm_is_null_or_nil(x))
 
-#define SCM_CAR(x)		(SCM_VALIDATE_PAIR (x, SCM_CELL_OBJECT_0 (x)))
-#define SCM_CDR(x)		(SCM_VALIDATE_PAIR (x, SCM_CELL_OBJECT_1 (x)))
+#define SCM_CAR(x)		(SCM_VALIDATE_PAIR (x, SCM_CELL_OBJECT_0 (SCM_REMOVE_PAIR_TAG (x))))
+#define SCM_CDR(x)		(SCM_VALIDATE_PAIR (x, SCM_CELL_OBJECT_1 (SCM_REMOVE_PAIR_TAG (x))))
 
-#define SCM_SETCAR(x, v)	(SCM_VALIDATE_PAIR (x, SCM_SET_CELL_OBJECT_0 ((x), (v))))
-#define SCM_SETCDR(x, v)	(SCM_VALIDATE_PAIR (x, SCM_SET_CELL_OBJECT_1 ((x), (v))))
+#define SCM_SETCAR(x, v)	(SCM_VALIDATE_PAIR (x, SCM_SET_CELL_OBJECT_0 (SCM_REMOVE_PAIR_TAG (x), (v))))
+#define SCM_SETCDR(x, v)	(SCM_VALIDATE_PAIR (x, SCM_SET_CELL_OBJECT_1 (SCM_REMOVE_PAIR_TAG (x), (v))))
 
 #define SCM_CAAR(OBJ)		SCM_CAR (SCM_CAR (OBJ))
 #define SCM_CDAR(OBJ)		SCM_CDR (SCM_CAR (OBJ))
@@ -152,7 +152,7 @@ SCM_INLINE SCM scm_cdr (SCM x);
 SCM_INLINE_IMPLEMENTATION SCM
 scm_cons (SCM x, SCM y)
 {
-  return scm_cell (SCM_UNPACK (x), SCM_UNPACK (y));
+  return SCM_ADD_PAIR_TAG (scm_cell (SCM_UNPACK (x), SCM_UNPACK (y)));
 }
 
 SCM_INLINE_IMPLEMENTATION int
@@ -163,7 +163,7 @@ scm_is_pair (SCM x)
 
      Under the default -O2 the inlined SCM_I_CONSP test gets "optimized" so
      the fetch of the tag word from x is done before confirming it's a
-     non-immediate (SCM_NIMP).  Needless to say that bombs badly if x is a
+     tagged heap object (SCM_THOB_P).  Needless to say that bombs if x is
      immediate.  This was seen to afflict scm_srfi1_split_at and something
      deep in the bowels of ceval().  In both cases segvs resulted from
      deferencing a random immediate value.  srfi-1.test exposes the problem
@@ -219,7 +219,7 @@ scm_is_mutable_pair (SCM x)
      read-only, shareable section of the file.  Attempting to mutate a
      pair in the read-only section would cause a segmentation fault, so
      to avoid that, we really do need to enforce the restriction.  */
-  return scm_is_pair (x) && GC_is_heap_ptr (SCM2PTR (x));
+  return scm_is_pair (x) && GC_is_heap_ptr (SCM2PTR (SCM_REMOVE_PAIR_TAG (x)));
 }
 #endif /* BUILDING_LIBGUILE */
 

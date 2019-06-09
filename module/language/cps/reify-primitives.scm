@@ -216,7 +216,7 @@
         (with-cps cps
           (letk kres
                 ($kargs ('var) (var)
-                  ($branch kbad k src 'heap-object? #f (var))))
+                  ($branch kbad k src 'thob? #f (var))))
           (build-term
             ($continue kres src
               ($primcall 'lookup #f (mod-var name-var)))))))
@@ -262,7 +262,7 @@
          (letk kok ($kargs () () ($continue k src ($values (cached)))))
          (letk ktest
                ($kargs ('cached) (cached)
-                 ($branch kinit kok src 'heap-object? #f (cached))))
+                 ($branch kinit kok src 'thob? #f (cached))))
          (build-term
            ($continue ktest src
              ($primcall 'cache-ref cache-key ()))))))))
@@ -296,7 +296,7 @@
          (letk kok ($kargs () () ($continue k src ($values (cached)))))
          (letk ktest
                ($kargs ('cached) (cached)
-                 ($branch kinit kok src 'heap-object? #f (cached))))
+                 ($branch kinit kok src 'thob? #f (cached))))
          (build-term
            ($continue ktest src
              ($primcall 'cache-ref cache-key ()))))))))
@@ -531,6 +531,12 @@
                              (setk label ($kargs names vars
                                            ($continue kop src
                                              ($primcall 'load-u64 idx ()))))))))))
+                 ;; TODO: Consider adding cases for
+                 ;; 'tagged-allocate-words/immediate',
+                 ;; 'tagged-scm-ref/immediate' and
+                 ;; 'tagged-scm-set!/immediate', although at present
+                 ;; those primitives are only used for pairs, where the
+                 ;; byte-offset will always fit within the S8 operand.
                  (_ cps))))))))
         (param (error "unexpected param to reified primcall" name))
         (else

@@ -322,7 +322,7 @@ struct_finalizer_trampoline (void *ptr, void *unused_data)
 }
 
 /* A struct is a sequence of words preceded by a pointer to the struct's
-   vtable.  The vtable reference is tagged with the struct tc3.  */
+   vtable.  The vtable reference is tagged with the struct tag.  */
 static SCM
 scm_i_alloc_struct (scm_t_bits vtable_bits, int n_words)
 {

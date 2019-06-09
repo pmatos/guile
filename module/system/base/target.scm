@@ -1,6 +1,6 @@
 ;;; Compilation targets
 
-;; Copyright (C) 2011-2014,2017-2018 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2014,2017-2019 Free Software Foundation, Inc.
 
 ;; This library is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU Lesser General Public
@@ -34,7 +34,15 @@
 
             target-most-negative-fixnum
             target-most-positive-fixnum
-            target-fixnum?))
+            target-fixnum?
+
+            target-fixnum-tag
+            target-fixnum-tag-mask
+            target-fixnum-tag-bits
+
+            target-pair-tag
+            target-pair-tag-mask
+            target-pair-tag-bits))
 
 
 
@@ -172,6 +180,7 @@ SCM words."
   ;; address space.
   (/ (target-max-size-t) (target-word-size)))
 
+;; TAGS-SENSITIVE
 (define (target-max-vector-length)
   "Return the maximum vector length of the target platform, in units of
 SCM words."
@@ -179,18 +188,75 @@ SCM words."
   ;; type tag.  Additionally, restrict to 48-bit address space.
   (1- (ash 1 (min (- (* (target-word-size) 8) 8) 48))))
 
+;; TAGS-SENSITIVE
 (define (target-most-negative-fixnum)
   "Return the most negative integer representable as a fixnum on the
 target platform."
-  (- (ash 1 (- (* (target-word-size) 8) 3))))
+  (case (target-word-size)
+    ((4) #x-40000000)
+    ((8) #x-800000000000000)
+    (else (error "unexpected word size"))))
 
+;; TAGS-SENSITIVE
 (define (target-most-positive-fixnum)
   "Return the most positive integer representable as a fixnum on the
 target platform."
-  (1- (ash 1 (- (* (target-word-size) 8) 3))))
+  (case (target-word-size)
+    ((4) #x3fffffff)
+    ((8) #x7ffffffFFFFFFFF)
+    (else (error "unexpected word size"))))
 
+;; TAGS-SENSITIVE
 (define (target-fixnum? n)
   (and (exact-integer? n)
        (<= (target-most-negative-fixnum)
            n
            (target-most-positive-fixnum))))
+
+;; TAGS-SENSITIVE
+(define (target-fixnum-tag)
+  "Return the fixnum tag on the target platform."
+  (case (target-word-size)
+    ((4) 1)
+    ((8) 15)
+    (else (error "unexpected word size"))))
+
+;; TAGS-SENSITIVE
+(define (target-fixnum-tag-mask)
+  "Return the fixnum tag mask on the target platform."
+  (case (target-word-size)
+    ((4) 1)
+    ((8) 15)
+    (else (error "unexpected word size"))))
+
+;; TAGS-SENSITIVE
+(define (target-fixnum-tag-bits)
+  "Return the number of bits in the fixnum tag mask on the target platform."
+  (case (target-word-size)
+    ((4) 1)
+    ((8) 4)
+    (else (error "unexpected word size"))))
+
+;; TAGS-SENSITIVE
+(define (target-pair-tag)
+  "Return the pair tag on the target platform."
+  (case (target-word-size)
+    ((4) 4)
+    ((8) 6)
+    (else (error "unexpected word size"))))
+
+;; TAGS-SENSITIVE
+(define (target-pair-tag-mask)
+  "Return the pair tag mask on the target platform."
+  (case (target-word-size)
+    ((4) 7)
+    ((8) 15)
+    (else (error "unexpected word size"))))
+
+;; TAGS-SENSITIVE
+(define (target-pair-tag-bits)
+  "Return the number of bits in the pair tag mask on the target platform."
+  (case (target-word-size)
+    ((4) 3)
+    ((8) 4)
+    (else (error "unexpected word size"))))

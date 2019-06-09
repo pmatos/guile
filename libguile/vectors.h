@@ -79,7 +79,7 @@ SCM_API SCM *scm_vector_writable_elements (SCM vec,
    immutability.  */
 #define SCM_F_VECTOR_IMMUTABLE 0x80UL
 #define SCM_I_IS_MUTABLE_VECTOR(x)                              \
-  (SCM_NIMP (x) &&                                              \
+  (SCM_THOB_P (x) &&                                            \
    ((SCM_CELL_TYPE (x) & (0x7f | SCM_F_VECTOR_IMMUTABLE))       \
     == scm_tc7_vector))
 #define SCM_I_IS_VECTOR(x)     (SCM_HAS_TYP7 (x, scm_tc7_vector))

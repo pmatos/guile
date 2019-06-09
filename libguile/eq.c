@@ -159,7 +159,7 @@ scm_i_fraction_equalp (SCM x, SCM y)
 int
 scm_i_heap_numbers_equal_p (SCM x, SCM y)
 {
-  if (SCM_IMP (x)) abort();
+  if (!SCM_THOB_P (x)) abort();
   switch (SCM_TYP16 (x))
     {
     case scm_tc16_big:
@@ -216,9 +216,9 @@ SCM scm_eqv_p (SCM x, SCM y)
 {
   if (scm_is_eq (x, y))
     return SCM_BOOL_T;
-  if (SCM_IMP (x))
+  if (!SCM_THOB_P (x))
     return SCM_BOOL_F;
-  if (SCM_IMP (y))
+  if (!SCM_THOB_P (y))
     return SCM_BOOL_F;
 
   /* this ensures that types and scm_length are the same. */
@@ -299,18 +299,28 @@ scm_equal_p (SCM x, SCM y)
   SCM_TICK;
   if (scm_is_eq (x, y))
     return SCM_BOOL_T;
-  if (SCM_IMP (x))
-    return SCM_BOOL_F;
-  if (SCM_IMP (y))
-    return SCM_BOOL_F;
-  if (scm_is_pair (x) && scm_is_pair (y))
+
+  if (scm_is_pair (x))
     {
-      if (scm_is_false (scm_equal_p (SCM_CAR (x), SCM_CAR (y))))
-	return SCM_BOOL_F;
-      x = SCM_CDR(x);
-      y = SCM_CDR(y);
-      goto tailrecurse;
+      if (scm_is_pair (y))
+        {
+          if (scm_is_false (scm_equal_p (SCM_CAR (x), SCM_CAR (y))))
+            return SCM_BOOL_F;
+          x = SCM_CDR(x);
+          y = SCM_CDR(y);
+          goto tailrecurse;
+        }
+      else
+        return SCM_BOOL_F;
     }
+  else if (scm_is_pair (y))
+    return SCM_BOOL_F;
+
+  if (!SCM_THOB_P (x))
+    return SCM_BOOL_F;
+  if (!SCM_THOB_P (y))
+    return SCM_BOOL_F;
+
   if (SCM_TYP7 (x) == scm_tc7_smob && SCM_TYP16 (x) == SCM_TYP16 (y))
     {
       int i = SCM_SMOBNUM (x);

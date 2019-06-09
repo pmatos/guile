@@ -38,6 +38,7 @@
   #:use-module (language cps intmap)
   #:use-module (language cps intset)
   #:use-module (system vm assembler)
+  #:use-module (system base target)
   #:use-module (system base types internal)
   #:export (compile-bytecode))
 
@@ -161,16 +162,29 @@
          (emit-allocate-words asm (from-sp dst) (from-sp (slot nfields))))
         (($ $primcall 'allocate-words/immediate (annotation . nfields))
          (emit-allocate-words/immediate asm (from-sp dst) nfields))
+        (($ $primcall 'tagged-allocate-words/immediate (annotation . nfields))
+         (let ((tag (match annotation
+                      ('pair (target-pair-tag)))))
+           (emit-tagged-allocate-words/immediate asm (from-sp dst) nfields
+                                                 tag)))
         (($ $primcall 'scm-ref annotation (obj idx))
          (emit-scm-ref asm (from-sp dst) (from-sp (slot obj))
                        (from-sp (slot idx))))
         (($ $primcall 'scm-ref/tag annotation (obj))
          (let ((tag (match annotation
-                      ('pair %tc1-pair)
+                      ('pair 0)  ; TAGS-SENSITIVE
                       ('struct %tc3-struct))))
            (emit-scm-ref/tag asm (from-sp dst) (from-sp (slot obj)) tag)))
         (($ $primcall 'scm-ref/immediate (annotation . idx) (obj))
          (emit-scm-ref/immediate asm (from-sp dst) (from-sp (slot obj)) idx))
+        (($ $primcall 'tagged-scm-ref/immediate (annotation . idx) (obj))
+         (let* ((tag (match annotation
+                       ('pair (target-pair-tag))))
+                (byte-offset-u (modulo (- (* idx (target-word-size))
+                                          tag)
+                                       256)))
+           (emit-tagged-scm-ref/immediate asm (from-sp dst) (from-sp (slot obj))
+                                          byte-offset-u)))
         (($ $primcall 'word-ref annotation (obj idx))
          (emit-word-ref asm (from-sp dst) (from-sp (slot obj))
                        (from-sp (slot idx))))
@@ -298,13 +312,21 @@
                         (from-sp (slot val))))
         (($ $primcall 'scm-set!/tag annotation (obj val))
          (let ((tag (match annotation
-                      ('pair %tc1-pair)
+                      ('pair 0)  ; TAGS-SENSITIVE
                       ('struct %tc3-struct))))
            (emit-scm-set!/tag asm (from-sp (slot obj)) tag
                               (from-sp (slot val)))))
         (($ $primcall 'scm-set!/immediate (annotation . idx) (obj val))
          (emit-scm-set!/immediate asm (from-sp (slot obj)) idx
                                   (from-sp (slot val))))
+        (($ $primcall 'tagged-scm-set!/immediate (annotation . idx) (obj val))
+         (let* ((tag (match annotation
+                       ('pair (target-pair-tag))))
+                (byte-offset-u (modulo (- (* idx (target-word-size))
+                                          tag)
+                                       256)))
+           (emit-tagged-scm-set!/immediate asm (from-sp (slot obj)) byte-offset-u
+                                           (from-sp (slot val)))))
         (($ $primcall 'word-set! annotation (obj idx val))
          (emit-word-set! asm (from-sp (slot obj)) (from-sp (slot idx))
                         (from-sp (slot val))))
@@ -451,7 +473,8 @@
       (match (vector op param args)
         ;; Immediate type tag predicates.
         (#('fixnum? #f (a)) (unary emit-fixnum? a))
-        (#('heap-object? #f (a)) (unary emit-heap-object? a))
+        (#('thob? #f (a)) (unary emit-thob? a))
+        (#('pair? #f (a)) (unary emit-pair? a))
         (#('char? #f (a)) (unary emit-char? a))
         (#('eq-false? #f (a)) (unary emit-eq-false? a))
         (#('eq-nil? #f (a)) (unary emit-eq-nil? a))
@@ -464,7 +487,6 @@
         (#('false? #f (a)) (unary emit-false? a))
         (#('nil? #f (a)) (unary emit-nil? a))
         ;; Heap type tag predicates.
-        (#('pair? #f (a)) (unary emit-pair? a))
         (#('struct? #f (a)) (unary emit-struct? a))
         (#('symbol? #f (a)) (unary emit-symbol? a))
         (#('variable? #f (a)) (unary emit-variable? a))

@@ -148,7 +148,7 @@ VARARG_MPZ_ITERATOR (mpz_clear)
   #define SCM_I_NUMTAG_COMPLEX scm_tc16_complex
   #define SCM_I_NUMTAG(x) \
     (SCM_I_INUMP(x) ? SCM_I_NUMTAG_INUM \
-       : (SCM_IMP(x) ? SCM_I_NUMTAG_NOTNUM \
+       : (!SCM_THOB_P(x) ? SCM_I_NUMTAG_NOTNUM \
          : (((0xfcff & SCM_CELL_TYPE (x)) == scm_tc7_number) ? SCM_TYP16(x) \
            : SCM_I_NUMTAG_NOTNUM)))
 */

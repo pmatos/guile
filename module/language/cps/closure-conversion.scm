@@ -555,7 +555,7 @@ term."
          (with-cps cps
            (build-term
              ($continue k src
-               ($primcall 'allocate-words/immediate `(pair . 2) ())))))
+               ($primcall 'tagged-allocate-words/immediate `(pair . 2) ())))))
         ;; Well-known callee with more than two free variables; the closure
         ;; is a vector.
         (#(#t nfree)

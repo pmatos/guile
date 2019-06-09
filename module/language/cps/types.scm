@@ -615,12 +615,12 @@ minimum, and maximum."
     (when (eqv? (&type val) &special-immediate)
       (restrict! val &special-immediate (1+ &false) +inf.0)))))
 
-(define-predicate-inferrer (heap-object? val true?)
-  (define &immediate-types
-    (logior &fixnum &char &special-immediate))
-  (define &heap-object-types
-    (logand &all-types (lognot &immediate-types)))
-  (restrict! val (if true? &heap-object-types &immediate-types) -inf.0 +inf.0))
+(define-predicate-inferrer (thob? val true?)
+  (define &non-thob-types
+    (logior &pair &fixnum &char &special-immediate))
+  (define &thob-types
+    (logand &all-types (lognot &non-thob-types)))
+  (restrict! val (if true? &thob-types &non-thob-types) -inf.0 +inf.0))
 
 (define-predicate-inferrer (heap-number? val true?)
   (define &heap-number-types
@@ -742,12 +742,23 @@ minimum, and maximum."
     ((annotation . size)
      (define! result (annotation->type annotation) size size))))
 
+(define-type-inferrer/param (tagged-allocate-words/immediate param result)
+  (match param
+    ((annotation . size)
+     (define! result (annotation->type annotation) size size))))
+
 (define-type-inferrer/param (scm-ref param obj idx result)
   (restrict! obj (annotation->type param)
              (1+ (&min/0 idx)) (target-max-size-t/scm))
   (define! result &all-types -inf.0 +inf.0))
 
 (define-type-inferrer/param (scm-ref/immediate param obj result)
+  (match param
+    ((annotation . idx)
+     (restrict! obj (annotation->type annotation) (1+ idx) +inf.0)
+     (define! result &all-types -inf.0 +inf.0))))
+
+(define-type-inferrer/param (tagged-scm-ref/immediate param obj result)
   (match param
     ((annotation . idx)
      (restrict! obj (annotation->type annotation) (1+ idx) +inf.0)
@@ -763,6 +774,11 @@ minimum, and maximum."
   (restrict! obj (annotation->type param) (1+ (&min/0 idx)) +inf.0))
 
 (define-type-inferrer/param (scm-set!/immediate param obj val)
+  (match param
+    ((annotation . idx)
+     (restrict! obj (annotation->type annotation) (1+ idx) +inf.0))))
+
+(define-type-inferrer/param (tagged-scm-set!/immediate param obj val)
   (match param
     ((annotation . idx)
      (restrict! obj (annotation->type annotation) (1+ idx) +inf.0))))

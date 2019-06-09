@@ -324,7 +324,7 @@ SCM_DEFINE (scm_procedure_source, "procedure-source", 1, 0, 0,
         return src;
 
       if (SCM_STRUCTP (proc) && SCM_STRUCT_APPLICABLE_P (proc)
-          && SCM_HEAP_OBJECT_P ((proc = SCM_STRUCT_PROCEDURE (proc))))
+          && SCM_THOB_P ((proc = SCM_STRUCT_PROCEDURE (proc))))
         continue;
     }
   while (0);

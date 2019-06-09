@@ -191,6 +191,7 @@ sites."
                 (match exp
                   (($ $primcall
                       (or 'scm-set! 'scm-set!/tag 'scm-set!/immediate
+                          'tagged-scm-set!/immediate
                           'word-set! 'word-set!/immediate) _
                       (obj . _))
                    (or (var-live? obj live-vars)

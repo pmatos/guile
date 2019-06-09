@@ -245,9 +245,12 @@ scm_c_weak_vector_set_x (SCM wv, size_t k, SCM x)
   
   elts[k] = x;
 
-  if (SCM_HEAP_OBJECT_P (x))
+  if (SCM_THOB_P (x))
     SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &elts[k],
                                       SCM2PTR (x));
+  else if (scm_is_pair (x))
+    SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &elts[k],
+                                      SCM2PTR (SCM_REMOVE_PAIR_TAG (x)));
 }
 #undef FUNC_NAME
 

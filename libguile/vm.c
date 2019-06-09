@@ -748,8 +748,8 @@ scm_i_vm_mark_stack (struct scm_vm *vp, struct GC_ms_entry *mark_stack_ptr,
               break;
             case SLOT_DESC_UNUSED:
             case SLOT_DESC_LIVE_GC:
-              if (SCM_NIMP (sp->as_scm) &&
-                  sp->as_ptr >= lower && sp->as_ptr <= upper)
+              if (SCM_HEAP_OBJECT_P (sp->as_scm)
+                  && sp->as_ptr >= lower && sp->as_ptr <= upper)
                 mark_stack_ptr = GC_mark_and_push (sp->as_ptr,
                                                    mark_stack_ptr,
                                                    mark_stack_limit,

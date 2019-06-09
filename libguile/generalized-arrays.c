@@ -46,7 +46,7 @@ SCM_INTERNAL SCM scm_i_array_set_x (SCM v, SCM obj,
 int
 scm_is_array (SCM obj)
 {
-  if (!SCM_HEAP_OBJECT_P (obj))
+  if (!SCM_THOB_P (obj))
     return 0;
 
   switch (SCM_TYP7 (obj))

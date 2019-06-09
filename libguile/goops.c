@@ -203,13 +203,12 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
 	    "Return the class of @var{x}.")
 #define FUNC_NAME s_scm_class_of
 {
-  switch (SCM_ITAG3 (x))
+  switch (SCM_ITAG (x))
     {
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
+    case scm_itags_fixnum:
       return class_integer;
 
-    case scm_tc3_imm24:
+    case scm_itags_imm24:
       if (SCM_CHARP (x))
 	return class_char;
       else if (scm_is_bool (x))
@@ -219,11 +218,12 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
       else
         return class_unknown;
 
-    case scm_tc3_cons:
+    case scm_itags_pair:
+      return class_pair;
+
+    case scm_itags_thob:
       switch (SCM_TYP7 (x))
 	{
-	case scm_tcs_cons_nimcar:
-	  return class_pair;
 	case scm_tc7_symbol:
 	  return class_symbol;
 	case scm_tc7_vector:
@@ -325,18 +325,8 @@ SCM_DEFINE (scm_class_of, "class-of", 1, 0, 0,
               return scm_i_define_class_for_vtable (vtable);
           }
 	default:
-	  if (scm_is_pair (x))
-	    return class_pair;
-	  else
-	    return class_unknown;
+          return class_unknown;
 	}
-
-    case scm_tc3_struct:
-    case scm_tc3_tc7_1:
-    case scm_tc3_tc7_2:
-      /* case scm_tc3_unused: */
-      /* Never reached */
-      break;
     }
   return class_unknown;
 }

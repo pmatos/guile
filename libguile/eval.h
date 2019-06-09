@@ -33,15 +33,6 @@
 
 
 
-/* {Ilocs}
- *
- * Ilocs are relative pointers into local environment structures.
- * 
- */
-#define SCM_ILOCP(n)		(SCM_ITAG8(n)==scm_tc8_iloc)
-
-
-
 /* {Evaluator}
  */
 

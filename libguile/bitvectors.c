@@ -48,7 +48,7 @@
 
 #define IS_BITVECTOR(obj)         SCM_HAS_TYP7  ((obj), scm_tc7_bitvector)
 #define IS_MUTABLE_BITVECTOR(x)                                 \
-  (SCM_NIMP (x) &&                                              \
+  (SCM_THOB_P (x) &&                                            \
    ((SCM_CELL_TYPE (x) & (0x7f | SCM_F_BITVECTOR_IMMUTABLE))    \
     == scm_tc7_bitvector))
 #define BITVECTOR_LENGTH(obj)   ((size_t)SCM_CELL_WORD_1(obj))

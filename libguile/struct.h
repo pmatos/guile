@@ -109,7 +109,7 @@
 
 typedef void (*scm_t_struct_finalize) (SCM obj);
 
-#define SCM_STRUCTP(X)  		(!SCM_IMP(X) && (SCM_TYP3(X) == scm_tc3_struct))
+#define SCM_STRUCTP(X)  		(SCM_THOB_P(X) && (SCM_CELL_TYPE (X) & 7) == scm_tc3_struct)
 #define SCM_STRUCT_SLOTS(X) 		(SCM_CELL_OBJECT_LOC(X, 1))
 #define SCM_STRUCT_SLOT_REF(X,I) 	(SCM_STRUCT_SLOTS (X)[(I)])
 #define SCM_STRUCT_SLOT_SET(X,I,V) 	SCM_STRUCT_SLOTS (X)[(I)]=(V)

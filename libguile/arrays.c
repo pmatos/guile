@@ -635,7 +635,7 @@ SCM_DEFINE (scm_transpose_array, "transpose-array", 1, 0, 1,
   int ndim, i, k;
 
   SCM_VALIDATE_REST_ARGUMENT (args);
-  SCM_ASSERT (SCM_HEAP_OBJECT_P (ra), ra, SCM_ARG1, FUNC_NAME);
+  SCM_ASSERT (SCM_THOB_P (ra), ra, SCM_ARG1, FUNC_NAME);
 
   switch (scm_c_array_rank (ra))
     {

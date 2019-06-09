@@ -166,7 +166,7 @@ scm_inline_words (scm_thread *thread, scm_t_bits car, uint32_t n_words)
 static inline SCM
 scm_inline_cons (scm_thread *thread, SCM x, SCM y)
 {
-  return scm_inline_cell (thread, SCM_UNPACK (x), SCM_UNPACK (y));
+  return SCM_ADD_PAIR_TAG (scm_inline_cell (thread, SCM_UNPACK (x), SCM_UNPACK (y)));
 }
 
 

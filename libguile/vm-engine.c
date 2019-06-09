@@ -3234,10 +3234,96 @@ VM_NAME (scm_thread *thread)
   VM_DEFINE_OP (153, f64_set, "f64-set!", OP1 (X8_S8_S8_S8))
     PTR_SET (double, F64);
 
-  VM_DEFINE_OP (154, unused_154, NULL, NOP)
-  VM_DEFINE_OP (155, unused_155, NULL, NOP)
-  VM_DEFINE_OP (156, unused_156, NULL, NOP)
-  VM_DEFINE_OP (157, unused_157, NULL, NOP)
+  /* make-tagged-non-immediate dst:12 tag:12 offset:32
+   *
+   * Load a pointer to statically allocated memory into DST, with TAG
+   * applied.  The object's memory will be found OFFSET 32-bit words
+   * away from the current instruction pointer.  OFFSET is a signed
+   * value.  The intention here is that the compiler would produce an
+   * object file containing the words of a non-immediate object, and
+   * this instruction creates a pointer to that memory, effectively
+   * resurrecting that object.
+   *
+   * Whether the object is mutable or immutable depends on where it was
+   * allocated by the compiler, and loaded by the loader.
+   */
+  VM_DEFINE_OP (154, make_tagged_non_immediate, "make-tagged-non-immediate", DOP2 (X8_S12_C12, N32))
+    {
+      uint32_t dst, tag;
+      int32_t offset;
+      uint32_t* loc;
+      scm_t_bits unpacked;
+
+      UNPACK_12_12 (op, dst, tag);
+      offset = ip[1];
+      loc = ip + offset;
+      unpacked = (scm_t_bits) loc;
+
+      VM_ASSERT (!(unpacked & scm_pair_tag_mask), abort());   /* temporary debugging hack XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX */
+
+      SP_SET (dst, SCM_PACK (unpacked + tag));
+
+      NEXT (2);
+    }
+
+  /* tagged-scm-ref/immediate dst:8 obj:8 byte-offset:8
+   *
+   * Load the SCM object at BYTE-OFFSET from local OBJ, and store it to
+   * DST.  BYTE-OFFSET is a int8_t immediate.  The resulting address
+   * must be aligned on a word boundary.  This is intended to be used
+   * when OBJ is a tagged pointer, with BYTE-OFFSET equal to the true
+   * byte offset minus OBJ's pointer tag.
+   */
+  VM_DEFINE_OP (155, tagged_scm_ref_immediate, "tagged-scm-ref/immediate", DOP1 (X8_S8_S8_C8))
+    {
+      uint8_t dst, obj;
+      int8_t byte_offset;
+
+      UNPACK_8_8_8 (op, dst, obj, byte_offset);
+
+      SP_SET (dst, SCM_CELL_OBJECT_0 (SCM_PACK (byte_offset + SCM_UNPACK (SP_REF (obj)))));
+
+      NEXT (1);
+    }
+
+  /* tagged-scm-set!/immediate obj:8 byte-offset:8 val:8
+   *
+   * Store the SCM local VAL into object OBJ at BYTE-OFFSET.
+   * BYTE-OFFSET is an int8_t immediate.  The resulting address must be
+   * aligned on a word boundary.  This is intended to be used when OBJ
+   * is a tagged pointer, with BYTE-OFFSET equal to the true byte offset
+   * minus OBJ's pointer tag.
+   */
+  VM_DEFINE_OP (156, tagged_scm_set_immediate, "tagged-scm-set!/immediate", OP1 (X8_S8_C8_S8))
+    {
+      uint8_t obj, val;
+      int8_t byte_offset;
+
+      UNPACK_8_8_8 (op, obj, byte_offset, val);
+
+      SCM_SET_CELL_OBJECT_0 (SCM_PACK (byte_offset + SCM_UNPACK (SP_REF (obj))),
+                             SP_REF (val));
+
+      NEXT (1);
+    }
+
+  /* tagged-allocate-words/immediate dst:8 count:8 tag:8
+   *
+   * Allocate a fresh GC-traced object consisting of COUNT words and
+   * store it into DST with TAG applied.  COUNT and TAG are immediates.
+   */
+  VM_DEFINE_OP (157, tagged_allocate_words_immediate, "tagged-allocate-words/immediate", DOP1 (X8_S8_C8_C8))
+    {
+      uint8_t dst, size, tag;
+
+      UNPACK_8_8_8 (op, dst, size, tag);
+
+      SYNC_IP ();
+      SP_SET (dst, SCM_PACK (tag + SCM_UNPACK (CALL_INTRINSIC (allocate_words, (thread, size)))));
+
+      NEXT (1);
+    }
+
   VM_DEFINE_OP (158, unused_158, NULL, NOP)
   VM_DEFINE_OP (159, unused_159, NULL, NOP)
   VM_DEFINE_OP (160, unused_160, NULL, NOP)

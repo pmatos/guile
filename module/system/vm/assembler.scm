@@ -91,7 +91,8 @@
             emit-jnge
 
             emit-fixnum?
-            emit-heap-object?
+            emit-thob?
+            emit-pair?
             emit-char?
             emit-eq-null?
             emit-eq-nil?
@@ -110,7 +111,6 @@
             (emit-throw/value* . emit-throw/value)
             (emit-throw/value+data* . emit-throw/value+data)
 
-            emit-pair?
             emit-struct?
             emit-symbol?
             emit-variable?
@@ -144,6 +144,7 @@
 
             emit-allocate-words
             emit-allocate-words/immediate
+            emit-tagged-allocate-words/immediate
 
             emit-scm-ref
             emit-scm-set!
@@ -151,6 +152,9 @@
             emit-scm-set!/tag
             emit-scm-ref/immediate
             emit-scm-set!/immediate
+
+            emit-tagged-scm-ref/immediate
+            emit-tagged-scm-set!/immediate
 
             emit-word-ref
             emit-word-set!
@@ -643,6 +647,8 @@ later by the linker."
            ((X8_S8_S8_C8 a b c)
             (emit asm (pack-u8-u8-u8-u8 opcode a b c)))
            ((X8_S8_C8_S8 a b c)
+            (emit asm (pack-u8-u8-u8-u8 opcode a b c)))
+           ((X8_S8_C8_C8 a b c)
             (emit asm (pack-u8-u8-u8-u8 opcode a b c))))))
 
       (define (pack-tail-word asm type)
@@ -884,6 +890,23 @@ later by the linker."
     (emit-push asm a)
     (encode-X8_S8_C8_S8 asm 0 const 0 opcode)
     (emit-pop asm dst))))
+(define (encode-X8_S8_C8_C8!/shuffle asm a const1 const2 opcode)
+  (cond
+   ((< a (ash 1 8))
+    (encode-X8_S8_C8_C8 asm a const1 const2 opcode))
+   (else
+    (emit-push asm a)
+    (encode-X8_S8_C8_C8 asm 0 const1 const2 opcode)
+    (emit-drop asm 1))))
+(define (encode-X8_S8_C8_C8<-/shuffle asm dst const1 const2 opcode)
+  (cond
+   ((< dst (ash 1 8))
+    (encode-X8_S8_C8_C8 asm dst const1 const2 opcode))
+   (else
+    ;; Push garbage value to make space for dst.
+    (emit-push asm dst)
+    (encode-X8_S8_C8_C8 asm 0 const1 const2 opcode)
+    (emit-pop asm dst))))
 (define (encode-X8_S8_S8_S8-C32<-/shuffle asm dst a b c32 opcode)
   (cond
    ((< (logior dst a b) (ash 1 8))
@@ -954,6 +977,8 @@ later by the linker."
       (('! 'X8_S12_S12 'C32)     #'encode-X8_S12_S12-C32!/shuffle)
       (('! 'X8_S8_C8_S8)         #'encode-X8_S8_C8_S8!/shuffle)
       (('<- 'X8_S8_C8_S8)        #'encode-X8_S8_C8_S8<-/shuffle)
+      (('! 'X8_S8_C8_C8)         #'encode-X8_S8_C8_C8!/shuffle)
+      (('<- 'X8_S8_C8_C8)        #'encode-X8_S8_C8_C8<-/shuffle)
       (else (encoder-name operands))))
 
   (define-syntax assembler
@@ -996,6 +1021,7 @@ later by the linker."
           ('X8_S8_S8_S8 #'(a b c))
           ('X8_S8_S8_C8 #'(a b c))
           ('X8_S8_C8_S8 #'(a b c))
+          ('X8_S8_C8_C8 #'(a b c))
           ('X32 #'())))
 
       (syntax-case x ()
@@ -1097,28 +1123,25 @@ lists.  This procedure can be called many times before calling
 (define (immediate-bits asm x)
   "Return the bit pattern to write into the buffer if @var{x} is
 immediate, and @code{#f} otherwise."
-  (define tc2-int 2)
   (if (exact-integer? x)
       ;; Object is an immediate if it is a fixnum on the target.
-      (call-with-values (lambda ()
-                          (case (asm-word-size asm)
-                            ((4) (values    (- #x20000000)
-                                            #x1fffffff))
-                            ((8) (values    (- #x2000000000000000)
-                                            #x1fffffffFFFFFFFF))
-                            (else (error "unexpected word size"))))
-        (lambda (fixnum-min fixnum-max)
-          (and (<= fixnum-min x fixnum-max)
-               (let ((fixnum-bits (if (negative? x)
-                                      (+ fixnum-max 1 (logand x fixnum-max))
-                                      x)))
-                 (logior (ash fixnum-bits 2) tc2-int)))))
+      (and (target-fixnum? x)
+           (let* ((fixnum-max (target-most-positive-fixnum))
+                  (fixnum-bits (if (negative? x)
+                                   (+ fixnum-max 1 (logand x fixnum-max))
+                                   x)))
+             (logior (ash fixnum-bits (target-fixnum-tag-bits))
+                     (target-fixnum-tag))))
       ;; Otherwise, the object will be immediate on the target if and
       ;; only if it is immediate on the host.  Except for integers,
       ;; which we handle specially above, any immediate value is an
       ;; immediate on both 32-bit and 64-bit targets.
       (let ((bits (object-address x)))
-        (and (not (zero? (logand bits 6)))
+        ;; TAGS-SENSITIVE
+        (and (not (= (logand bits %thob-tag-mask)
+                     %thob-tag))
+             (not (= (logand bits (target-pair-tag-mask))
+                     (target-pair-tag)))
              bits))))
 
 (define-record-type <stringbuf>
@@ -1169,10 +1192,13 @@ table, its existing label is used directly."
   (define (field dst n obj)
     (let ((src (recur obj)))
       (if src
-          (if (statically-allocatable? obj)
-              `((static-patch! 0 ,dst ,n ,src))
-              `((static-ref 1 ,src)
-                (static-set! 1 ,dst ,n)))
+          (cond ((pair? obj)
+                 `((static-patch! (target-pair-tag) ,dst ,n ,src)))
+                ((statically-allocatable? obj)
+                 `((static-patch! 0 ,dst ,n ,src)))
+                (else
+                 `((static-ref 1 ,src)
+                   (static-set! 1 ,dst ,n))))
           '())))
   (define (intern obj label)
     (cond
@@ -1286,6 +1312,9 @@ returned instead."
            (emit-make-long-immediate asm dst obj))
           (else
            (emit-make-long-long-immediate asm dst obj)))))
+   ((pair? obj)
+    (emit-make-tagged-non-immediate asm dst (target-pair-tag)
+                                    (intern-non-immediate asm obj)))
    ((statically-allocatable? obj)
     (emit-make-non-immediate asm dst (intern-non-immediate asm obj)))
    (else
@@ -1781,7 +1810,7 @@ should be .data or .rodata), and return the resulting linker object.
                                bitvector-immutable-flag)
                        (logior tc7-bytevector
                                ;; Bytevector immutable flag also shifted
-                               ;; left.
+                               ;; left.  TAGS-SENSITIVE
                                (ash (logior bytevector-immutable-flag
                                             (array-type-code obj))
                                     7)))))
@@ -1858,7 +1887,7 @@ should be .data or .rodata), and return the resulting linker object.
      ((vlist-null? data) #f)
      (else
       (let* ((byte-len (vhash-fold (lambda (k v len)
-                                     (+ (byte-length k) (align len 8)))
+                                     (+ (byte-length k) (align len 16)))   ; temporary alignment hack XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                                    0 data))
              (buf (make-bytevector byte-len 0)))
         (let lp ((i 0) (pos 0) (relocs '()) (symbols '()))
@@ -1867,7 +1896,7 @@ should be .data or .rodata), and return the resulting linker object.
                 ((obj . obj-label)
                  (write buf pos obj)
                  (lp (1+ i)
-                     (align (+ (byte-length obj) pos) 8)
+                     (align (+ (byte-length obj) pos) 16)   ; temporary alignment hack XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                      (add-relocs obj pos relocs)
                      (cons (make-linker-symbol obj-label pos) symbols))))
               (make-object asm name buf relocs symbols

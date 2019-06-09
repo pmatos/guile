@@ -51,7 +51,9 @@
       ((X8_F12_F12) 2)
       ((X8_S8_S8_S8) 3)
       ((X8_S8_S8_C8) 3)
-      ((X8_S8_C8_S8) 3)))
+      ((X8_S8_C8_S8) 3)
+      ((X8_S8_C8_C8) 3)
+      (else (error "unknown first word type" word))))
   (define (tail-word-arity word)
     (case word
       ((C32) 1)
@@ -74,7 +76,8 @@
       ((X8_S24) 1)
       ((X8_F24) 1)
       ((X8_C24) 1)
-      ((X8_L24) 1)))
+      ((X8_L24) 1)
+      (else (error "unknown tail word type" word))))
   (match args
     ((arg0 . args)
      (fold (lambda (arg arity)

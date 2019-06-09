@@ -305,7 +305,7 @@ the LABELS that are clobbered by the effects of LABEL."
   ((null? arg))
   ((false? arg))
   ((nil? arg))
-  ((heap-object? arg))
+  ((thob? arg))
   ((pair? arg))
   ((symbol? arg))
   ((variable? arg))
@@ -363,6 +363,11 @@ the LABELS that are clobbered by the effects of LABEL."
                                      ((ann . size)
                                       (&allocate
                                        (annotation->memory-kind ann)))))
+  ((tagged-allocate-words/immediate)
+                                   (match param
+                                     ((ann . size)
+                                      (&allocate
+                                       (annotation->memory-kind ann)))))
   ((scm-ref obj idx)               (&read-object
                                     (annotation->memory-kind param)))
   ((scm-ref/tag obj)               (&read-field
@@ -371,11 +376,20 @@ the LABELS that are clobbered by the effects of LABEL."
                                      ((ann . idx)
                                       (&read-field
                                        (annotation->memory-kind ann) idx))))
+  ((tagged-scm-ref/immediate obj)  (match param
+                                     ((ann . idx)
+                                      (&read-field
+                                       (annotation->memory-kind ann) idx))))
   ((scm-set! obj idx val)          (&write-object
                                     (annotation->memory-kind param)))
   ((scm-set/tag! obj val)          (&write-field
                                     (annotation->memory-kind param) 0))
   ((scm-set!/immediate obj val)    (match param
+                                     ((ann . idx)
+                                      (&write-field
+                                       (annotation->memory-kind ann) idx))))
+  ((tagged-scm-set!/immediate obj val)
+                                   (match param
                                      ((ann . idx)
                                       (&write-field
                                        (annotation->memory-kind ann) idx))))

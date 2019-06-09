@@ -591,21 +591,12 @@ print_vector_or_weak_vector (SCM v, size_t len, SCM (*ref) (SCM, size_t),
 static void
 iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 {
-  switch (SCM_ITAG3 (exp))
+  switch (SCM_ITAG (exp))
     {
-    case scm_tc3_tc7_1:
-    case scm_tc3_tc7_2:
-      /* These tc3 tags should never occur in an immediate value.  They are
-       * only used in cell types of non-immediates, i. e. the value returned
-       * by SCM_CELL_TYPE (exp) can use these tags.
-       */
-      scm_ipruk ("immediate", exp, port);
-      break;
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
+    case scm_itags_fixnum:
       scm_intprint (SCM_I_INUM (exp), 10, port);
       break;
-    case scm_tc3_imm24:
+    case scm_itags_imm24:
       if (SCM_CHARP (exp))
 	{
 	  if (SCM_WRITINGP (pstate))
@@ -624,7 +615,12 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	  scm_ipruk ("immediate", exp, port);
 	}
       break;
-    case scm_tc3_cons:
+    case scm_itags_pair:
+      ENTER_NESTED_DATA (pstate, exp, circref);
+      scm_iprlist ("(", exp, ')', port, pstate);
+      EXIT_NESTED_DATA (pstate);
+      break;
+    case scm_itags_thob:
       switch (SCM_TYP7 (exp))
 	{
 	case scm_tcs_struct:
@@ -646,12 +642,6 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	      }
 	    EXIT_NESTED_DATA (pstate);
 	  }
-	  break;
-	case scm_tcs_cons_imcar:
-	case scm_tcs_cons_nimcar:
-	  ENTER_NESTED_DATA (pstate, exp, circref);
-	  scm_iprlist ("(", exp, ')', port, pstate);
-	  EXIT_NESTED_DATA (pstate);
 	  break;
 	circref:
 	  print_circref (port, pstate, exp);
@@ -787,7 +777,7 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	  EXIT_NESTED_DATA (pstate);
 	  break;
 	default:
-          /* case scm_tcs_closures: */
+          /* fall through */
 	punk:
 	  scm_ipruk ("type", exp, port);
 	}

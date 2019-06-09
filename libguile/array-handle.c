@@ -170,7 +170,7 @@ initialize_vector_handle (scm_t_array_handle *h, size_t len,
 void
 scm_array_get_handle (SCM array, scm_t_array_handle *h)
 {
-  if (!SCM_HEAP_OBJECT_P (array))
+  if (!SCM_THOB_P (array))
     scm_wrong_type_arg_msg (NULL, 0, array, "array");
 
   h->array = array;

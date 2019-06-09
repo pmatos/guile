@@ -419,9 +419,12 @@ resize_set (scm_t_weak_set *set)
       new_entries[new_k].hash = copy.hash;
       new_entries[new_k].key = copy.key;
 
-      if (SCM_HEAP_OBJECT_P (SCM_PACK (copy.key)))
+      if (SCM_THOB_P (SCM_PACK (copy.key)))
         SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &new_entries[new_k].key,
                                           (void *) new_entries[new_k].key);
+      else if (scm_is_pair (SCM_PACK (copy.key)))
+        SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &new_entries[new_k].key,
+                                          (void *) (new_entries[new_k].key - scm_pair_tag));
     }
 }
 
@@ -580,9 +583,12 @@ weak_set_add_x (scm_t_weak_set *set, unsigned long hash,
   entries[k].hash = hash;
   entries[k].key = SCM_UNPACK (obj);
 
-  if (SCM_HEAP_OBJECT_P (obj))
+  if (SCM_THOB_P (obj))
     SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &entries[k].key,
                                       (void *) SCM2PTR (obj));
+  else if (scm_is_pair (obj))
+    SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &entries[k].key,
+                                      (void *) SCM2PTR (SCM_REMOVE_PAIR_TAG (obj)));
 
   return obj;
 }

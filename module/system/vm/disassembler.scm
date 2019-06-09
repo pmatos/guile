@@ -107,7 +107,8 @@
               (unpack-s12 (ash word -20))))
           ((X8_S8_S8_S8
             X8_S8_S8_C8
-            X8_S8_C8_S8)
+            X8_S8_C8_S8
+            X8_S8_C8_C8)
            #'((logand (ash word -8) #xff)
               (logand (ash word -16) #xff)
               (ash word -24)))
@@ -208,6 +209,9 @@ address of that offset."
   (define (reference-scm target)
     (unpack-scm (u32-offset->addr (+ offset target) context)))
 
+  (define (reference-tagged-scm tag target)
+    (unpack-scm (+ tag (u32-offset->addr (+ offset target) context))))
+
   (define (dereference-scm target)
     (let ((addr (u32-offset->addr (+ offset target)
                                   context)))
@@ -267,6 +271,11 @@ address of that offset."
        (list "~A at #x~X" name addr)))
     (('make-non-immediate dst target)
      (let ((val (reference-scm target)))
+       (when (program? val)
+         (push-addr! (program-code val) val))
+       (list "~@Y" val)))
+    (('make-tagged-non-immediate dst tag target)
+     (let ((val (reference-tagged-scm tag target)))
        (when (program? val)
          (push-addr! (program-code val) val))
        (list "~@Y" val)))
@@ -408,6 +417,8 @@ address of that offset."
        `(load-label ,dst ,(u32-offset->addr (+ offset src) context)))
       (('make-non-immediate dst target)
        `(make-non-immediate ,dst ,(reference-scm target)))
+      (('make-tagged-non-immediate dst tag target)
+       `(make-tagged-non-immediate ,dst ,tag ,(reference-tagged-scm tag target)))
       (('builtin-ref dst idx)
        `(builtin-ref ,dst ,(builtin-index->name idx)))
       (((or 'static-ref 'static-set!) dst target)

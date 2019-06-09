@@ -77,8 +77,15 @@ typedef struct scm_t_cell
 #define SCM_SET_CELL_OBJECT_3(x, v) SCM_SET_CELL_OBJECT ((x), 3, (v))
 
 #define SCM_CELL_OBJECT_LOC(x, n) (&SCM_GC_CELL_OBJECT ((x), (n)))
-#define SCM_CARLOC(x)             (SCM_CELL_OBJECT_LOC ((x), 0))
-#define SCM_CDRLOC(x)             (SCM_CELL_OBJECT_LOC ((x), 1))
+
+#define SCM_ADD_POINTER_TAG(tag, x)     (SCM_PACK (SCM_UNPACK (x) + (tag)))
+#define SCM_REMOVE_POINTER_TAG(tag, x)  (SCM_PACK (SCM_UNPACK (x) - (tag)))
+
+#define SCM_ADD_PAIR_TAG(x)       (SCM_ADD_POINTER_TAG (scm_pair_tag, (x)))
+#define SCM_REMOVE_PAIR_TAG(x)    (SCM_REMOVE_POINTER_TAG (scm_pair_tag, (x)))
+
+#define SCM_CARLOC(x)     (SCM_CELL_OBJECT_LOC (SCM_REMOVE_PAIR_TAG (x), 0))
+#define SCM_CDRLOC(x)     (SCM_CELL_OBJECT_LOC (SCM_REMOVE_PAIR_TAG (x), 1))
 
 #define SCM_CELL_TYPE(x) SCM_CELL_WORD_0 (x)
 #define SCM_SET_CELL_TYPE(x, t) SCM_SET_CELL_WORD_0 ((x), (t))

@@ -64,16 +64,17 @@ SCM_DEFINE (scm_self_evaluating_p, "self-evaluating?", 1, 0, 0,
 	    "Return #t for objects which Guile considers self-evaluating")
 #define FUNC_NAME s_scm_self_evaluating_p
 {
-  switch (SCM_ITAG3 (obj))
+  switch (SCM_ITAG (obj))
     {
-    case scm_tc3_int_1:
-    case scm_tc3_int_2:
-      /* inum */
+    case scm_itags_fixnum:
+      /* immediate numbers */
       return SCM_BOOL_T;
-    case scm_tc3_imm24:
-	/* characters, booleans, other immediates */
+    case scm_itags_imm24:
+      /* characters, booleans, other immediates */
       return scm_from_bool (!scm_is_null_and_not_nil (obj));
-    case scm_tc3_cons:
+    case scm_itags_pair:
+      return SCM_BOOL_F;
+    case scm_itags_thob:
       switch (SCM_TYP7 (obj))
 	{
 	case scm_tc7_vector:

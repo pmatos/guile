@@ -132,7 +132,7 @@ SCM_API SCM scm_utf32_to_string (SCM, SCM);
 #define SCM_F_BYTEVECTOR_IMMUTABLE 0x200UL
 
 #define SCM_MUTABLE_BYTEVECTOR_P(x)                                     \
-  (SCM_NIMP (x) &&                                                      \
+  (SCM_THOB_P (x) &&                                                    \
    ((SCM_CELL_TYPE (x) & (0x7fUL | (SCM_F_BYTEVECTOR_IMMUTABLE << 7UL)))  \
     == scm_tc7_bytevector))
 

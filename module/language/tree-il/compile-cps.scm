@@ -104,7 +104,7 @@
             ($continue kcast src
               ($primcall 'assume-u64 `(0 . ,(target-max-vector-length)) (ulen)))))
     (letk krsh
-          ($kargs ('w0) (w0)
+          ($kargs ('w0) (w0)                     ;TAGS-SENSITIVE
             ($continue kassume src ($primcall 'ursh/immediate 8 (w0)))))
     (letk kv
           ($kargs () ()
@@ -114,7 +114,7 @@
           ($kargs () ()
             ($branch knot-vector kv src pred #f (v))))
     (build-term
-      ($branch knot-vector kheap-object src 'heap-object? #f (v)))))
+      ($branch knot-vector kheap-object src 'thob? #f (v)))))
 
 (define (untag-fixnum-index-in-range cps src op idx slen have-index-in-range)
   ;; Precondition: SLEN is a non-negative S64 that is representable as a
@@ -342,7 +342,7 @@
          (letk ktag0
                ($kargs ('v) (v)
                  ($continue ktag1 src
-                   ($primcall 'ulsh/immediate 8 (usize)))))
+                   ($primcall 'ulsh/immediate 8 (usize)))))  ;TAGS-SENSITIVE
          (letk kalloc
                ($kargs ('nwords) (nwords)
                  ($continue ktag0 src
@@ -420,8 +420,7 @@
     (letk knot-pair ($kargs () () ($throw src 'throw/value+data not-pair (x))))
     (let$ body (is-pair))
     (letk k ($kargs () () ,body))
-    (letk kheap-object ($kargs () () ($branch knot-pair k src pred #f (x))))
-    (build-term ($branch knot-pair kheap-object src 'heap-object? #f (x)))))
+    (build-term ($branch knot-pair k src 'pair? #f (x)))))
 
 (define-primcall-converter cons
   (lambda (cps k src op param head tail)
@@ -433,14 +432,14 @@
       (letk ktail
             ($kargs () ()
               ($continue kdone src
-                ($primcall 'scm-set!/immediate '(pair . 1) (pair tail)))))
+                ($primcall 'tagged-scm-set!/immediate '(pair . 1) (pair tail)))))
       (letk khead
             ($kargs ('pair) (pair)
               ($continue ktail src
-                ($primcall 'scm-set!/immediate '(pair . 0) (pair head)))))
+                ($primcall 'tagged-scm-set!/immediate '(pair . 0) (pair head)))))
       (build-term
         ($continue khead src
-          ($primcall 'allocate-words/immediate '(pair . 2) ()))))))
+          ($primcall 'tagged-allocate-words/immediate '(pair . 2) ()))))))
 
 (define-primcall-converter car
   (lambda (cps k src op param pair)
@@ -450,7 +449,7 @@
        (with-cps cps
          (build-term
            ($continue k src
-             ($primcall 'scm-ref/immediate '(pair . 0) (pair)))))))))
+             ($primcall 'tagged-scm-ref/immediate '(pair . 0) (pair)))))))))
 
 (define-primcall-converter cdr
   (lambda (cps k src op param pair)
@@ -460,7 +459,7 @@
        (with-cps cps
          (build-term
            ($continue k src
-             ($primcall 'scm-ref/immediate '(pair . 1) (pair)))))))))
+             ($primcall 'tagged-scm-ref/immediate '(pair . 1) (pair)))))))))
 
 (define-primcall-converter set-car!
   (lambda (cps k src op param pair val)
@@ -471,7 +470,7 @@
        (with-cps cps
          (build-term
            ($continue k src
-             ($primcall 'scm-set!/immediate '(pair . 0) (pair val)))))))))
+             ($primcall 'tagged-scm-set!/immediate '(pair . 0) (pair val)))))))))
 
 (define-primcall-converter set-cdr!
   (lambda (cps k src op param pair val)
@@ -482,7 +481,7 @@
        (with-cps cps
          (build-term
            ($continue k src
-             ($primcall 'scm-set!/immediate '(pair . 1) (pair val)))))))))
+             ($primcall 'tagged-scm-set!/immediate '(pair . 1) (pair val)))))))))
 
 (define-primcall-converter box
   (lambda (cps k src op param val)
@@ -517,7 +516,7 @@
     (let$ body (is-box))
     (letk k ($kargs () () ,body))
     (letk kheap-object ($kargs () () ($branch knot-box k src 'variable? #f (x))))
-    (build-term ($branch knot-box kheap-object src 'heap-object? #f (x)))))
+    (build-term ($branch knot-box kheap-object src 'thob? #f (x)))))
 
 (define-primcall-converter box-ref
   (lambda (cps k src op param box)
@@ -562,7 +561,7 @@
                     ($continue k src ($primcall 'scm-ref/tag 'struct (x)))))
     (letk kheap-object
           ($kargs () () ($branch knot-struct kvtable src 'struct? #f (x))))
-    (build-term ($branch knot-struct kheap-object src 'heap-object? #f (x)))))
+    (build-term ($branch knot-struct kheap-object src 'thob? #f (x)))))
 
 (define-primcall-converter struct-vtable
   (lambda (cps k src op param struct)
@@ -859,7 +858,7 @@
   (with-cps cps
     (letk kf ($kargs () () ($throw src 'throw/value+data bad-type (x))))
     (letk kheap-object ($kargs () () ($branch kf k src pred #f (x))))
-    (build-term ($branch kf kheap-object src 'heap-object? #f (x)))))
+    (build-term ($branch kf kheap-object src 'thob? #f (x)))))
 
 (define (prepare-bytevector-access cps src op pred bv idx width
                                    have-ptr-and-uidx)
@@ -1104,7 +1103,7 @@
           ($kargs () ()
             ($branch knot-string ks src 'string? #f (x))))
     (build-term
-      ($branch knot-string kheap-object src 'heap-object? #f (x)))))
+      ($branch knot-string kheap-object src 'thob? #f (x)))))
 
 (define (ensure-char cps src op x have-char)
   (define msg "Wrong type argument (expecting char): ~S")
@@ -1133,7 +1132,7 @@
   (lambda (cps k src op param s idx)
     (define out-of-range
       #(out-of-range string-ref "Argument 2 out of range: ~S"))
-    (define stringbuf-f-wide #x400)
+    (define stringbuf-f-wide #x400)  ;TAGS-SENSITIVE
     (ensure-string
      cps src op s
      (lambda (cps ulen)
@@ -1203,7 +1202,7 @@
   (lambda (cps k src op param s idx ch)
     (define out-of-range
       #(out-of-range string-ref "Argument 2 out of range: ~S"))
-    (define stringbuf-f-wide #x400)
+    (define stringbuf-f-wide #x400)  ;TAGS-SENSITIVE
     (ensure-string
      cps src op s
      (lambda (cps ulen)
@@ -1327,7 +1326,7 @@
     (let$ body (is-atomic-box))
     (letk k ($kargs () () ,body))
     (letk kheap-object ($kargs () () ($branch kbad k src 'atomic-box? #f (x))))
-    (build-term ($branch kbad kheap-object src 'heap-object? #f (x)))))
+    (build-term ($branch kbad kheap-object src 'thob? #f (x)))))
 
 (define-primcall-converter atomic-box-ref
   (lambda (cps k src op param x)
@@ -1421,7 +1420,7 @@
                       ($ (have-var box)))))))
        (letk ktest ($kargs () () ,body))
        (letk kbox ($kargs ('box) (box)
-                    ($branch kbad ktest src 'heap-object? #f (box))))
+                    ($branch kbad ktest src 'thob? #f (box))))
        (letk kname ($kargs ('name) (name-var)
                      ($continue kbox src
                        ($primcall 'lookup #f (mod name-var)))))
@@ -2136,7 +2135,7 @@
                     (letk kt* ($kargs () ()
                                 ($branch kf kt src name #f args)))
                     (build-term
-                      ($branch kf kt* src 'heap-object? #f args)))
+                      ($branch kf kt* src 'thob? #f args)))
                   (with-cps cps
                     (build-term ($branch kf kt src name #f args)))))))
          (($ <conditional> src test consequent alternate)
@@ -2459,10 +2458,8 @@ integer."
                                 (heap-number? b)
                                 (bool (primcall heap-numbers-equal? a b))))
                ('equal?
-                ;; Partially inline.
-                (primcall-chain (heap-object? a)
-                                (heap-object? b)
-                                (primcall equal? a b))))))))
+                ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+                (primcall equal? a b)))))))
 
        (($ <primcall> src 'vector args)
         ;; Expand to "allocate-vector" + "vector-init!".

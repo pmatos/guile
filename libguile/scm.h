@@ -420,43 +420,52 @@ typedef uintptr_t scm_t_bits;
 
 
 
-/* Checking if a SCM variable holds an immediate or a heap object.  This
-   check can either be performed by checking for tc3==000 or tc3==00x,
-   since for a SCM variable it is known that tc1==0.  */
-#define SCM_IMP(x) 		(6 & SCM_UNPACK (x))
-#define SCM_NIMP(x) 		(!SCM_IMP (x))
-#define SCM_HEAP_OBJECT_P(x)    (SCM_NIMP (x))
+/* Checking if a SCM variable holds a tagged heap object (thob).  */
 
-/* Checking if a SCM variable holds an immediate integer: See numbers.h
-   for the definition of the following macros: SCM_I_FIXNUM_BIT,
-   SCM_MOST_POSITIVE_FIXNUM, SCM_I_INUMP, SCM_I_MAKINUM, SCM_I_INUM.  */
+#define scm_thob_tag             0
+#define scm_thob_tag_mask        7
+#define scm_thob_tag_size        3
+
+#define SCM_THOB_P(x)  ((SCM_UNPACK (x) & scm_thob_tag_mask) == scm_thob_tag)
+
+#define scm_pair_tag             6
+#define scm_pair_tag_mask        15
+#define scm_pair_tag_size        4
 
 /* Checking if a SCM variable holds a pair (for historical reasons, in
-   Guile also known as a cons-cell): This is done by first checking that
-   the SCM variable holds a heap object, and second, by checking that
-   tc1==0 holds for the SCM_CELL_TYPE of the SCM variable.  */
-#define SCM_I_CONSP(x)  (!SCM_IMP (x) && ((1 & SCM_CELL_TYPE (x)) == 0))
+   Guile also known as a cons-cell).  */
+#define SCM_I_CONSP(x) \
+  ((SCM_UNPACK (x) & scm_pair_tag_mask) == scm_pair_tag)
+
+#define SCM_HEAP_OBJECT_P(x)    (SCM_THOB_P (x) || SCM_I_CONSP (x))
 
 
 
-/* Definitions for tc2: */
+/* Definitions for immediate tags: */
 
-#define scm_tc2_int              2
+#define scm_itag_mask            15
+#define scm_itag_mask_size       4
+
+#define SCM_ITAG(x) 		 (SCM_UNPACK (x) & scm_itag_mask)
+
+#define scm_itags_thob		 0: case 8
+#define scm_itags_fixnum	 15
+#define scm_itags_pair		 6
+#define scm_itags_imm24		 14
+
+#define scm_fixnum_tag           15
+#define scm_fixnum_tag_mask      15
+#define scm_fixnum_tag_size      4
 
 
 /* Definitions for tc3: */
 
-#define SCM_ITAG3(x) 		 (7 & SCM_UNPACK (x))
-#define SCM_TYP3(x) 		 (7 & SCM_CELL_TYPE (x))
-
-#define scm_tc3_cons	 	 0
 #define scm_tc3_struct    	 1
-#define scm_tc3_int_1		 (scm_tc2_int + 0)
-#define scm_tc3_unused		 3
-#define scm_tc3_imm24		 4
-#define scm_tc3_tc7_1		 5
-#define scm_tc3_int_2		 (scm_tc2_int + 4)
-#define scm_tc3_tc7_2		 7
+
+
+/* Definitions for tc4: */
+
+#define scm_tc4_imm24            14
 
 
 /* Definitions for tc7: */
@@ -464,15 +473,14 @@ typedef uintptr_t scm_t_bits;
 #define SCM_ITAG7(x) 		(0x7f & SCM_UNPACK (x))
 #define SCM_TYP7(x) 		(0x7f & SCM_CELL_TYPE (x))
 #define SCM_HAS_HEAP_TYPE(x, type, tag)                         \
-  (SCM_NIMP (x) && type (x) == (tag))
+  (SCM_THOB_P (x) && type (x) == (tag))
 #define SCM_HAS_TYP7(x, tag)    (SCM_HAS_HEAP_TYPE (x, SCM_TYP7, tag))
 
 /* These type codes form part of the ABI and cannot be changed in a
-   stable series.  The low bits of each must have the tc3 of a heap
-   object type code (see above).  If you do change them in a development
-   series, change them also in (system vm assembler) and (system base
-   types).  Bonus points if you change the build to define these tag
-   values in only one place!  */
+   stable series.  If you do change them in a development series,
+   change them also in (system vm assembler) and (system base types).
+   Bonus points if you change the build to define these tag values
+   in only one place!  */
 
 #define scm_tc7_symbol		0x05
 #define scm_tc7_variable        0x07
@@ -520,10 +528,10 @@ typedef uintptr_t scm_t_bits;
 
 enum scm_tc8_tags
 {
-  scm_tc8_flag = scm_tc3_imm24 + 0x00,  /* special objects ('flags') */
-  scm_tc8_char = scm_tc3_imm24 + 0x08,  /* characters */
-  scm_tc8_unused_0 = scm_tc3_imm24 + 0x10,
-  scm_tc8_unused_1 = scm_tc3_imm24 + 0x18
+  scm_tc8_flag = scm_tc4_imm24 + 0x00,  /* special objects ('flags') */
+  scm_tc8_char = scm_tc4_imm24 + 0x10,  /* characters */
+  scm_tc8_unused_0 = scm_tc4_imm24 + 0x20,
+  scm_tc8_unused_1 = scm_tc4_imm24 + 0x30
 };
 
 #define SCM_ITAG8(X)		(SCM_UNPACK (X) & 0xff)

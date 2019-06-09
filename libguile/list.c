@@ -40,9 +40,9 @@
 
 /* creating lists */
 
-#define SCM_I_CONS(cell, x, y)                          \
-  do {                                                  \
-    cell = scm_cell (SCM_UNPACK (x), SCM_UNPACK (y));   \
+#define SCM_I_CONS(cell, x, y)                                            \
+  do {                                                                    \
+    cell = SCM_ADD_PAIR_TAG (scm_cell (SCM_UNPACK (x), SCM_UNPACK (y)));  \
   } while (0)
 
 SCM

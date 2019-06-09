@@ -98,7 +98,7 @@ SCM_DEFINE (scm_sloppy_assoc, "sloppy-assoc", 2, 0, 0,
 #define FUNC_NAME s_scm_sloppy_assoc
 {
   /* Immediate values can be checked using `eq?'.  */
-  if (SCM_IMP (key))
+  if (!SCM_HEAP_OBJECT_P (key))
     return scm_sloppy_assq (key, alist);
 
   for (; scm_is_pair (alist); alist = SCM_CDR (alist))
@@ -179,7 +179,7 @@ SCM_DEFINE (scm_assoc, "assoc", 2, 0, 0,
   SCM ls = alist;
 
   /* Immediate values can be checked using `eq?'.  */
-  if (SCM_IMP (key))
+  if (!SCM_HEAP_OBJECT_P (key))
     return scm_assq (key, alist);
 
   for(; scm_is_pair (ls); ls = SCM_CDR (ls)) 

@@ -32,6 +32,7 @@
   #:use-module (ice-9 match)
   #:use-module (srfi srfi-11)
   #:use-module ((srfi srfi-1) #:select (fold))
+  #:use-module (system base target)
   #:use-module (language cps)
   #:use-module (language cps renumber)
   #:use-module (language cps utils)
@@ -387,15 +388,15 @@ function set."
            (letk ktail
                  ($kargs () ()
                    ($continue kdone src
-                     ($primcall 'scm-set!/immediate '(pair . 1) (pair tail)))))
+                     ($primcall 'tagged-scm-set!/immediate '(pair . 1) (pair tail)))))
            (letk khead
                  ($kargs ('pair) (pair)
                    ($continue ktail src
-                     ($primcall 'scm-set!/immediate '(pair . 0) (pair v)))))
+                     ($primcall 'tagged-scm-set!/immediate '(pair . 0) (pair v)))))
            (letk ktail
                  ($kargs ('tail) (tail)
                    ($continue khead src
-                     ($primcall 'allocate-words/immediate '(pair . 2) ()))))
+                     ($primcall 'tagged-allocate-words/immediate '(pair . 2) ()))))
            ($ (build-list ktail src vals))))))
     (cond
      ((and (not rest) (eqv? (length vals) nreq))

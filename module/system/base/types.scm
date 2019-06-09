@@ -1,5 +1,5 @@
 ;;; 'SCM' type tag decoding.
-;;; Copyright (C) 2014, 2015, 2017, 2018 Free Software Foundation, Inc.
+;;; Copyright (C) 2014, 2015, 2017, 2018, 2019 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or modify it
 ;;; under the terms of the GNU Lesser General Public License as published by
@@ -308,16 +308,24 @@ KIND/SUB-KIND."
                           (lambda (io port)
                             (match io
                               (($ <inferior-object> kind sub-kind address)
-                               (format port "#<~a ~:[~*~;~a ~]~x>"
+                               (format port "#<~a~:[~*~; ~a~]~:[~*~; ~x~]>"
                                        kind sub-kind sub-kind
-                                       address)))))
+                                       address address)))))
 
-(define (inferior-smob backend type-number address)
+(define (inferior-smob backend type-number flags word1 address)
   "Return an object representing the SMOB at ADDRESS whose type is
 TYPE-NUMBER."
-  (inferior-object 'smob
-                   (or (type-number->name backend 'smob type-number)
-                       type-number)
+  (inferior-object (let ((type-name (or (type-number->name backend 'smob
+                                                           type-number)
+                                        (string->symbol
+                                         (string-append "smob-" (number->string type-number))))))
+                     (if (zero? flags)
+                         type-name
+                         (string->symbol (string-append
+                                          (symbol->string type-name)
+                                          "/"
+                                          (number->string flags 16)))))
+                   (number->string word1 16)
                    address))
 
 (define (inferior-port-type backend address)
@@ -438,8 +446,25 @@ using BACKEND."
            (inferior-object 'dynamic-state address))
           ((((flags << 8) || %tc7-port))
            (inferior-port backend (logand flags #xff) address))
-          (((_ & #x7f = %tc7-program))
-           (inferior-object 'program address))
+          (((bits & #x7f = %tc7-program) code)
+           (let ((num-free-vars (ash bits -16))
+                 (flags (filter-map (match-lambda
+                                      ((mask . flag-name)
+                                       (and (logtest mask bits) flag-name)))
+                                    '((#x0100 . boot)
+                                      (#x0200 . prim)
+                                      (#x0400 . prim-generic)
+                                      (#x0800 . cont)
+                                      (#x1000 . partial-cont)
+                                      (#x2000 . foreign)))))
+             (inferior-object (cons* 'program flags
+                                     (unfold zero?
+                                             (lambda (n)
+                                               (number->string (get-word port) 16))
+                                             1-
+                                             num-free-vars))
+                              (number->string code 16)
+                              address)))
           (((_ & #xffff = %tc16-bignum))
            (inferior-object 'bignum address))
           (((_ & #xffff = %tc16-flonum) pad)
@@ -458,11 +483,14 @@ using BACKEND."
           (((_ & #x7f = %tc7-syntax) expression wrap module)
            (cond-expand
              (guile-2.2
-              (make-syntax (cell->object expression backend)
-                           (cell->object wrap backend)
-                           (cell->object module backend)))
+              (make-syntax (scm->object expression backend)
+                           (scm->object wrap backend)
+                           (scm->object module backend)))
              (else
-              (inferior-object 'syntax address))))
+              (vector 'syntax-object
+                      (scm->object expression backend)
+                      (scm->object wrap backend)
+                      (scm->object module backend)))))
           (((_ & #x7f = %tc7-vm-continuation))
            (inferior-object 'vm-continuation address))
           (((_ & #x7f = %tc7-weak-set))
@@ -473,31 +501,35 @@ using BACKEND."
            (inferior-object 'array address))
           (((_ & #x7f = %tc7-bitvector))
            (inferior-object 'bitvector address))
-          ((((smob-type << 8) || %tc7-smob) word1)
-           (inferior-smob backend smob-type address))))))
+          (((bits & #x7f = %tc7-smob) word1)
+           (let ((smob-type (bit-extract bits 8 16))
+                 (flags     (ash bits -16)))
+             (inferior-smob backend smob-type flags word1 address)))))))
 
 
 (define* (scm->object bits #:optional (backend %ffi-memory-backend))
   "Return the Scheme object corresponding to BITS, the bits of an 'SCM'
 object."
   (match-scm bits
-    (((integer << 2) || %tc2-fixnum)
+    (((integer << %fixnum-tag-size) || %fixnum-tag)
      integer)
-    ((address & 7 = %tc3-heap-object)
-     (let* ((type  (dereference-word backend address))
-            (pair? (= (logand type #b1) %tc1-pair)))
-       (if pair?
-           (or (and=> (vhash-assv address (%visited-cells)) cdr)
-               (let ((car    type)
-                     (cdrloc (+ address %word-size))
-                     (pair   (cons *unspecified* *unspecified*)))
-                 (visited (address -> pair)
-                   (set-car! pair (scm->object car backend))
-                   (set-cdr! pair
-                             (scm->object (dereference-word backend cdrloc)
-                                          backend))
-                   pair)))
-           (cell->object address backend))))
+    ((bits & %pair-tag-mask = %pair-tag)
+     (or (and=> (vhash-assv bits (%visited-cells)) cdr)
+         (let* ((carloc (- bits %pair-tag))
+                (cdrloc (+ carloc %word-size))
+                (pair   (cons *unspecified* *unspecified*)))
+           (visited (bits -> pair)
+             (set-car! pair
+                       (scm->object (dereference-word backend carloc)
+                                    backend))
+             (set-cdr! pair
+                       (scm->object (dereference-word backend cdrloc)
+                                    backend))
+             pair))))
+    ((address & %thob-tag-mask = %thob-tag)
+     (if (zero? address)
+         (inferior-object 'NULL #f)   ; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+         (cell->object address backend)))
     (((char << 8) || %tc8-char)
      (integer->char char))
     ((= %tc16-false) #f)

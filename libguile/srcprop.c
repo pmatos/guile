@@ -103,7 +103,9 @@ scm_t_bits scm_tc16_srcprops;
 static int
 supports_source_props (SCM obj)
 {
-  return SCM_NIMP (obj) && !scm_is_symbol (obj) && !scm_is_keyword (obj);
+  return (SCM_THOB_P (obj)
+          ? (!scm_is_symbol (obj) && !scm_is_keyword (obj))
+          : scm_is_pair (obj));
 }
 
 
@@ -188,7 +190,7 @@ SCM_DEFINE (scm_source_properties, "source-properties", 1, 0, 0,
 	    "Return the source property association list of @var{obj}.")
 #define FUNC_NAME s_scm_source_properties
 {
-  if (SCM_IMP (obj))
+  if (!SCM_HEAP_OBJECT_P (obj))
     return SCM_EOL;
   else
     {
@@ -204,7 +206,7 @@ SCM_DEFINE (scm_source_properties, "source-properties", 1, 0, 0,
 #undef FUNC_NAME
 
 #define SCM_VALIDATE_NIM(pos, scm) \
-  SCM_MAKE_VALIDATE_MSG (pos, scm, NIMP, "non-immediate")
+  SCM_MAKE_VALIDATE_MSG (pos, scm, HEAP_OBJECT_P, "non-immediate")
 
 /* Perhaps this procedure should look through an alist
    and try to make a srcprops-object...? */
@@ -226,7 +228,7 @@ int
 scm_i_has_source_properties (SCM obj)
 #define FUNC_NAME "%set-source-properties"
 {
-  if (SCM_IMP (obj))
+  if (!SCM_HEAP_OBJECT_P (obj))
     return 0;
   else
     return scm_is_true (scm_weak_table_refq (scm_source_whash, obj, SCM_BOOL_F));
@@ -257,7 +259,7 @@ SCM_DEFINE (scm_source_property, "source-property", 2, 0, 0,
 {
   SCM p;
 
-  if (SCM_IMP (obj))
+  if (!SCM_HEAP_OBJECT_P (obj))
     return SCM_BOOL_F;
 
   p = scm_weak_table_refq (scm_source_whash, obj, SCM_EOL);

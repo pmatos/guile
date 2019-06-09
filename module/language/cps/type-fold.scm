@@ -94,11 +94,11 @@
        ((eqv? type type*) (values #t #t))
        (else (values #f #f))))))
 
-(define-unary-branch-folder (heap-object? type min max)
-  (define &immediate-types (logior &fixnum &char &special-immediate))
+(define-unary-branch-folder (thob? type min max)
+  (define &non-thob-types (logior &pair &fixnum &char &special-immediate))
   (cond
-   ((zero? (logand type &immediate-types)) (values #t #t))
-   ((type<=? type &immediate-types) (values #t #f))
+   ((zero? (logand type &non-thob-types)) (values #t #t))
+   ((type<=? type &non-thob-types) (values #t #f))
    (else (values #f #f))))
 
 (define-unary-branch-folder (heap-number? type min max)

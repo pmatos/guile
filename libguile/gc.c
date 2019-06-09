@@ -478,9 +478,9 @@ scm_storage_prehistory ()
   /* We only need to register a displacement for those types for which the
      higher bits of the type tag are used to store a pointer (that is, a
      pointer to an 8-octet aligned region).  */
-  GC_REGISTER_DISPLACEMENT (scm_tc3_cons);
+  GC_REGISTER_DISPLACEMENT (scm_thob_tag);
+  GC_REGISTER_DISPLACEMENT (scm_pair_tag);
   GC_REGISTER_DISPLACEMENT (scm_tc3_struct);
-  /* GC_REGISTER_DISPLACEMENT (scm_tc3_unused); */
 
   /* Sanity check.  */
   if (!GC_is_visible (&scm_protects))

@@ -34,7 +34,7 @@
 
 #define SCM_VALIDATE_ARRAY(pos, v) \
   do { \
-    SCM_ASSERT (SCM_HEAP_OBJECT_P (v) \
+    SCM_ASSERT (SCM_THOB_P (v) \
                 && scm_is_true (scm_array_p (v, SCM_UNDEFINED)), \
                 v, pos, FUNC_NAME); \
   } while (0)

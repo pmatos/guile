@@ -118,13 +118,17 @@ register_disappearing_links (scm_t_weak_entry *entry,
       && (kind == SCM_WEAK_TABLE_KIND_KEY
           || kind == SCM_WEAK_TABLE_KIND_BOTH))
     SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &entry->key,
-                                      SCM2PTR (k));
+                                      (scm_is_pair (k)
+                                       ? SCM2PTR (SCM_REMOVE_PAIR_TAG (k))
+                                       : SCM2PTR (k)));
 
   if (SCM_UNPACK (v) && SCM_HEAP_OBJECT_P (v)
       && (kind == SCM_WEAK_TABLE_KIND_VALUE
           || kind == SCM_WEAK_TABLE_KIND_BOTH))
     SCM_I_REGISTER_DISAPPEARING_LINK ((void **) &entry->value,
-                                      SCM2PTR (v));
+                                      (scm_is_pair (v)
+                                       ? SCM2PTR (SCM_REMOVE_PAIR_TAG (v))
+                                       : SCM2PTR (v)));
 }
 
 static void

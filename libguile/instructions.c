@@ -52,6 +52,7 @@ SCM_SYMBOL (sym_bang, "!");
     M(X8_S8_S8_S8)                              \
     M(X8_S8_C8_S8)                              \
     M(X8_S8_S8_C8)                              \
+    M(X8_S8_C8_C8)                              \
     M(C8_C24)                                   \
     M(C8_S24)                                   \
     M(C32) /* Unsigned. */                      \

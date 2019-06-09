@@ -764,7 +764,7 @@ scm_read_number (scm_t_wchar chr, SCM port, scm_t_read_opts *opts)
         str = scm_string_downcase_x (str);
       result = scm_string_to_symbol (str);
     }
-  else if (SCM_NIMP (result))
+  else if (SCM_HEAP_OBJECT_P (result))
     result = maybe_annotate_source (result, port, opts, line, column);
 
   scm_set_port_column_x (port,
@@ -1661,7 +1661,7 @@ scm_read_sharp_extension (int chr, SCM port, scm_t_read_opts *opts)
 
       got = scm_call_2 (proc, SCM_MAKE_CHAR (chr), port);
 
-      if (opts->record_positions_p && SCM_NIMP (got)
+      if (opts->record_positions_p && SCM_HEAP_OBJECT_P (got)
           && !scm_i_has_source_properties (got))
         scm_i_set_source_properties_x (got, line, column, SCM_FILENAME (port));
       

@@ -255,6 +255,7 @@ false.  It could be that both true and false proofs are available."
            ((scm-set! p s i x)               (x <- scm-ref p s i))
            ((scm-set!/tag p s x)             (x <- scm-ref/tag p s))
            ((scm-set!/immediate p s x)       (x <- scm-ref/immediate p s))
+           ((tagged-scm-set!/immediate p s x) (x <- tagged-scm-ref/immediate p s))
            ((word-set! p s i x)              (x <- word-ref p s i))
            ((word-set!/immediate p s x)      (x <- word-ref/immediate p s))
            ((pointer-set!/immediate p s x)   (x <- pointer-ref/immediate p s))

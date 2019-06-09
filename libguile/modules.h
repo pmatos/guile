@@ -31,7 +31,7 @@ SCM_API int scm_module_system_booted_p;
 SCM_API scm_t_bits scm_module_tag;
 
 #define SCM_MODULEP(OBJ) \
-  (!SCM_IMP (OBJ) && SCM_CELL_TYPE (OBJ) == scm_module_tag)
+  (SCM_THOB_P (OBJ) && SCM_CELL_TYPE (OBJ) == scm_module_tag)
 
 #define SCM_VALIDATE_MODULE(pos, scm) SCM_MAKE_VALIDATE_MSG (pos, scm, MODULEP, "module")
 
