@@ -983,7 +983,88 @@ SCM_DEFINE (scm_fcntl, "fcntl", 2, 1, 0,
   return scm_from_int (rv);
 }
 #undef FUNC_NAME
-#endif /* HAVE_FCNTL */
+
+#else /* !HAVE_FCNTL */
+
+/* XXX gnulib sets these all to 0 which disallows a partial or stub
+   implementation.  */
+
+#undef F_DUPFD
+#define F_DUPFD 0
+
+#undef F_GETFD
+#define F_GETFD 1
+
+#undef F_SETFD
+#define F_SETFD 2
+
+#undef F_GETFL
+#define F_GETFL 3
+
+#undef F_SETFL
+#define F_SETFL 4
+
+#undef O_NONBLOCK
+#define O_NONBLOCK  04000
+
+#undef O_ASNC
+#define O_ASYNC    020000
+
+#undef O_SYNC
+#define O_SYNC   04010000
+
+#undef O_NDELAY
+#define O_NDELAY O_NONBLOCK
+
+int
+_mingw_debug_p ()
+{
+  static int debug = -1;
+  if (debug == -1)
+    {
+      char *p = getenv ("MINGW_DEBUG");
+      debug = p ? strcmp (p, "0") : 0;
+    }
+  return debug;
+}
+
+SCM_DEFINE (scm_fcntl, "fcntl", 2, 1, 0,
+            (SCM object, SCM cmd, SCM value),
+            "Limited fctnl support for mingw:\n"
+            "OBJECT: socket\n"
+            "CMD = F_SETFL,\n"
+            "VALUE = (logior O_NONBLOCK (fcntl OBJECT F_GETFL)).")
+#define FUNC_NAME s_scm_fcntl
+{
+  static int stub = 0;
+
+  int c_cmd = scm_to_int (cmd);
+  switch (c_cmd)
+    {
+    case F_GETFL:
+      break;
+    case F_SETFL:
+      {
+        int c_value = scm_to_int (value);
+        u_long non_blocking = (c_value & O_NONBLOCK) ? 1 : 0;
+        object = SCM_COERCE_OUTPORT (object);
+        SOCKET fd = _get_osfhandle (SCM_FPORT_FDES (object));
+        if (SOCKET_ERROR == ioctlsocket (fd, FIONBIO, &non_blocking))
+          SCM_SYSERROR;
+        break;
+      }
+    default:
+      {
+        if (_mingw_debug_p () && !stub)
+          fputs ("stub: fcntl", stderr);
+        stub = 1;
+      }
+    }
+
+  return scm_from_int (0);
+}
+#undef FUNC_NAME
+#endif /* !HAVE_FCNTL */
 
 SCM_DEFINE (scm_fsync, "fsync", 1, 0, 0, 
             (SCM object),
