@@ -178,13 +178,13 @@ SCM_DEFINE (scm_gethost, "gethost", 0, 1, 0,
   if (!entry)
     scm_resolv_error (FUNC_NAME, host);
   
-  SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_locale_string (entry->h_name));
-  SCM_SIMPLE_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->h_aliases));
-  SCM_SIMPLE_VECTOR_SET(result, 2, scm_from_int (entry->h_addrtype));
-  SCM_SIMPLE_VECTOR_SET(result, 3, scm_from_int (entry->h_length));
+  SCM_VECTOR_SET(result, 0, scm_from_locale_string (entry->h_name));
+  SCM_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->h_aliases));
+  SCM_VECTOR_SET(result, 2, scm_from_int (entry->h_addrtype));
+  SCM_VECTOR_SET(result, 3, scm_from_int (entry->h_length));
   if (sizeof (struct in_addr) != entry->h_length)
     {
-      SCM_SIMPLE_VECTOR_SET(result, 4, SCM_BOOL_F);
+      SCM_VECTOR_SET(result, 4, SCM_BOOL_F);
       return result;
     }
   for (argv = entry->h_addr_list; argv[i]; i++);
@@ -193,7 +193,7 @@ SCM_DEFINE (scm_gethost, "gethost", 0, 1, 0,
       inad = *(struct in_addr *) argv[i];
       lst = scm_cons (scm_from_ulong (ntohl (inad.s_addr)), lst);
     }
-  SCM_SIMPLE_VECTOR_SET(result, 4, lst);
+  SCM_VECTOR_SET(result, 4, lst);
   return result;
 }
 #undef FUNC_NAME
@@ -254,10 +254,10 @@ SCM_DEFINE (scm_getnet, "getnet", 0, 1, 0,
   if (!entry)
     SCM_SYSERROR_MSG ("no such network ~A", scm_list_1 (net), eno);
 
-  SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_locale_string (entry->n_name));
-  SCM_SIMPLE_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->n_aliases));
-  SCM_SIMPLE_VECTOR_SET(result, 2, scm_from_int (entry->n_addrtype));
-  SCM_SIMPLE_VECTOR_SET(result, 3, scm_from_ulong (entry->n_net));
+  SCM_VECTOR_SET(result, 0, scm_from_locale_string (entry->n_name));
+  SCM_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->n_aliases));
+  SCM_VECTOR_SET(result, 2, scm_from_int (entry->n_addrtype));
+  SCM_VECTOR_SET(result, 3, scm_from_ulong (entry->n_net));
   return result;
 }
 #undef FUNC_NAME
@@ -306,9 +306,9 @@ SCM_DEFINE (scm_getproto, "getproto", 0, 1, 0,
   if (!entry)
     SCM_SYSERROR_MSG ("no such protocol ~A", scm_list_1 (protocol), eno);
 
-  SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_locale_string (entry->p_name));
-  SCM_SIMPLE_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->p_aliases));
-  SCM_SIMPLE_VECTOR_SET(result, 2, scm_from_int (entry->p_proto));
+  SCM_VECTOR_SET(result, 0, scm_from_locale_string (entry->p_name));
+  SCM_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->p_aliases));
+  SCM_VECTOR_SET(result, 2, scm_from_int (entry->p_proto));
   return result;
 }
 #undef FUNC_NAME
@@ -320,10 +320,10 @@ scm_return_entry (struct servent *entry)
 {
   SCM result = scm_c_make_vector (4, SCM_UNSPECIFIED);
 
-  SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_locale_string (entry->s_name));
-  SCM_SIMPLE_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->s_aliases));
-  SCM_SIMPLE_VECTOR_SET(result, 2, scm_from_uint16 (ntohs (entry->s_port)));
-  SCM_SIMPLE_VECTOR_SET(result, 3, scm_from_locale_string (entry->s_proto));
+  SCM_VECTOR_SET(result, 0, scm_from_locale_string (entry->s_name));
+  SCM_VECTOR_SET(result, 1, scm_makfromstrs (-1, entry->s_aliases));
+  SCM_VECTOR_SET(result, 2, scm_from_uint16 (ntohs (entry->s_port)));
+  SCM_VECTOR_SET(result, 3, scm_from_locale_string (entry->s_proto));
   return result;
 }
 
@@ -478,16 +478,16 @@ scm_from_addrinfo (const struct addrinfo *c_ai)
      `addrinfo:' procedures in `networking.scm'.  */
 
   ai = scm_c_make_vector (6, SCM_UNDEFINED);
-  SCM_SIMPLE_VECTOR_SET (ai, 0, scm_from_int (c_ai->ai_flags));
-  SCM_SIMPLE_VECTOR_SET (ai, 1, scm_from_int (c_ai->ai_family));
-  SCM_SIMPLE_VECTOR_SET (ai, 2, scm_from_int (c_ai->ai_socktype));
-  SCM_SIMPLE_VECTOR_SET (ai, 3, scm_from_int (c_ai->ai_protocol));
-  SCM_SIMPLE_VECTOR_SET (ai, 4,
-			 scm_from_sockaddr (c_ai->ai_addr, c_ai->ai_addrlen));
-  SCM_SIMPLE_VECTOR_SET (ai, 5,
-			 c_ai->ai_canonname != NULL
-			 ? scm_from_locale_string (c_ai->ai_canonname)
-			 : SCM_BOOL_F);
+  SCM_VECTOR_SET (ai, 0, scm_from_int (c_ai->ai_flags));
+  SCM_VECTOR_SET (ai, 1, scm_from_int (c_ai->ai_family));
+  SCM_VECTOR_SET (ai, 2, scm_from_int (c_ai->ai_socktype));
+  SCM_VECTOR_SET (ai, 3, scm_from_int (c_ai->ai_protocol));
+  SCM_VECTOR_SET (ai, 4,
+                  scm_from_sockaddr (c_ai->ai_addr, c_ai->ai_addrlen));
+  SCM_VECTOR_SET (ai, 5,
+                  c_ai->ai_canonname != NULL
+                  ? scm_from_locale_string (c_ai->ai_canonname)
+                  : SCM_BOOL_F);
 
   return ai;
 }

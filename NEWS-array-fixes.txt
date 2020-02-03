@@ -1,10 +1,12 @@
+(vector-array-handle-plan for Guile 3.0) -*- coding: utf-8; mode: org; -*-
 
 TBA to NEWS for this branch.
+
  
 * Forward incompatible changes
 
 Applying these changes will make your program work with this version of
-Guile and continue working with older versions.
+Guile and continue working with older versions, at least back to 2.2.
 
 ** vector->list and vector-copy require a true vector argument.
 
@@ -14,6 +16,11 @@ Use array->list and array-copy (from (ice-9 arrays)) on general arrays.
 
 Use scm_array_get_handle and scm_array_handle_elements /
 scm_array_handle_writable_elements on general arrays.
+
+** scm_is_simple_vector has been removed.
+
+Use scm_is_vector instead.
+
 
 * Backward incompatible changes
 
@@ -26,3 +33,30 @@ This function used to take a second unused argument for the sake of
 compatibility with older versions of Guile. Just remove this argument from your
 calls.
 
+** SCM_SIMPLE_VECTOR_REF, SCM_SIMPLE_VECTOR_SET and SCM_SIMPLE_VECTOR_LENGTH have been renamed.
+
+Use SCM_VECTOR_REF, SCM_VECTOR_SET and SCM_VECTOR_LENGTH instead.
+
+
+* Rationale / TODO
+
+** Fix API for scm_vector_elements scm_vector_writable_elements to [(SCM vec) -> pointer]
+
+  - incp is always one on these types, so it isn't needed
+  - no need to acquire/release an array handle for VECTOR_TYPE
+  - remove the dependence of vector.c bitvector.c bytevector.c etc. on array-handle.h
+
+** Remove scm_is_simple_vector, fix scm_is_array_p, rename SIMPLE_VECTOR  to VECTOR, etc.
+
+  - just cleaning house
+
+** vector-move-right!, vector-move-left!, either
+
+  - work only on vector type, use array-copy! and make-shared-array (or future slicing facility) for general arrays
+  - rename to array-move... and make type generic
+  - remove entirely and just use array-copy!
+
+** basic rank-1 ops on VECTOR_TYPEs need (len begin inc) instead of (begin end)
+
+  - look at CBLAS/BLIS
+  - this is a problem because all the RnRS & SRFIs use (begin end) :-(

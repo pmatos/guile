@@ -55,12 +55,6 @@ scm_is_vector (SCM obj)
   return SCM_I_IS_VECTOR (obj);
 }
 
-int
-scm_is_simple_vector (SCM obj)
-{
-  return SCM_I_IS_VECTOR (obj);
-}
-
 const SCM *
 scm_vector_elements (SCM vec, scm_t_array_handle *h,
 		     size_t *lenp, ssize_t *incp)
@@ -198,7 +192,7 @@ scm_c_vector_ref (SCM v, size_t k)
   if (k >= SCM_I_VECTOR_LENGTH (v))
     scm_out_of_range (NULL, scm_from_size_t (k));
 
-  return SCM_SIMPLE_VECTOR_REF (v, k);
+  return SCM_VECTOR_REF (v, k);
 }
 #undef FUNC_NAME
 
@@ -229,7 +223,7 @@ scm_c_vector_set_x (SCM v, size_t k, SCM obj)
   if (k >= SCM_I_VECTOR_LENGTH (v))
     scm_out_of_range (NULL, scm_from_size_t (k)); 
 
-  SCM_SIMPLE_VECTOR_SET (v, k, obj);
+  SCM_VECTOR_SET (v, k, obj);
 }
 #undef FUNC_NAME
 
@@ -267,7 +261,7 @@ scm_c_make_vector (size_t k, SCM fill)
 
   vector = make_vector (k);
   for (j = 0; j < k; ++j)
-    SCM_SIMPLE_VECTOR_SET (vector, j, fill);
+    SCM_VECTOR_SET (vector, j, fill);
 
   return vector;
 }

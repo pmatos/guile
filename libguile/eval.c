@@ -157,9 +157,9 @@ static void prepare_boot_closure_env_for_eval (SCM proc, unsigned int argc,
 #define CADDR(x) SCM_CADDR(x)
 #define CDDDR(x) SCM_CDDDR(x)
 
-#define VECTOR_REF(v, i) (SCM_SIMPLE_VECTOR_REF (v, i))
-#define VECTOR_SET(v, i, x) (SCM_SIMPLE_VECTOR_SET (v, i, x))
-#define VECTOR_LENGTH(v) (SCM_SIMPLE_VECTOR_LENGTH (v))
+#define VECTOR_REF(v, i) (SCM_VECTOR_REF (v, i))
+#define VECTOR_SET(v, i, x) (SCM_VECTOR_SET (v, i, x))
+#define VECTOR_LENGTH(v) (SCM_VECTOR_LENGTH (v))
 
 static SCM
 make_env (int n, SCM init, SCM next)

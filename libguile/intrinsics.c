@@ -358,9 +358,9 @@ throw_with_value (SCM val, SCM key_subr_and_message)
 {
   SCM key, subr, message, args, data;
 
-  key = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 0);
-  subr = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 1);
-  message = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 2);
+  key = SCM_VECTOR_REF (key_subr_and_message, 0);
+  subr = SCM_VECTOR_REF (key_subr_and_message, 1);
+  message = SCM_VECTOR_REF (key_subr_and_message, 2);
   args = scm_list_1 (val);
   data = SCM_BOOL_F;
 
@@ -372,9 +372,9 @@ throw_with_value_and_data (SCM val, SCM key_subr_and_message)
 {
   SCM key, subr, message, args, data;
 
-  key = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 0);
-  subr = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 1);
-  message = SCM_SIMPLE_VECTOR_REF (key_subr_and_message, 2);
+  key = SCM_VECTOR_REF (key_subr_and_message, 0);
+  subr = SCM_VECTOR_REF (key_subr_and_message, 1);
+  message = SCM_VECTOR_REF (key_subr_and_message, 2);
   args = scm_list_1 (val);
   data = args;
 

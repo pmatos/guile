@@ -315,7 +315,7 @@ scm_raw_ihash (SCM obj, size_t depth)
     case scm_tc7_wvect:
     case scm_tc7_vector:
       {
-	size_t len = SCM_SIMPLE_VECTOR_LENGTH (obj);
+	size_t len = SCM_VECTOR_LENGTH (obj);
         size_t i = depth / 2;
         unsigned long h = scm_raw_ihashq (SCM_CELL_WORD_0 (obj));
         if (len)

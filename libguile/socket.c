@@ -986,12 +986,12 @@ _scm_from_sockaddr (const scm_t_max_sockaddr *address, unsigned addr_size,
 
 	result = scm_c_make_vector (3, SCM_UNSPECIFIED);
 
-	SCM_SIMPLE_VECTOR_SET(result, 0,
-			      scm_from_short (fam));
-	SCM_SIMPLE_VECTOR_SET(result, 1,
-			      scm_from_ulong (ntohl (nad->sin_addr.s_addr)));
-	SCM_SIMPLE_VECTOR_SET(result, 2,
-			      scm_from_ushort (ntohs (nad->sin_port)));
+	SCM_VECTOR_SET(result, 0,
+                       scm_from_short (fam));
+	SCM_VECTOR_SET(result, 1,
+                       scm_from_ulong (ntohl (nad->sin_addr.s_addr)));
+	SCM_VECTOR_SET(result, 2,
+                       scm_from_ushort (ntohs (nad->sin_port)));
       }
       break;
 #ifdef HAVE_IPV6
@@ -1000,14 +1000,14 @@ _scm_from_sockaddr (const scm_t_max_sockaddr *address, unsigned addr_size,
 	const struct sockaddr_in6 *nad = (struct sockaddr_in6 *) address;
 
 	result = scm_c_make_vector (5, SCM_UNSPECIFIED);
-	SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_short (fam));
-	SCM_SIMPLE_VECTOR_SET(result, 1, scm_from_ipv6 (nad->sin6_addr.s6_addr));
-	SCM_SIMPLE_VECTOR_SET(result, 2, scm_from_ushort (ntohs (nad->sin6_port)));
-	SCM_SIMPLE_VECTOR_SET(result, 3, scm_from_uint32 (nad->sin6_flowinfo));
+	SCM_VECTOR_SET(result, 0, scm_from_short (fam));
+	SCM_VECTOR_SET(result, 1, scm_from_ipv6 (nad->sin6_addr.s6_addr));
+	SCM_VECTOR_SET(result, 2, scm_from_ushort (ntohs (nad->sin6_port)));
+	SCM_VECTOR_SET(result, 3, scm_from_uint32 (nad->sin6_flowinfo));
 #ifdef HAVE_SIN6_SCOPE_ID
-	SCM_SIMPLE_VECTOR_SET(result, 4, scm_from_ulong (nad->sin6_scope_id));
+	SCM_VECTOR_SET(result, 4, scm_from_ulong (nad->sin6_scope_id));
 #else
-	SCM_SIMPLE_VECTOR_SET(result, 4, SCM_INUM0);
+	SCM_VECTOR_SET(result, 4, SCM_INUM0);
 #endif
       }
       break;
@@ -1019,13 +1019,13 @@ _scm_from_sockaddr (const scm_t_max_sockaddr *address, unsigned addr_size,
 
 	result = scm_c_make_vector (2, SCM_UNSPECIFIED);
 
-	SCM_SIMPLE_VECTOR_SET(result, 0, scm_from_short (fam));
+	SCM_VECTOR_SET(result, 0, scm_from_short (fam));
 	/* When addr_size is not enough to cover sun_path, do not try
 	   to access it. */
 	if (addr_size <= offsetof (struct sockaddr_un, sun_path))
-	  SCM_SIMPLE_VECTOR_SET(result, 1, SCM_BOOL_F);
+	  SCM_VECTOR_SET(result, 1, SCM_BOOL_F);
 	else
-	  SCM_SIMPLE_VECTOR_SET(result, 1, scm_from_locale_string (nad->sun_path));
+	  SCM_VECTOR_SET(result, 1, scm_from_locale_string (nad->sun_path));
       }
       break;
 #endif
@@ -1062,13 +1062,13 @@ scm_to_sockaddr (SCM address, size_t *address_size)
   SCM_VALIDATE_VECTOR (1, address);
 
   *address_size = 0;
-  family = scm_to_short (SCM_SIMPLE_VECTOR_REF (address, 0));
+  family = scm_to_short (SCM_VECTOR_REF (address, 0));
 
   switch (family)
     {
     case AF_INET:
       {
-	if (SCM_SIMPLE_VECTOR_LENGTH (address) != 3)
+	if (SCM_VECTOR_LENGTH (address) != 3)
 	  scm_misc_error (FUNC_NAME,
 			  "invalid inet address representation: ~A",
 			  scm_list_1 (address));
@@ -1083,9 +1083,9 @@ scm_to_sockaddr (SCM address, size_t *address_size)
 #endif
 
 	    c_inet.sin_addr.s_addr =
-	      htonl (scm_to_ulong (SCM_SIMPLE_VECTOR_REF (address, 1)));
+	      htonl (scm_to_ulong (SCM_VECTOR_REF (address, 1)));
 	    c_inet.sin_port =
-	      htons (scm_to_ushort (SCM_SIMPLE_VECTOR_REF (address, 2)));
+	      htons (scm_to_ushort (SCM_VECTOR_REF (address, 2)));
 	    c_inet.sin_family = AF_INET;
 
 	    *address_size = sizeof (c_inet);
@@ -1099,7 +1099,7 @@ scm_to_sockaddr (SCM address, size_t *address_size)
 #ifdef HAVE_IPV6
     case AF_INET6:
       {
-	if (SCM_SIMPLE_VECTOR_LENGTH (address) != 5)
+	if (SCM_VECTOR_LENGTH (address) != 5)
 	  scm_misc_error (FUNC_NAME, "invalid inet6 address representation: ~A",
 			  scm_list_1 (address));
 	else
@@ -1107,14 +1107,14 @@ scm_to_sockaddr (SCM address, size_t *address_size)
 	    struct sockaddr_in6 c_inet6;
 
 	    scm_to_ipv6 (c_inet6.sin6_addr.s6_addr,
-			 SCM_SIMPLE_VECTOR_REF (address, 1));
+			 SCM_VECTOR_REF (address, 1));
 	    c_inet6.sin6_port =
-	      htons (scm_to_ushort (SCM_SIMPLE_VECTOR_REF (address, 2)));
+	      htons (scm_to_ushort (SCM_VECTOR_REF (address, 2)));
 	    c_inet6.sin6_flowinfo =
-	      scm_to_uint32 (SCM_SIMPLE_VECTOR_REF (address, 3));
+	      scm_to_uint32 (SCM_VECTOR_REF (address, 3));
 #ifdef HAVE_SIN6_SCOPE_ID
 	    c_inet6.sin6_scope_id =
-	      scm_to_ulong (SCM_SIMPLE_VECTOR_REF (address, 4));
+	      scm_to_ulong (SCM_VECTOR_REF (address, 4));
 #endif
 
 	    c_inet6.sin6_family = AF_INET6;
@@ -1131,7 +1131,7 @@ scm_to_sockaddr (SCM address, size_t *address_size)
 #ifdef HAVE_UNIX_DOMAIN_SOCKETS
     case AF_UNIX:
       {
-	if (SCM_SIMPLE_VECTOR_LENGTH (address) != 2)
+	if (SCM_VECTOR_LENGTH (address) != 2)
 	  scm_misc_error (FUNC_NAME, "invalid unix address representation: ~A",
 			  scm_list_1 (address));
 	else
@@ -1139,7 +1139,7 @@ scm_to_sockaddr (SCM address, size_t *address_size)
 	    SCM path;
 	    size_t path_len = 0;
 
-	    path = SCM_SIMPLE_VECTOR_REF (address, 1);
+	    path = SCM_VECTOR_REF (address, 1);
 	    if (!scm_is_string (path) && !scm_is_false (path))
 	      scm_misc_error (FUNC_NAME, "invalid unix address "
 			      "path: ~A", scm_list_1 (path));

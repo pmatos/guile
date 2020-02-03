@@ -207,18 +207,18 @@ SCM_DEFINE (scm_make_soft_port, "make-soft-port", 2, 0, 0,
   struct soft_port *stream;
 
   SCM_VALIDATE_VECTOR (1, pv);
-  vlen = SCM_SIMPLE_VECTOR_LENGTH (pv);
+  vlen = SCM_VECTOR_LENGTH (pv);
   SCM_ASSERT ((vlen == 5) || (vlen == 6), pv, 1, FUNC_NAME);
   SCM_VALIDATE_STRING (2, modes);
 
   stream = scm_gc_typed_calloc (struct soft_port);
-  stream->write_char = SCM_SIMPLE_VECTOR_REF (pv, 0);
-  stream->write_string = SCM_SIMPLE_VECTOR_REF (pv, 1);
-  stream->flush = SCM_SIMPLE_VECTOR_REF (pv, 2);
-  stream->read_char = SCM_SIMPLE_VECTOR_REF (pv, 3);
-  stream->close = SCM_SIMPLE_VECTOR_REF (pv, 4);
+  stream->write_char = SCM_VECTOR_REF (pv, 0);
+  stream->write_string = SCM_VECTOR_REF (pv, 1);
+  stream->flush = SCM_VECTOR_REF (pv, 2);
+  stream->read_char = SCM_VECTOR_REF (pv, 3);
+  stream->close = SCM_VECTOR_REF (pv, 4);
   stream->input_waiting =
-    vlen == 6 ? SCM_SIMPLE_VECTOR_REF (pv, 5) : SCM_BOOL_F;
+    vlen == 6 ? SCM_VECTOR_REF (pv, 5) : SCM_BOOL_F;
 
   return scm_c_make_port (scm_soft_port_type, scm_i_mode_bits (modes),
                           (scm_t_bits) stream);

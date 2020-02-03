@@ -245,7 +245,7 @@ SCM_DEFINE (scm_srfi1_count, "count", 2, 0, 1,
 
       /* vec is the list arguments */
       vec = scm_vector (scm_cons (list1, rest));
-      len = SCM_SIMPLE_VECTOR_LENGTH (vec);
+      len = SCM_VECTOR_LENGTH (vec);
 
       /* args is the argument list to pass to pred, same length as vec,
          re-used for each call */
@@ -259,11 +259,11 @@ SCM_DEFINE (scm_srfi1_count, "count", 2, 0, 1,
                i < len;
                i++, a = SCM_CDR (a), argnum++)
             {
-              lst = SCM_SIMPLE_VECTOR_REF (vec, i);  /* list argument */
+              lst = SCM_VECTOR_REF (vec, i);  /* list argument */
               if (! scm_is_pair (lst))
                 goto check_lst_and_done;
               SCM_SETCAR (a, SCM_CAR (lst));  /* arg for pred */
-              SCM_SIMPLE_VECTOR_SET (vec, i, SCM_CDR (lst));  /* rest of lst */
+              SCM_VECTOR_SET (vec, i, SCM_CDR (lst));  /* rest of lst */
             }
 
           count += scm_is_true (scm_apply_0 (pred, args));

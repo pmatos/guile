@@ -64,9 +64,9 @@
 #define CDDDR(x) SCM_CDDDR(x)
 #define CADDDR(x) SCM_CADDDR(x)
 
-#define VECTOR_REF(v, i) (SCM_SIMPLE_VECTOR_REF (v, i))
-#define VECTOR_SET(v, i, x) (SCM_SIMPLE_VECTOR_SET (v, i, x))
-#define VECTOR_LENGTH(v) (SCM_SIMPLE_VECTOR_LENGTH (v))
+#define VECTOR_REF(v, i) (SCM_VECTOR_REF (v, i))
+#define VECTOR_SET(v, i, x) (SCM_VECTOR_SET (v, i, x))
+#define VECTOR_LENGTH(v) (SCM_VECTOR_LENGTH (v))
 
 SCM_SYMBOL (sym_case_lambda_star, "case-lambda*");
 

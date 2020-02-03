@@ -654,12 +654,12 @@ SCM_DEFINE (scm_transpose_array, "transpose-array", 1, 0, 1,
       return ra;
     default:
       vargs = scm_vector (args);
-      if (SCM_SIMPLE_VECTOR_LENGTH (vargs) != SCM_I_ARRAY_NDIM (ra))
+      if (SCM_VECTOR_LENGTH (vargs) != SCM_I_ARRAY_NDIM (ra))
 	SCM_WRONG_NUM_ARGS ();
       ndim = 0;
       for (k = 0; k < SCM_I_ARRAY_NDIM (ra); k++)
 	{
-	  i = scm_to_signed_integer (SCM_SIMPLE_VECTOR_REF (vargs, k),
+	  i = scm_to_signed_integer (SCM_VECTOR_REF (vargs, k),
 				     0, SCM_I_ARRAY_NDIM(ra));
 	  if (ndim < i)
 	    ndim = i;
@@ -675,7 +675,7 @@ SCM_DEFINE (scm_transpose_array, "transpose-array", 1, 0, 1,
 	}
       for (k = SCM_I_ARRAY_NDIM (ra); k--;)
 	{
-	  i = scm_to_int (SCM_SIMPLE_VECTOR_REF (vargs, k));
+	  i = scm_to_int (SCM_VECTOR_REF (vargs, k));
 	  s = &(SCM_I_ARRAY_DIMS (ra)[k]);
 	  r = &(SCM_I_ARRAY_DIMS (res)[i]);
 	  if (r->ubnd < r->lbnd)

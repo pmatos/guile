@@ -215,7 +215,7 @@ make_print_state (void)
   scm_print_state *pstate = SCM_PRINT_STATE (print_state);
   pstate->handle = print_state;
   pstate->ref_vect = scm_c_make_vector (PSTATE_SIZE, SCM_UNDEFINED);
-  pstate->ceiling = SCM_SIMPLE_VECTOR_LENGTH (pstate->ref_vect);
+  pstate->ceiling = SCM_VECTOR_LENGTH (pstate->ref_vect);
   pstate->highlight_objects = SCM_EOL;
   return print_state;
 }
@@ -277,20 +277,20 @@ static void
 grow_ref_stack (scm_print_state *pstate)
 {
   SCM old_vect = pstate->ref_vect;
-  size_t old_size = SCM_SIMPLE_VECTOR_LENGTH (old_vect);
+  size_t old_size = SCM_VECTOR_LENGTH (old_vect);
   size_t new_size = 2 * pstate->ceiling;
   SCM new_vect = scm_c_make_vector (new_size, SCM_UNDEFINED);
   unsigned long int i;
 
   for (i = 0; i != old_size; ++i)
-    SCM_SIMPLE_VECTOR_SET (new_vect, i, SCM_SIMPLE_VECTOR_REF (old_vect, i));
+    SCM_VECTOR_SET (new_vect, i, SCM_VECTOR_REF (old_vect, i));
 
   pstate->ref_vect = new_vect;
   pstate->ceiling = new_size;
 }
 
-#define PSTATE_STACK_REF(p,i)   SCM_SIMPLE_VECTOR_REF((p)->ref_vect, (i))
-#define PSTATE_STACK_SET(p,i,v) SCM_SIMPLE_VECTOR_SET((p)->ref_vect, (i), (v))
+#define PSTATE_STACK_REF(p,i)   SCM_VECTOR_REF((p)->ref_vect, (i))
+#define PSTATE_STACK_SET(p,i,v) SCM_VECTOR_SET((p)->ref_vect, (i), (v))
 
 static void
 print_circref (SCM port, scm_print_state *pstate, SCM ref)
@@ -770,7 +770,7 @@ iprin1 (SCM exp, SCM port, scm_print_state *pstate)
 	case scm_tc7_vector:
 	  ENTER_NESTED_DATA (pstate, exp, circref);
 	  scm_puts ("#(", port);
-          print_vector_or_weak_vector (exp, SCM_SIMPLE_VECTOR_LENGTH (exp),
+          print_vector_or_weak_vector (exp, SCM_VECTOR_LENGTH (exp),
                                        scm_c_vector_ref, port, pstate);
 	  EXIT_NESTED_DATA (pstate);
 	  break;

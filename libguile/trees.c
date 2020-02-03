@@ -130,7 +130,7 @@ copy_tree (struct t_trace *const hare,
 
       if (scm_is_vector (hare->obj))
         {
-          size_t length = SCM_SIMPLE_VECTOR_LENGTH (hare->obj);
+          size_t length = SCM_VECTOR_LENGTH (hare->obj);
           SCM new_vector = scm_c_make_vector (length, SCM_UNSPECIFIED);
 
           /* Each vector element is copied by recursing into copy_tree, having
@@ -139,9 +139,9 @@ copy_tree (struct t_trace *const hare,
           for (i = 0; i < length; ++i)
             {
               SCM new_element;
-              new_hare.obj = SCM_SIMPLE_VECTOR_REF (hare->obj, i);
+              new_hare.obj = SCM_VECTOR_REF (hare->obj, i);
               new_element = copy_tree (&new_hare, tortoise, tortoise_delay);
-              SCM_SIMPLE_VECTOR_SET (new_vector, i, new_element);
+              SCM_VECTOR_SET (new_vector, i, new_element);
             }
 
           return new_vector;

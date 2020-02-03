@@ -99,14 +99,14 @@ scm_primitive_poll (SCM pollfds, SCM nfds, SCM ports, SCM timeout)
     SCM_OUT_OF_RANGE (SCM_ARG2, nfds);
   
   SCM_VALIDATE_VECTOR (SCM_ARG3, ports);
-  if (SCM_UNLIKELY (SCM_SIMPLE_VECTOR_LENGTH (ports) < c_nfds))
+  if (SCM_UNLIKELY (SCM_VECTOR_LENGTH (ports) < c_nfds))
     SCM_OUT_OF_RANGE (SCM_ARG3, ports);
     
   fds = (struct pollfd*)SCM_BYTEVECTOR_CONTENTS (pollfds);
   
   for (i = 0; i < c_nfds; i++)
     {
-      SCM port = SCM_SIMPLE_VECTOR_REF (ports, i);
+      SCM port = SCM_VECTOR_REF (ports, i);
       short int revents = 0;
 
       if (SCM_PORTP (port))
@@ -145,7 +145,7 @@ scm_primitive_poll (SCM pollfds, SCM nfds, SCM ports, SCM timeout)
   if (have_buffered_io)
     for (i = 0; i < c_nfds; i++)
       {
-        SCM port = SCM_SIMPLE_VECTOR_REF (ports, i);
+        SCM port = SCM_VECTOR_REF (ports, i);
         short int revents = 0;
 
         if (SCM_PORTP (port))

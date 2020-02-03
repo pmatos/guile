@@ -590,10 +590,10 @@ make_port_buffer (SCM port, size_t size)
 {
   SCM ret = scm_c_make_vector (SCM_PORT_BUFFER_FIELD_COUNT, SCM_INUM0);
 
-  SCM_SIMPLE_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_BYTEVECTOR,
-                         scm_c_make_bytevector (size));
-  SCM_SIMPLE_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_POSITION,
-                         SCM_PORT (port)->position);
+  SCM_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_BYTEVECTOR,
+                  scm_c_make_bytevector (size));
+  SCM_VECTOR_SET (ret, SCM_PORT_BUFFER_FIELD_POSITION,
+                  SCM_PORT (port)->position);
   scm_port_buffer_set_has_eof_p (ret, SCM_BOOL_F);
 
   return ret;

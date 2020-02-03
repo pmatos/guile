@@ -199,8 +199,8 @@ signal_delivery_thread (void *data)
 	{
 	  SCM h, t;
 
-	  h = SCM_SIMPLE_VECTOR_REF (signal_handler_asyncs, sig);
-	  t = SCM_SIMPLE_VECTOR_REF (signal_handler_threads, sig);
+	  h = SCM_VECTOR_REF (signal_handler_asyncs, sig);
+	  t = SCM_VECTOR_REF (signal_handler_threads, sig);
 	  if (scm_is_true (h))
 	    scm_system_async_mark_for_thread (h, t);
 	}
@@ -242,7 +242,7 @@ scm_i_ensure_signal_delivery_thread ()
 static SIGRETTYPE
 take_signal (int signum)
 {
-  SCM cell = SCM_SIMPLE_VECTOR_REF (signal_handler_asyncs, signum);
+  SCM cell = SCM_VECTOR_REF (signal_handler_asyncs, signum);
   scm_thread *t = SCM_I_CURRENT_THREAD;
 
   if (scm_is_false (SCM_CDR (cell)))
@@ -269,8 +269,8 @@ install_handler (int signum, SCM thread, SCM handler)
 {
   if (scm_is_false (handler))
     {
-      SCM_SIMPLE_VECTOR_SET (*signal_handlers, signum, SCM_BOOL_F);
-      SCM_SIMPLE_VECTOR_SET (signal_handler_asyncs, signum, SCM_BOOL_F);
+      SCM_VECTOR_SET (*signal_handlers, signum, SCM_BOOL_F);
+      SCM_VECTOR_SET (signal_handler_asyncs, signum, SCM_BOOL_F);
     }
   else
     {
@@ -278,11 +278,11 @@ install_handler (int signum, SCM thread, SCM handler)
 #if !SCM_USE_PTHREAD_THREADS
       async = scm_cons (async, SCM_BOOL_F);
 #endif
-      SCM_SIMPLE_VECTOR_SET (*signal_handlers, signum, handler);
-      SCM_SIMPLE_VECTOR_SET (signal_handler_asyncs, signum, async);
+      SCM_VECTOR_SET (*signal_handlers, signum, handler);
+      SCM_VECTOR_SET (signal_handler_asyncs, signum, async);
     }
 
-  SCM_SIMPLE_VECTOR_SET (signal_handler_threads, signum, thread);
+  SCM_VECTOR_SET (signal_handler_threads, signum, thread);
 }
 
 SCM
@@ -353,7 +353,7 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
   scm_i_dynwind_pthread_mutex_lock (&signal_handler_lock);
   scm_dynwind_block_asyncs ();
 
-  old_handler = SCM_SIMPLE_VECTOR_REF (*signal_handlers, csig);
+  old_handler = SCM_VECTOR_REF (*signal_handlers, csig);
   if (SCM_UNBNDP (handler))
     query_only = 1;
   else if (scm_is_integer (handler))
@@ -501,7 +501,7 @@ SCM_DEFINE (scm_restore_signals, "restore-signals", 0, 0, 0,
 	  if (sigaction (i, &orig_handlers[i], NULL) == -1)
 	    SCM_SYSERROR;
 	  orig_handlers[i].sa_handler = SIG_ERR;
-	  SCM_SIMPLE_VECTOR_SET (*signal_handlers, i, SCM_BOOL_F);
+	  SCM_VECTOR_SET (*signal_handlers, i, SCM_BOOL_F);
 	}
 #else
       if (orig_handlers[i] != SIG_ERR)
@@ -509,7 +509,7 @@ SCM_DEFINE (scm_restore_signals, "restore-signals", 0, 0, 0,
 	  if (signal (i, orig_handlers[i]) == SIG_ERR)
 	    SCM_SYSERROR;
 	  orig_handlers[i] = SIG_ERR;
-	  SCM_SIMPLE_VECTOR_SET (*signal_handlers, i, SCM_BOOL_F);	  
+	  SCM_VECTOR_SET (*signal_handlers, i, SCM_BOOL_F);	  
 	}
 #endif
     }

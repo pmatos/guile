@@ -227,16 +227,16 @@ SCM_DEFINE (scm_times, "times", 0, 0, 0,
   factor = scm_quotient (scm_from_long (TIME_UNITS_PER_SECOND),
                          scm_from_long (ticks_per_second));
 
-  SCM_SIMPLE_VECTOR_SET (result, 0,
-                         scm_product (scm_from_long (rv), factor));
-  SCM_SIMPLE_VECTOR_SET (result, 1,
-                         scm_product (scm_from_long (t.tms_utime), factor));
-  SCM_SIMPLE_VECTOR_SET (result, 2,
-                         scm_product (scm_from_long (t.tms_stime), factor));
-  SCM_SIMPLE_VECTOR_SET (result ,3,
-                         scm_product (scm_from_long (t.tms_cutime), factor));
-  SCM_SIMPLE_VECTOR_SET (result, 4,
-                         scm_product (scm_from_long (t.tms_cstime), factor));
+  SCM_VECTOR_SET (result, 0,
+                  scm_product (scm_from_long (rv), factor));
+  SCM_VECTOR_SET (result, 1,
+                  scm_product (scm_from_long (t.tms_utime), factor));
+  SCM_VECTOR_SET (result, 2,
+                  scm_product (scm_from_long (t.tms_stime), factor));
+  SCM_VECTOR_SET (result ,3,
+                  scm_product (scm_from_long (t.tms_cutime), factor));
+  SCM_VECTOR_SET (result, 4,
+                  scm_product (scm_from_long (t.tms_cstime), factor));
   return result;
 }
 #undef FUNC_NAME
@@ -311,17 +311,17 @@ filltime (struct tm *bd_time, int zoff, const char *zname)
 {
   SCM result = scm_c_make_vector (11, SCM_UNDEFINED);
 
-  SCM_SIMPLE_VECTOR_SET (result,0, scm_from_int (bd_time->tm_sec));
-  SCM_SIMPLE_VECTOR_SET (result,1, scm_from_int (bd_time->tm_min));
-  SCM_SIMPLE_VECTOR_SET (result,2, scm_from_int (bd_time->tm_hour));
-  SCM_SIMPLE_VECTOR_SET (result,3, scm_from_int (bd_time->tm_mday));
-  SCM_SIMPLE_VECTOR_SET (result,4, scm_from_int (bd_time->tm_mon));
-  SCM_SIMPLE_VECTOR_SET (result,5, scm_from_int (bd_time->tm_year));
-  SCM_SIMPLE_VECTOR_SET (result,6, scm_from_int (bd_time->tm_wday));
-  SCM_SIMPLE_VECTOR_SET (result,7, scm_from_int (bd_time->tm_yday));
-  SCM_SIMPLE_VECTOR_SET (result,8, scm_from_int (bd_time->tm_isdst));
-  SCM_SIMPLE_VECTOR_SET (result,9, scm_from_int (zoff));
-  SCM_SIMPLE_VECTOR_SET (result,10, (zname 
+  SCM_VECTOR_SET (result,0, scm_from_int (bd_time->tm_sec));
+  SCM_VECTOR_SET (result,1, scm_from_int (bd_time->tm_min));
+  SCM_VECTOR_SET (result,2, scm_from_int (bd_time->tm_hour));
+  SCM_VECTOR_SET (result,3, scm_from_int (bd_time->tm_mday));
+  SCM_VECTOR_SET (result,4, scm_from_int (bd_time->tm_mon));
+  SCM_VECTOR_SET (result,5, scm_from_int (bd_time->tm_year));
+  SCM_VECTOR_SET (result,6, scm_from_int (bd_time->tm_wday));
+  SCM_VECTOR_SET (result,7, scm_from_int (bd_time->tm_yday));
+  SCM_VECTOR_SET (result,8, scm_from_int (bd_time->tm_isdst));
+  SCM_VECTOR_SET (result,9, scm_from_int (zoff));
+  SCM_VECTOR_SET (result,10, (zname 
 				     ? scm_from_locale_string (zname)
 				     : SCM_BOOL_F));
   return result;
@@ -506,26 +506,26 @@ static void
 bdtime2c (SCM sbd_time, struct tm *lt, int pos, const char *subr)
 {
   SCM_ASSERT (scm_is_vector (sbd_time)
-	      && SCM_SIMPLE_VECTOR_LENGTH (sbd_time) == 11,
+	      && SCM_VECTOR_LENGTH (sbd_time) == 11,
 	      sbd_time, pos, subr);
 
-  lt->tm_sec = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 0));
-  lt->tm_min = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 1));
-  lt->tm_hour = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 2));
-  lt->tm_mday = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 3));
-  lt->tm_mon = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 4));
-  lt->tm_year = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 5));
-  lt->tm_wday = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 6));
-  lt->tm_yday = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 7));
-  lt->tm_isdst = scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 8));
+  lt->tm_sec = scm_to_int (SCM_VECTOR_REF (sbd_time, 0));
+  lt->tm_min = scm_to_int (SCM_VECTOR_REF (sbd_time, 1));
+  lt->tm_hour = scm_to_int (SCM_VECTOR_REF (sbd_time, 2));
+  lt->tm_mday = scm_to_int (SCM_VECTOR_REF (sbd_time, 3));
+  lt->tm_mon = scm_to_int (SCM_VECTOR_REF (sbd_time, 4));
+  lt->tm_year = scm_to_int (SCM_VECTOR_REF (sbd_time, 5));
+  lt->tm_wday = scm_to_int (SCM_VECTOR_REF (sbd_time, 6));
+  lt->tm_yday = scm_to_int (SCM_VECTOR_REF (sbd_time, 7));
+  lt->tm_isdst = scm_to_int (SCM_VECTOR_REF (sbd_time, 8));
 #if HAVE_STRUCT_TM_TM_GMTOFF
-  lt->tm_gmtoff = - scm_to_int (SCM_SIMPLE_VECTOR_REF (sbd_time, 9));
+  lt->tm_gmtoff = - scm_to_int (SCM_VECTOR_REF (sbd_time, 9));
 #endif
 #ifdef HAVE_STRUCT_TM_TM_ZONE
-  if (scm_is_false (SCM_SIMPLE_VECTOR_REF (sbd_time, 10)))
+  if (scm_is_false (SCM_VECTOR_REF (sbd_time, 10)))
     lt->tm_zone = NULL;
   else
-    lt->tm_zone  = scm_to_locale_string (SCM_SIMPLE_VECTOR_REF (sbd_time, 10));
+    lt->tm_zone  = scm_to_locale_string (SCM_VECTOR_REF (sbd_time, 10));
 #endif
 }
 
@@ -688,7 +688,7 @@ SCM_DEFINE (scm_strftime, "strftime", 2, 0, 0,
        environment.  interrupts and thread switching must be deferred
        until TZ is restored.  */
     char **oldenv = NULL;
-    SCM zone_spec = SCM_SIMPLE_VECTOR_REF (stime, 10);
+    SCM zone_spec = SCM_VECTOR_REF (stime, 10);
     int have_zone = 0;
 
     if (scm_is_true (zone_spec) && scm_c_string_length (zone_spec) > 0)

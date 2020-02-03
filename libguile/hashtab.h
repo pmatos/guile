@@ -40,11 +40,11 @@
 #define SCM_HASHTABLE_LOWER(x)     (SCM_HASHTABLE (x)->lower)
 
 #define SCM_HASHTABLE_N_BUCKETS(h) \
- SCM_SIMPLE_VECTOR_LENGTH (SCM_HASHTABLE_VECTOR (h))
+ SCM_VECTOR_LENGTH (SCM_HASHTABLE_VECTOR (h))
 #define SCM_HASHTABLE_BUCKET(h, i) \
-  SCM_SIMPLE_VECTOR_REF (SCM_HASHTABLE_VECTOR (h), i)
+  SCM_VECTOR_REF (SCM_HASHTABLE_VECTOR (h), i)
 #define SCM_SET_HASHTABLE_BUCKET(h, i, x) \
-  SCM_SIMPLE_VECTOR_SET (SCM_HASHTABLE_VECTOR (h), i, x)
+  SCM_VECTOR_SET (SCM_HASHTABLE_VECTOR (h), i, x)
 
 /* Function that computes a hash of OBJ modulo MAX.  */
 typedef unsigned long (*scm_t_hash_fn) (SCM obj, unsigned long max,

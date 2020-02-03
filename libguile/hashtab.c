@@ -143,13 +143,13 @@ scm_i_rehash (SCM table,
   SCM_SET_HASHTABLE_VECTOR (table, new_buckets);
   SCM_SET_HASHTABLE_N_ITEMS (table, 0);
 
-  old_size = SCM_SIMPLE_VECTOR_LENGTH (buckets);
+  old_size = SCM_VECTOR_LENGTH (buckets);
   for (i = 0; i < old_size; ++i)
     {
       SCM ls, cell, handle;
 
-      ls = SCM_SIMPLE_VECTOR_REF (buckets, i);
-      SCM_SIMPLE_VECTOR_SET (buckets, i, SCM_EOL);
+      ls = SCM_VECTOR_REF (buckets, i);
+      SCM_VECTOR_SET (buckets, i, SCM_EOL);
 
       while (scm_is_pair (ls))
 	{
@@ -162,8 +162,8 @@ scm_i_rehash (SCM table,
 	  h = hash_fn (SCM_CAR (handle), new_size, closure);
 	  if (h >= new_size)
 	    scm_out_of_range (func_name, scm_from_ulong (h));
-	  SCM_SETCDR (cell, SCM_SIMPLE_VECTOR_REF (new_buckets, h));
-	  SCM_SIMPLE_VECTOR_SET (new_buckets, h, cell);
+	  SCM_SETCDR (cell, SCM_VECTOR_REF (new_buckets, h));
+	  SCM_VECTOR_SET (new_buckets, h, cell);
 	  SCM_HASHTABLE_INCREMENT (table);
 	}
     }
@@ -178,7 +178,7 @@ scm_i_hashtable_print (SCM exp, SCM port, scm_print_state *pstate)
   scm_putc (' ', port);
   scm_uintprint (SCM_HASHTABLE_N_ITEMS (exp), 10, port);
   scm_putc ('/', port);
-  scm_uintprint (SCM_SIMPLE_VECTOR_LENGTH (SCM_HASHTABLE_VECTOR (exp)),
+  scm_uintprint (SCM_VECTOR_LENGTH (SCM_HASHTABLE_VECTOR (exp)),
 		 10, port);
   scm_puts (">", port);
 }
@@ -226,13 +226,13 @@ scm_hash_fn_get_handle (SCM table, SCM obj,
   SCM_VALIDATE_HASHTABLE (SCM_ARG1, table);
   buckets = SCM_HASHTABLE_VECTOR (table);
 
-  if (SCM_SIMPLE_VECTOR_LENGTH (buckets) == 0)
+  if (SCM_VECTOR_LENGTH (buckets) == 0)
     return SCM_BOOL_F;
-  k = hash_fn (obj, SCM_SIMPLE_VECTOR_LENGTH (buckets), closure);
-  if (k >= SCM_SIMPLE_VECTOR_LENGTH (buckets))
+  k = hash_fn (obj, SCM_VECTOR_LENGTH (buckets), closure);
+  if (k >= SCM_VECTOR_LENGTH (buckets))
     scm_out_of_range (FUNC_NAME, scm_from_ulong (k));
 
-  h = assoc_fn (obj, SCM_SIMPLE_VECTOR_REF (buckets, k), closure);
+  h = assoc_fn (obj, SCM_VECTOR_REF (buckets, k), closure);
 
   return h;
 }
@@ -251,14 +251,14 @@ scm_hash_fn_create_handle_x (SCM table, SCM obj, SCM init,
   SCM_VALIDATE_HASHTABLE (SCM_ARG1, table);
   buckets = SCM_HASHTABLE_VECTOR (table);
 
-  if (SCM_SIMPLE_VECTOR_LENGTH (buckets) == 0)
+  if (SCM_VECTOR_LENGTH (buckets) == 0)
     SCM_MISC_ERROR ("void hashtable", SCM_EOL);
 
-  k = hash_fn (obj, SCM_SIMPLE_VECTOR_LENGTH (buckets), closure);
-  if (k >= SCM_SIMPLE_VECTOR_LENGTH (buckets))
+  k = hash_fn (obj, SCM_VECTOR_LENGTH (buckets), closure);
+  if (k >= SCM_VECTOR_LENGTH (buckets))
     scm_out_of_range ("hash_fn_create_handle_x", scm_from_ulong (k));
 
-  it = assoc_fn (obj, SCM_SIMPLE_VECTOR_REF (buckets, k), closure);
+  it = assoc_fn (obj, SCM_VECTOR_REF (buckets, k), closure);
 
   if (scm_is_pair (it))
     return it;
@@ -274,12 +274,12 @@ scm_hash_fn_create_handle_x (SCM table, SCM obj, SCM init,
       if (!scm_is_eq (SCM_HASHTABLE_VECTOR (table), buckets))
 	{
 	  buckets = SCM_HASHTABLE_VECTOR (table);
-	  k = hash_fn (obj, SCM_SIMPLE_VECTOR_LENGTH (buckets), closure);
-	  if (k >= SCM_SIMPLE_VECTOR_LENGTH (buckets))
+	  k = hash_fn (obj, SCM_VECTOR_LENGTH (buckets), closure);
+	  if (k >= SCM_VECTOR_LENGTH (buckets))
 	    scm_out_of_range ("hash_fn_create_handle_x", scm_from_ulong (k));
 	}
-      SCM_SETCDR (new_bucket, SCM_SIMPLE_VECTOR_REF (buckets, k));
-      SCM_SIMPLE_VECTOR_SET (buckets, k, new_bucket);
+      SCM_SETCDR (new_bucket, SCM_VECTOR_REF (buckets, k));
+      SCM_VECTOR_SET (buckets, k, new_bucket);
       SCM_HASHTABLE_INCREMENT (table);
 
       /* Maybe rehash the table.  */
@@ -335,19 +335,19 @@ scm_hash_fn_remove_x (SCM table, SCM obj,
 
   buckets = SCM_HASHTABLE_VECTOR (table);
 
-  if (SCM_SIMPLE_VECTOR_LENGTH (buckets) == 0)
+  if (SCM_VECTOR_LENGTH (buckets) == 0)
     return SCM_EOL;
 
-  k = hash_fn (obj, SCM_SIMPLE_VECTOR_LENGTH (buckets), closure);
-  if (k >= SCM_SIMPLE_VECTOR_LENGTH (buckets))
+  k = hash_fn (obj, SCM_VECTOR_LENGTH (buckets), closure);
+  if (k >= SCM_VECTOR_LENGTH (buckets))
     scm_out_of_range (FUNC_NAME, scm_from_ulong (k));
 
-  h = assoc_fn (obj, SCM_SIMPLE_VECTOR_REF (buckets, k), closure);
+  h = assoc_fn (obj, SCM_VECTOR_REF (buckets, k), closure);
 
   if (scm_is_true (h))
     {
-      SCM_SIMPLE_VECTOR_SET 
-	(buckets, k, scm_delq_x (h, SCM_SIMPLE_VECTOR_REF (buckets, k)));
+      SCM_VECTOR_SET 
+	(buckets, k, scm_delq_x (h, SCM_VECTOR_REF (buckets, k)));
       SCM_HASHTABLE_DECREMENT (table);
       if (SCM_HASHTABLE_N_ITEMS (table) < SCM_HASHTABLE_LOWER (table))
         scm_i_rehash (table, hash_fn, closure, FUNC_NAME);
@@ -1017,12 +1017,12 @@ scm_internal_hash_fold (scm_t_hash_fold_fn fn, void *closure,
   SCM_VALIDATE_HASHTABLE (0, table);
   buckets = SCM_HASHTABLE_VECTOR (table);
   
-  n = SCM_SIMPLE_VECTOR_LENGTH (buckets);
+  n = SCM_VECTOR_LENGTH (buckets);
   for (i = 0; i < n; ++i)
     {
       SCM ls, handle;
 
-      for (ls = SCM_SIMPLE_VECTOR_REF (buckets, i); !scm_is_null (ls);
+      for (ls = SCM_VECTOR_REF (buckets, i); !scm_is_null (ls);
 	   ls = SCM_CDR (ls))
 	{
 	  handle = SCM_CAR (ls);
@@ -1050,11 +1050,11 @@ scm_internal_hash_for_each_handle (scm_t_hash_handle_fn fn, void *closure,
   
   SCM_VALIDATE_HASHTABLE (0, table);
   buckets = SCM_HASHTABLE_VECTOR (table);
-  n = SCM_SIMPLE_VECTOR_LENGTH (buckets);
+  n = SCM_VECTOR_LENGTH (buckets);
 
   for (i = 0; i < n; ++i)
     {
-      SCM ls = SCM_SIMPLE_VECTOR_REF (buckets, i), handle;
+      SCM ls = SCM_VECTOR_REF (buckets, i), handle;
       while (!scm_is_null (ls))
 	{
 	  if (!scm_is_pair (ls))

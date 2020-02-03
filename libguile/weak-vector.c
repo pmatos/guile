@@ -69,7 +69,7 @@ scm_c_make_weak_vector (size_t len, SCM fill)
     }
   else
     for (j = 0; j < len; j++)
-      SCM_SIMPLE_VECTOR_SET (wv, j, fill);
+      SCM_VECTOR_SET (wv, j, fill);
 
   return wv;
 }
@@ -180,7 +180,7 @@ weak_vector_ref (void *data)
 {
   struct weak_vector_ref_data *d = data;
 
-  return (void *) SCM_UNPACK (SCM_SIMPLE_VECTOR_REF (d->wv, d->k));
+  return (void *) SCM_UNPACK (SCM_VECTOR_REF (d->wv, d->k));
 }
 
 SCM

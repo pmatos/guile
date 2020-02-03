@@ -346,57 +346,57 @@ scm_stat2scm (struct stat_or_stat64 *stat_temp)
 {
   SCM ans = scm_c_make_vector (18, SCM_UNSPECIFIED);
   
-  SCM_SIMPLE_VECTOR_SET(ans, 0, scm_from_ulong (stat_temp->st_dev));
-  SCM_SIMPLE_VECTOR_SET(ans, 1, scm_from_ino_t_or_ino64_t (stat_temp->st_ino));
-  SCM_SIMPLE_VECTOR_SET(ans, 2, scm_from_ulong (stat_temp->st_mode));
-  SCM_SIMPLE_VECTOR_SET(ans, 3, scm_from_ulong (stat_temp->st_nlink));
-  SCM_SIMPLE_VECTOR_SET(ans, 4, scm_from_ulong (stat_temp->st_uid));
-  SCM_SIMPLE_VECTOR_SET(ans, 5, scm_from_ulong (stat_temp->st_gid));
+  SCM_VECTOR_SET(ans, 0, scm_from_ulong (stat_temp->st_dev));
+  SCM_VECTOR_SET(ans, 1, scm_from_ino_t_or_ino64_t (stat_temp->st_ino));
+  SCM_VECTOR_SET(ans, 2, scm_from_ulong (stat_temp->st_mode));
+  SCM_VECTOR_SET(ans, 3, scm_from_ulong (stat_temp->st_nlink));
+  SCM_VECTOR_SET(ans, 4, scm_from_ulong (stat_temp->st_uid));
+  SCM_VECTOR_SET(ans, 5, scm_from_ulong (stat_temp->st_gid));
 #ifdef HAVE_STRUCT_STAT_ST_RDEV
-  SCM_SIMPLE_VECTOR_SET(ans, 6, scm_from_ulong (stat_temp->st_rdev));
+  SCM_VECTOR_SET(ans, 6, scm_from_ulong (stat_temp->st_rdev));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 6, SCM_BOOL_F);
+  SCM_VECTOR_SET(ans, 6, SCM_BOOL_F);
 #endif
-  SCM_SIMPLE_VECTOR_SET(ans, 7, scm_from_off_t_or_off64_t (stat_temp->st_size));
-  SCM_SIMPLE_VECTOR_SET(ans, 8, scm_from_ulong (stat_temp->st_atime));
-  SCM_SIMPLE_VECTOR_SET(ans, 9, scm_from_ulong (stat_temp->st_mtime));
-  SCM_SIMPLE_VECTOR_SET(ans, 10, scm_from_ulong (stat_temp->st_ctime));
+  SCM_VECTOR_SET(ans, 7, scm_from_off_t_or_off64_t (stat_temp->st_size));
+  SCM_VECTOR_SET(ans, 8, scm_from_ulong (stat_temp->st_atime));
+  SCM_VECTOR_SET(ans, 9, scm_from_ulong (stat_temp->st_mtime));
+  SCM_VECTOR_SET(ans, 10, scm_from_ulong (stat_temp->st_ctime));
 #ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
-  SCM_SIMPLE_VECTOR_SET(ans, 11, scm_from_ulong (stat_temp->st_blksize));
+  SCM_VECTOR_SET(ans, 11, scm_from_ulong (stat_temp->st_blksize));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 11, scm_from_ulong (4096L));
+  SCM_VECTOR_SET(ans, 11, scm_from_ulong (4096L));
 #endif
 #ifdef HAVE_STRUCT_STAT_ST_BLOCKS
-  SCM_SIMPLE_VECTOR_SET(ans, 12, scm_from_blkcnt_t_or_blkcnt64_t (stat_temp->st_blocks));
+  SCM_VECTOR_SET(ans, 12, scm_from_blkcnt_t_or_blkcnt64_t (stat_temp->st_blocks));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 12, SCM_BOOL_F);
+  SCM_VECTOR_SET(ans, 12, SCM_BOOL_F);
 #endif
   {
     int mode = stat_temp->st_mode;
     
     if (S_ISREG (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_regular);
+      SCM_VECTOR_SET(ans, 13, scm_sym_regular);
     else if (S_ISDIR (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_directory);
+      SCM_VECTOR_SET(ans, 13, scm_sym_directory);
 #ifdef S_ISLNK
     /* systems without symlinks probably don't have S_ISLNK */
     else if (S_ISLNK (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_symlink);
+      SCM_VECTOR_SET(ans, 13, scm_sym_symlink);
 #endif
     else if (S_ISBLK (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_block_special);
+      SCM_VECTOR_SET(ans, 13, scm_sym_block_special);
     else if (S_ISCHR (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_char_special);
+      SCM_VECTOR_SET(ans, 13, scm_sym_char_special);
     else if (S_ISFIFO (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_fifo);
+      SCM_VECTOR_SET(ans, 13, scm_sym_fifo);
 #ifdef S_ISSOCK
     else if (S_ISSOCK (mode))
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_sock);
+      SCM_VECTOR_SET(ans, 13, scm_sym_sock);
 #endif
     else
-      SCM_SIMPLE_VECTOR_SET(ans, 13, scm_sym_unknown);
+      SCM_VECTOR_SET(ans, 13, scm_sym_unknown);
 
-    SCM_SIMPLE_VECTOR_SET(ans, 14, scm_from_int ((~S_IFMT) & mode));
+    SCM_VECTOR_SET(ans, 14, scm_from_int ((~S_IFMT) & mode));
 
     /* the layout of the bits in ve[14] is intended to be portable.
        If there are systems that don't follow the usual convention,
@@ -425,24 +425,24 @@ scm_stat2scm (struct stat_or_stat64 *stat_temp)
        tmp <<= 1;
        if (S_IXOTH & mode) tmp += 1; 
 
-       SCM_SIMPLE_VECTOR_SET(ans, 14, scm_from_int (tmp));
+       SCM_VECTOR_SET(ans, 14, scm_from_int (tmp));
        
        */
   }  
 #ifdef HAVE_STRUCT_STAT_ST_ATIM
-  SCM_SIMPLE_VECTOR_SET(ans, 15, scm_from_long (stat_temp->st_atim.tv_nsec));
+  SCM_VECTOR_SET(ans, 15, scm_from_long (stat_temp->st_atim.tv_nsec));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 15, SCM_I_MAKINUM (0));
+  SCM_VECTOR_SET(ans, 15, SCM_I_MAKINUM (0));
 #endif
 #ifdef HAVE_STRUCT_STAT_ST_MTIM
-  SCM_SIMPLE_VECTOR_SET(ans, 16, scm_from_long (stat_temp->st_mtim.tv_nsec));
+  SCM_VECTOR_SET(ans, 16, scm_from_long (stat_temp->st_mtim.tv_nsec));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 16, SCM_I_MAKINUM (0));
+  SCM_VECTOR_SET(ans, 16, SCM_I_MAKINUM (0));
 #endif
 #ifdef HAVE_STRUCT_STAT_ST_CTIM
-  SCM_SIMPLE_VECTOR_SET(ans, 17, scm_from_ulong (stat_temp->st_ctim.tv_sec));
+  SCM_VECTOR_SET(ans, 17, scm_from_ulong (stat_temp->st_ctim.tv_sec));
 #else
-  SCM_SIMPLE_VECTOR_SET(ans, 17, SCM_I_MAKINUM (0));
+  SCM_VECTOR_SET(ans, 17, SCM_I_MAKINUM (0));
 #endif
 
   return ans;
@@ -690,12 +690,12 @@ fill_select_type (fd_set *set, SCM *ports_ready, SCM list_or_vec, int pos)
 
   if (scm_is_vector (list_or_vec))
     {
-      int i = SCM_SIMPLE_VECTOR_LENGTH (list_or_vec);
+      int i = SCM_VECTOR_LENGTH (list_or_vec);
       
       while (--i >= 0)
 	{
 	  int fd = set_element (set, ports_ready,
-				SCM_SIMPLE_VECTOR_REF (list_or_vec, i), pos);
+				SCM_VECTOR_REF (list_or_vec, i), pos);
 
 	  if (fd > max_fd)
 	    max_fd = fd;
@@ -751,12 +751,12 @@ retrieve_select_type (fd_set *set, SCM ports_ready, SCM list_or_vec)
 
   if (scm_is_vector (list_or_vec))
     {
-      int i = SCM_SIMPLE_VECTOR_LENGTH (list_or_vec);
+      int i = SCM_VECTOR_LENGTH (list_or_vec);
 
       while (--i >= 0)
 	{
 	  answer_list = get_element (set,
-				     SCM_SIMPLE_VECTOR_REF (list_or_vec, i),
+				     SCM_VECTOR_REF (list_or_vec, i),
 				     answer_list);
 	}
       return scm_vector (answer_list);
@@ -824,7 +824,7 @@ SCM_DEFINE (scm_select, "select", 3, 2, 0,
 
   if (scm_is_vector (reads))
     {
-      read_count = SCM_SIMPLE_VECTOR_LENGTH (reads);
+      read_count = SCM_VECTOR_LENGTH (reads);
     }
   else
     {
@@ -833,7 +833,7 @@ SCM_DEFINE (scm_select, "select", 3, 2, 0,
     }
   if (scm_is_vector (writes))
     {
-      write_count = SCM_SIMPLE_VECTOR_LENGTH (writes);
+      write_count = SCM_VECTOR_LENGTH (writes);
     }
   else
     {
@@ -842,7 +842,7 @@ SCM_DEFINE (scm_select, "select", 3, 2, 0,
     }
   if (scm_is_vector (excepts))
     {
-      except_count = SCM_SIMPLE_VECTOR_LENGTH (excepts);
+      except_count = SCM_VECTOR_LENGTH (excepts);
     }
   else
     {

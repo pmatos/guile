@@ -6420,38 +6420,25 @@ same vector, @code{vector-move-right!} is usually appropriate when
 A vector can be read and modified from C with the functions
 @code{scm_c_vector_ref} and @code{scm_c_vector_set_x}, for example.  In
 addition to these functions, there are two more ways to access vectors
-from C that might be more efficient in certain situations: you can
-restrict yourself to @dfn{simple vectors} and then use the very fast
-@emph{simple vector macros}; or you can use the very general framework
-for accessing all kinds of arrays (@pxref{Accessing Arrays from C}),
-which is more verbose, but can deal efficiently with all kinds of
-vectors (and arrays).  For vectors, you can use the
-@code{scm_vector_elements} and @code{scm_vector_writable_elements}
-functions as shortcuts.
+from C that might be more efficient in certain situations: you can use
+the very fast @emph{vector macros}, which assume that the arguments are
+actual vectors (in the sense of @code{vector?}) and do no type checking;
+or you can use the very general framework for accessing all kinds of
+arrays (@pxref{Accessing Arrays from C}).
 
-@deftypefn {C Function} int scm_is_simple_vector (SCM obj)
-Return non-zero if @var{obj} is a simple vector, else return zero.  A
-simple vector is a vector that can be used with the @code{SCM_SIMPLE_*}
-macros below.
-
-The following functions are guaranteed to return simple vectors:
-@code{scm_make_vector}, @code{scm_c_make_vector}, @code{scm_vector},
-@code{scm_list_to_vector}.
+@deftypefn {C Macro} size_t SCM_VECTOR_LENGTH (SCM vec)
+Evaluates to the length of the vector @var{vec}.  No type checking is
+done.
 @end deftypefn
 
-@deftypefn {C Macro} size_t SCM_SIMPLE_VECTOR_LENGTH (SCM vec)
-Evaluates to the length of the simple vector @var{vec}.  No type
-checking is done.
+@deftypefn {C Macro} SCM SCM_VECTOR_REF (SCM vec, size_t idx)
+Evaluates to the element at position @var{idx} in the vector @var{vec}.
+No type or range checking is done.
 @end deftypefn
 
-@deftypefn {C Macro} SCM SCM_SIMPLE_VECTOR_REF (SCM vec, size_t idx)
-Evaluates to the element at position @var{idx} in the simple vector
-@var{vec}.  No type or range checking is done.
-@end deftypefn
-
-@deftypefn {C Macro} void SCM_SIMPLE_VECTOR_SET (SCM vec, size_t idx, SCM val)
-Sets the element at position @var{idx} in the simple vector
-@var{vec} to @var{val}.  No type or range checking is done.
+@deftypefn {C Macro} void SCM_VECTOR_SET (SCM vec, size_t idx, SCM val)
+Sets the element at position @var{idx} in the vector @var{vec} to
+@var{val}.  No type or range checking is done.
 @end deftypefn
 
 @deftypefn {C Function} {const SCM *} scm_vector_elements (SCM vec, scm_t_array_handle *handle, size_t *lenp, ssize_t *incp)

@@ -118,43 +118,43 @@ enum scm_port_buffer_field {
 static inline SCM
 scm_port_buffer_bytevector (SCM buf)
 {
-  return SCM_SIMPLE_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_BYTEVECTOR);
+  return SCM_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_BYTEVECTOR);
 }
 
 static inline SCM
 scm_port_buffer_cur (SCM buf)
 {
-  return SCM_SIMPLE_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_CUR);
+  return SCM_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_CUR);
 }
 
 static inline void
 scm_port_buffer_set_cur (SCM buf, SCM cur)
 {
-  SCM_SIMPLE_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_CUR, cur);
+  SCM_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_CUR, cur);
 }
 
 static inline SCM
 scm_port_buffer_end (SCM buf)
 {
-  return SCM_SIMPLE_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_END);
+  return SCM_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_END);
 }
 
 static inline void
 scm_port_buffer_set_end (SCM buf, SCM end)
 {
-  SCM_SIMPLE_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_END, end);
+  SCM_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_END, end);
 }
 
 static inline SCM
 scm_port_buffer_has_eof_p (SCM buf)
 {
-  return SCM_SIMPLE_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_HAS_EOF_P);
+  return SCM_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_HAS_EOF_P);
 }
 
 static inline void
 scm_port_buffer_set_has_eof_p (SCM buf, SCM has_eof_p)
 {
-  SCM_SIMPLE_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_HAS_EOF_P,
+  SCM_VECTOR_SET (buf, SCM_PORT_BUFFER_FIELD_HAS_EOF_P,
                          has_eof_p);
 }
 
@@ -164,7 +164,7 @@ scm_port_buffer_set_has_eof_p (SCM buf, SCM has_eof_p)
 static inline SCM
 scm_port_buffer_position (SCM buf)
 {
-  return SCM_SIMPLE_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_POSITION);
+  return SCM_VECTOR_REF (buf, SCM_PORT_BUFFER_FIELD_POSITION);
 }
 
 static inline SCM
