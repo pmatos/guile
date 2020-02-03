@@ -577,12 +577,10 @@ SCM_DEFINE (scm_stable_sort_x, "stable-sort!", 2, 0, 0,
         }
 
       SCM temp = scm_c_make_vector (len, SCM_UNDEFINED);
-      scm_t_array_handle temp_handle;
-      SCM *temp_elts = scm_vector_writable_elements (temp, &temp_handle, NULL, NULL);
+      SCM *temp_elts = scm_vector_writable_elements (temp);
 
       scm_merge_vector_step (vec_elts, temp_elts, less, 0, len-1, inc);
 
-      scm_array_handle_release (&temp_handle);
       scm_array_handle_release (&vec_handle);
 
       return items;

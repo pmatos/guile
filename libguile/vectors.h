@@ -22,9 +22,9 @@
 
 
 
-#include "libguile/array-handle.h"
 #include <libguile/error.h>
 #include "libguile/gc.h"
+#include "numbers.h"
 
 
 
@@ -47,12 +47,8 @@ SCM_API SCM scm_c_make_vector (size_t len, SCM fill);
 SCM_API size_t scm_c_vector_length (SCM vec);
 SCM_API SCM scm_c_vector_ref (SCM vec, size_t k);
 SCM_API void scm_c_vector_set_x (SCM vec, size_t k, SCM obj);
-SCM_API const SCM *scm_vector_elements (SCM vec,
-					scm_t_array_handle *h,
-					size_t *lenp, ssize_t *incp);
-SCM_API SCM *scm_vector_writable_elements (SCM vec,
-					   scm_t_array_handle *h,
-					   size_t *lenp, ssize_t *incp);
+SCM_API const SCM *scm_vector_elements (SCM vec);
+SCM_API SCM *scm_vector_writable_elements (SCM vec);
 
 #define SCM_VALIDATE_VECTOR(pos, v) \
   do { \

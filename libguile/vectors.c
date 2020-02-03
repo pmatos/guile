@@ -24,7 +24,6 @@
 # include <config.h>
 #endif
 
-#include "array-handle.h"
 #include "bdw-gc.h"
 #include "boolean.h"
 #include "eq.h"
@@ -35,8 +34,9 @@
 #include "vectors.h"
 #include <string.h>
 
+// You're next
+#include "array-handle.h"
 #include "generalized-vectors.h"
-
 
 
 
@@ -56,42 +56,20 @@ scm_is_vector (SCM obj)
 }
 
 const SCM *
-scm_vector_elements (SCM vec, scm_t_array_handle *h,
-		     size_t *lenp, ssize_t *incp)
+scm_vector_elements (SCM vec)
 #define FUNC_NAME "scm_vector_elements"
 {
   SCM_VALIDATE_VECTOR (1, vec);
-  scm_array_get_handle (vec, h);
-  
-  if (lenp)
-    {
-      scm_t_array_dim *dim = scm_array_handle_dims (h);
-      *lenp = dim->ubnd - dim->lbnd + 1;
-    }
-  if (incp)
-    *incp = 1;
-  
-  return scm_array_handle_elements (h);
+  return SCM_I_VECTOR_ELTS (vec);
 }
 #undef FUNC_NAME
 
 SCM *
-scm_vector_writable_elements (SCM vec, scm_t_array_handle *h,
-			      size_t *lenp, ssize_t *incp)
+scm_vector_writable_elements (SCM vec)
 #define FUNC_NAME "scm_vector_writable_elements"
 {
   SCM_VALIDATE_MUTABLE_VECTOR (1, vec);
-  scm_array_get_handle (vec, h);
-  
-  if (lenp)
-    {
-      scm_t_array_dim *dim = scm_array_handle_dims (h);
-      *lenp = dim->ubnd - dim->lbnd + 1;
-    }
-  if (incp)
-    *incp = 1;
-  
-  return scm_array_handle_writable_elements (h);
+  return SCM_I_VECTOR_WELTS (vec);
 }
 #undef FUNC_NAME
 
@@ -353,6 +331,8 @@ scm_i_vector_equal_p (SCM x, SCM y)
   return SCM_BOOL_T;
 }
 
+// These functions are used by vector-copy!
+// FIXME split into vector- and array- (?)
 
 SCM_DEFINE (scm_vector_move_left_x, "vector-move-left!", 5, 0, 0, 
             (SCM vec1, SCM start1, SCM end1, SCM vec2, SCM start2),
@@ -365,31 +345,51 @@ SCM_DEFINE (scm_vector_move_left_x, "vector-move-left!", 5, 0, 0,
 	    "@var{start1} is greater than @var{start2}.")
 #define FUNC_NAME s_scm_vector_move_left_x
 {
-  scm_t_array_handle handle1, handle2;
-  const SCM *elts1;
-  SCM *elts2;
-  size_t len1, len2;
-  ssize_t inc1, inc2;
-  size_t i, j, e;
+  scm_t_array_handle handle1;
+  scm_array_get_handle (vec1, &handle1);
+  if (1 != scm_array_handle_rank (&handle1))
+    {
+      scm_array_handle_release (&handle1);
+      SCM_WRONG_TYPE_ARG (1, vec1);
+    }
+  else
+    {
+      scm_t_array_handle handle2;
+      scm_array_get_handle (vec2, &handle2);
+      if (1 != scm_array_handle_rank (&handle2))
+        {
+          scm_array_handle_release (&handle1);
+          scm_array_handle_release (&handle2);
+          SCM_WRONG_TYPE_ARG (4, vec2);
+        }
+      else
+        {
+          const SCM *elts1 = scm_array_handle_elements (&handle1);
+          SCM *elts2 = scm_array_handle_writable_elements (&handle2);
+          scm_t_array_dim *dims1 = scm_array_handle_dims (&handle1);
+          scm_t_array_dim *dims2 = scm_array_handle_dims (&handle2);
+          size_t len1 = dims1->ubnd + 1 - dims1->lbnd;
+          size_t len2 = dims2->ubnd + 1 - dims2->lbnd;
+          ssize_t inc1 = dims1->inc;
+          ssize_t inc2 = dims2->inc;
+
+          size_t i, j, e;
+          i = scm_to_unsigned_integer (start1, 0, len1);
+          e = scm_to_unsigned_integer (end1, i, len1);
+          SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
+          j = scm_to_unsigned_integer (start2, 0, len2);
+          SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
   
-  elts1 = scm_vector_elements (vec1, &handle1, &len1, &inc1);
-  elts2 = scm_vector_writable_elements (vec2, &handle2, &len2, &inc2);
+          i *= inc1;
+          e *= inc1;
+          j *= inc2;
+          for (; i < e; i += inc1, j += inc2)
+            elts2[j] = elts1[i];
 
-  i = scm_to_unsigned_integer (start1, 0, len1);
-  e = scm_to_unsigned_integer (end1, i, len1);
-  SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
-  j = scm_to_unsigned_integer (start2, 0, len2);
-  SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
-  
-  i *= inc1;
-  e *= inc1;
-  j *= inc2;
-  for (; i < e; i += inc1, j += inc2)
-    elts2[j] = elts1[i];
-
-  scm_array_handle_release (&handle2);
-  scm_array_handle_release (&handle1);
-
+          scm_array_handle_release (&handle2);
+          scm_array_handle_release (&handle1);
+        }
+    }
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -405,37 +405,57 @@ SCM_DEFINE (scm_vector_move_right_x, "vector-move-right!", 5, 0, 0,
 	    "@var{start1} is less than @var{start2}.")
 #define FUNC_NAME s_scm_vector_move_right_x
 {
-  scm_t_array_handle handle1, handle2;
-  const SCM *elts1;
-  SCM *elts2;
-  size_t len1, len2;
-  ssize_t inc1, inc2;
-  size_t i, j, e;
-  
-  elts1 = scm_vector_elements (vec1, &handle1, &len1, &inc1);
-  elts2 = scm_vector_writable_elements (vec2, &handle2, &len2, &inc2);
-
-  i = scm_to_unsigned_integer (start1, 0, len1);
-  e = scm_to_unsigned_integer (end1, i, len1);
-  SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
-  j = scm_to_unsigned_integer (start2, 0, len2);
-  SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
-  
-  j += (e - i);
-  
-  i *= inc1;
-  e *= inc1;
-  j *= inc2;
-  while (i < e)
+  scm_t_array_handle handle1;
+  scm_array_get_handle (vec1, &handle1);
+  if (1 != scm_array_handle_rank (&handle1))
     {
-      e -= inc1;
-      j -= inc2;
-      elts2[j] = elts1[e];
+      scm_array_handle_release (&handle1);
+      SCM_WRONG_TYPE_ARG (1, vec1);
     }
+  else
+    {
+      scm_t_array_handle handle2;
+      scm_array_get_handle (vec2, &handle2);
+      if (1 != scm_array_handle_rank (&handle2))
+        {
+          scm_array_handle_release (&handle1);
+          scm_array_handle_release (&handle2);
+          SCM_WRONG_TYPE_ARG (4, vec2);
+        }
+      else
+        {
+          const SCM *elts1 = scm_array_handle_elements (&handle1);
+          SCM *elts2 = scm_array_handle_writable_elements (&handle2);
+          scm_t_array_dim *dims1 = scm_array_handle_dims (&handle1);
+          scm_t_array_dim *dims2 = scm_array_handle_dims (&handle2);
+          size_t len1 = dims1->ubnd + 1 - dims1->lbnd;
+          size_t len2 = dims2->ubnd + 1 - dims2->lbnd;
+          ssize_t inc1 = dims1->inc;
+          ssize_t inc2 = dims2->inc;
 
-  scm_array_handle_release (&handle2);
-  scm_array_handle_release (&handle1);
+          size_t i, j, e;
+          i = scm_to_unsigned_integer (start1, 0, len1);
+          e = scm_to_unsigned_integer (end1, i, len1);
+          SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
+          j = scm_to_unsigned_integer (start2, 0, len2);
+          SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
+  
+          j += (e - i);
+  
+          i *= inc1;
+          e *= inc1;
+          j *= inc2;
+          while (i < e)
+            {
+              e -= inc1;
+              j -= inc2;
+              elts2[j] = elts1[e];
+            }
 
+          scm_array_handle_release (&handle2);
+          scm_array_handle_release (&handle1);
+        }
+    }
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME

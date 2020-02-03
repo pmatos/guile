@@ -1,4 +1,4 @@
-(vector-array-handle-plan for Guile 3.0) -*- coding: utf-8; mode: org; -*-
+(wip-vector-cleanup for Guile 3.0) -*- coding: utf-8; mode: org; -*-
 
 TBA to NEWS for this branch.
 
@@ -11,11 +11,6 @@ Guile and continue working with older versions, at least back to 2.2.
 ** vector->list and vector-copy require a true vector argument.
 
 Use array->list and array-copy (from (ice-9 arrays)) on general arrays.
-
-** scm_vector_elements / scm_vector_writable_elements require a true vector argument.
-
-Use scm_array_get_handle and scm_array_handle_elements /
-scm_array_handle_writable_elements on general arrays.
 
 ** scm_is_simple_vector has been removed.
 
@@ -37,14 +32,31 @@ calls.
 
 Use SCM_VECTOR_REF, SCM_VECTOR_SET and SCM_VECTOR_LENGTH instead.
 
+** scm_vector_elements / scm_vector_writable_elements take a single argument that must be a vector.
+
+Use scm_array_get_handle and scm_array_handle_elements /
+scm_array_handle_writable_elements on general arrays.
+
+Use scm_c_vector_length to get the length of a vector.
+
 
 * Rationale / TODO
 
-** Fix API for scm_vector_elements scm_vector_writable_elements to [(SCM vec) -> pointer]
+** Fix API for scm_VECTOR_TYPE_elements scm_VECTOR_TYPE_writable_elements to [(SCM v) -> pointer]
 
   - incp is always one on these types, so it isn't needed
-  - no need to acquire/release an array handle for VECTOR_TYPE
+  - no need to release an array handle for VECTOR_TYPE
   - remove the dependence of vector.c bitvector.c bytevector.c etc. on array-handle.h
+
+** Fix API for scm_vector_elements scm_vector_writable_elements to [(SCM v) -> pointer]
+
+  - the matching functions for srfi-4 VECTOR_TYPEs have never allowed passing
+    non-VECTOR-TYPE rank-1 arrays. There is no reason for these to allow it; if
+    v is an array, use the array interface.
+
+** Fix API for scm_bitvector_elements scm_bitvector_writable_elements to [(SCM v) -> pointer]
+
+   - same as for scm_vector_elements scm_vector_writable_elements.
 
 ** Remove scm_is_simple_vector, fix scm_is_array_p, rename SIMPLE_VECTOR  to VECTOR, etc.
 

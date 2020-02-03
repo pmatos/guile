@@ -6441,32 +6441,23 @@ Sets the element at position @var{idx} in the vector @var{vec} to
 @var{val}.  No type or range checking is done.
 @end deftypefn
 
-@deftypefn {C Function} {const SCM *} scm_vector_elements (SCM vec, scm_t_array_handle *handle, size_t *lenp, ssize_t *incp)
-Acquire a handle for the vector @var{vec} and return a pointer to the
-elements of it.  This pointer can only be used to read the elements of
-@var{vec}.  When @var{vec} is not a vector, an error is signaled.  The
-handle must eventually be released with
-@code{scm_array_handle_release}.
+@deftypefn {C Function} {const SCM *} scm_vector_elements (SCM vec)
+Return a pointer to the elements of @var{vec}.  This pointer can only be
+used to read the elements of @var{vec}.  When @var{vec} is not a vector,
+an error is signaled.
 
-The variables pointed to by @var{lenp} and @var{incp} are filled with
-the number of elements of the vector and the increment (number of
-elements) between successive elements, respectively.  
+For use with general arrays, see @code{scm_array_handle_elements}.
 
 The following example shows the typical way to use this function.  It
 creates a list of all elements of @var{vec} (in reverse order).
 
 @example
-scm_t_array_handle handle;
-size_t i, len;
-ssize_t inc;
-const SCM *elt;
-SCM list;
+size_t len = scm_c_vector_length (vec);
+const SCM *elt = scm_vector_elements (vec);
 
-elt = scm_vector_elements (vec, &handle, &len, &inc);
-list = SCM_EOL;
-for (i = 0; i < len; i++, elt += inc)
-  list = scm_cons (*elt, list);
-scm_array_handle_release (&handle);
+SCM list = SCM_EOL;
+for (size_t i = 0; i < len; ++i)
+  list = scm_cons (elt[i], list);
 @end example
 
 @end deftypefn
@@ -6475,19 +6466,17 @@ scm_array_handle_release (&handle);
 Like @code{scm_vector_elements} but the pointer can be used to modify
 the vector.
 
+For use with general arrays, see @code{scm_array_handle_writable_elements}.
+
 The following example shows the typical way to use this function.  It
-fills a vector with @code{#t}.
+fills a vector with @code{#t} (but see @code{vector-fill!}).
 
 @example
-scm_t_array_handle handle;
-size_t i, len;
-ssize_t inc;
-SCM *elt;
+size_t len = scm_c_vector_length (vec);
+SCM *elt = scm_vector_writable_elements (vec);
 
-elt = scm_vector_writable_elements (vec, &handle, &len, &inc);
-for (i = 0; i < len; i++, elt += inc)
-  *elt = SCM_BOOL_T;
-scm_array_handle_release (&handle);
+for (size_t i = 0; i < len; ++i)
+  elt[i] = SCM_BOOL_T;
 @end example
 
 @end deftypefn
