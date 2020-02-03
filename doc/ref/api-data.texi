@@ -6463,10 +6463,7 @@ handle must eventually be released with
 
 The variables pointed to by @var{lenp} and @var{incp} are filled with
 the number of elements of the vector and the increment (number of
-elements) between successive elements, respectively.  Successive
-elements of @var{vec} need not be contiguous in their underlying
-``root vector'' returned here; hence the increment is not necessarily
-equal to 1 and may well be negative too (@pxref{Shared Arrays}).
+elements) between successive elements, respectively.  
 
 The following example shows the typical way to use this function.  It
 creates a list of all elements of @var{vec} (in reverse order).

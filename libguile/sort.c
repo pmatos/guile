@@ -562,22 +562,23 @@ SCM_DEFINE (scm_stable_sort_x, "stable-sort!", 2, 0, 0,
     }
   else if (scm_is_array (items) && 1 == scm_c_array_rank (items))
     {
-      scm_t_array_handle temp_handle, vec_handle;
-      SCM temp, *temp_elts, *vec_elts;
-      size_t len;
-      ssize_t inc;
-
-      vec_elts = scm_vector_writable_elements (items, &vec_handle,
-					       &len, &inc);
+      scm_t_array_handle vec_handle;
+      scm_array_get_handle (items, &vec_handle);
+      
+      SCM *vec_elts = scm_array_handle_writable_elements (&vec_handle);
+      scm_t_array_dim *vec_dim = scm_array_handle_dims (&vec_handle);
+      size_t len = vec_dim->ubnd + 1 - vec_dim->lbnd;
+      ssize_t inc = vec_dim->inc;
+      
       if (len == 0)
         {
           scm_array_handle_release (&vec_handle);
           return items;
         }
 
-      temp = scm_c_make_vector (len, SCM_UNDEFINED);
-      temp_elts = scm_vector_writable_elements (temp, &temp_handle,
-						NULL, NULL);
+      SCM temp = scm_c_make_vector (len, SCM_UNDEFINED);
+      scm_t_array_handle temp_handle;
+      SCM *temp_elts = scm_vector_writable_elements (temp, &temp_handle, NULL, NULL);
 
       scm_merge_vector_step (vec_elts, temp_elts, less, 0, len-1, inc);
 

@@ -64,34 +64,42 @@ scm_is_simple_vector (SCM obj)
 const SCM *
 scm_vector_elements (SCM vec, scm_t_array_handle *h,
 		     size_t *lenp, ssize_t *incp)
+#define FUNC_NAME "scm_vector_elements"
 {
+  SCM_VALIDATE_VECTOR (1, vec);
   scm_array_get_handle (vec, h);
-  if (1 != scm_array_handle_rank (h))
-    {
-      scm_array_handle_release (h);
-      scm_wrong_type_arg_msg (NULL, 0, vec, "rank 1 array of Scheme values");
-    }
   
   if (lenp)
     {
       scm_t_array_dim *dim = scm_array_handle_dims (h);
       *lenp = dim->ubnd - dim->lbnd + 1;
-      *incp = dim->inc;
     }
+  if (incp)
+    *incp = 1;
+  
   return scm_array_handle_elements (h);
 }
+#undef FUNC_NAME
 
 SCM *
 scm_vector_writable_elements (SCM vec, scm_t_array_handle *h,
 			      size_t *lenp, ssize_t *incp)
+#define FUNC_NAME "scm_vector_writable_elements"
 {
-  const SCM *ret = scm_vector_elements (vec, h, lenp, incp);
-
-  if (h->writable_elements != h->elements)
-    scm_wrong_type_arg_msg (NULL, 0, vec, "mutable vector");
-
-  return (SCM *) ret;
+  SCM_VALIDATE_MUTABLE_VECTOR (1, vec);
+  scm_array_get_handle (vec, h);
+  
+  if (lenp)
+    {
+      scm_t_array_dim *dim = scm_array_handle_dims (h);
+      *lenp = dim->ubnd - dim->lbnd + 1;
+    }
+  if (incp)
+    *incp = 1;
+  
+  return scm_array_handle_writable_elements (h);
 }
+#undef FUNC_NAME
 
 SCM_DEFINE (scm_vector_p, "vector?", 1, 0, 0, 
 	    (SCM obj),
