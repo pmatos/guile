@@ -33,6 +33,7 @@
 #include "numbers.h"
 #include "pairs.h"
 #include "vectors.h"
+#include <string.h>
 
 #include "generalized-vectors.h"
 
@@ -269,22 +270,11 @@ SCM_DEFINE (scm_vector_copy, "vector-copy", 1, 0, 0,
 	    "Return a copy of @var{vec}.")
 #define FUNC_NAME s_scm_vector_copy
 {
-  scm_t_array_handle handle;
-  size_t i, len;
-  ssize_t inc;
-  const SCM *src;
-  SCM result, *dst;
-
-  src = scm_vector_elements (vec, &handle, &len, &inc);
-
-  result = make_vector (len);
-  dst = SCM_I_VECTOR_WELTS (result);
-  for (i = 0; i < len; i++, src += inc)
-    dst[i] = *src;
-
-  scm_array_handle_release (&handle);
-
-  return result;
+  SCM_VALIDATE_VECTOR(1, vec);
+  size_t len = SCM_I_VECTOR_LENGTH (vec);
+  SCM val = make_vector (len);
+  memcpy (SCM_I_VECTOR_WELTS (val), SCM_I_VECTOR_ELTS (vec), len * sizeof(SCM));
+  return val;
 }
 #undef FUNC_NAME
 
