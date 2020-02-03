@@ -280,8 +280,8 @@ SCM_DEFINE (scm_vector_copy, "vector-copy", 1, 0, 0,
 
 
 SCM_DEFINE (scm_vector_to_list, "vector->list", 1, 0, 0, 
-	    (SCM v),
-	    "Return a newly allocated list composed of the elements of @var{v}.\n"
+	    (SCM vec),
+	    "Return a newly allocated list composed of the elements of @var{vec}.\n"
 	    "\n"
 	    "@lisp\n"
 	    "(vector->list '#(dah dah didah)) @result{}  (dah dah didah)\n"
@@ -289,19 +289,12 @@ SCM_DEFINE (scm_vector_to_list, "vector->list", 1, 0, 0,
 	    "@end lisp")
 #define FUNC_NAME s_scm_vector_to_list
 {
+  SCM_VALIDATE_VECTOR(1, vec);
   SCM res = SCM_EOL;
-  const SCM *data;
-  scm_t_array_handle handle;
-  size_t i, count, len;
-  ssize_t inc;
-
-  data = scm_vector_elements (v, &handle, &len, &inc);
-  for (i = (len - 1) * inc, count = 0;
-       count < len;
-       i -= inc, count++)
+  ssize_t len = SCM_I_VECTOR_LENGTH (vec);
+  const SCM * data = SCM_I_VECTOR_ELTS (vec);
+  for (ssize_t i = len-1; i >= 0; --i)
     res = scm_cons (data[i], res);
-
-  scm_array_handle_release (&handle);
   return res;
 }
 #undef FUNC_NAME

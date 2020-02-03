@@ -41,11 +41,7 @@
 
   (pass-if "string-vector 2"
     (equal? '("abc\u0100" "def\u0101" "ghi\u0102") 
-            (vector->list #("abc\u0100" "def\u0101" "ghi\u0102"))))
-
-  (pass-if "shared array"
-    (let ((b (make-shared-array #(1) (lambda (x) '(0)) 2)))
-      (equal? b (list->vector (vector->list b))))))
+            (vector->list #("abc\u0100" "def\u0101" "ghi\u0102")))))
 
 (with-test-prefix "make-vector"
 
