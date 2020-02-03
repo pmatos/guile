@@ -35,7 +35,7 @@
 #define SCM_VALIDATE_ARRAY(pos, v) \
   do { \
     SCM_ASSERT (SCM_HEAP_OBJECT_P (v) \
-                && scm_is_true (scm_array_p (v, SCM_UNDEFINED)), \
+                && scm_is_true (scm_array_p (v)), \
                 v, pos, FUNC_NAME); \
   } while (0)
 
@@ -43,8 +43,7 @@
 /** Arrays */
 
 SCM_API int scm_is_array (SCM obj);
-SCM_API SCM scm_array_p (SCM v, SCM unused);
-SCM_INTERNAL SCM scm_array_p_2 (SCM);
+SCM_API SCM scm_array_p (SCM v);
 
 SCM_API int scm_is_typed_array (SCM obj, SCM type);
 SCM_API SCM scm_typed_array_p (SCM v, SCM type);

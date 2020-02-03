@@ -7327,13 +7327,9 @@ values, one for each dimension.
 
 
 @deffn {Scheme Procedure} array? obj
-@deffnx {C Function} scm_array_p (obj, unused)
+@deffnx {C Function} scm_array_p (obj)
 Return @code{#t} if the @var{obj} is an array, and @code{#f} if
 not.
-
-The second argument to scm_array_p is there for historical reasons,
-but it is not used.  You should always pass @code{SCM_UNDEFINED} as
-its value.
 @end deffn
 
 @deffn {Scheme Procedure} typed-array? obj type
