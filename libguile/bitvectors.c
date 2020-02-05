@@ -607,19 +607,12 @@ SCM_DEFINE (scm_bit_set_star_x, "bit-set*!", 3, 0, 0,
               bitset_ (v_bits, v_off+i*v_inc, bit);
 	}
     }
-  /* FIXME This requires a true u32vector so handle, inc, etc. are superfluous */
   else if (scm_is_true (scm_u32vector_p (kv)))
     {
-      scm_t_array_handle kv_handle;
-      size_t i, kv_len;
-      ssize_t kv_inc;
-      const uint32_t *kv_elts;
-
-      kv_elts = scm_u32vector_elements (kv, &kv_handle, &kv_len, &kv_inc);
-      for (i = 0; i < kv_len; i++, kv_elts += kv_inc)
-        bitset_ (v_bits, v_off+(*kv_elts)*v_inc, bit);
-
-      scm_array_handle_release (&kv_handle);
+      size_t kv_len;
+      const uint32_t *kv_elts  = scm_u32vector_elements (kv, &kv_len);
+      for (size_t i = 0; i < kv_len; i++)
+        bitset_ (v_bits, v_off+(kv_elts[i])*v_inc, bit);
     }
   else 
     scm_wrong_type_arg_msg (NULL, 0, kv, "bitvector or u32vector");
@@ -693,20 +686,14 @@ SCM_DEFINE (scm_bit_count_star, "bit-count*", 3, 0, 0,
   /* FIXME This requires a true u32vector so handle, inc, etc. are superfluous */
   else if (scm_is_true (scm_u32vector_p (kv)))
     {
-      scm_t_array_handle kv_handle;
-      size_t i, kv_len;
-      ssize_t kv_inc;
-      const uint32_t *kv_elts;
-
-      kv_elts = scm_u32vector_elements (kv, &kv_handle, &kv_len, &kv_inc);
-      for (i = 0; i < kv_len; i++, kv_elts += kv_inc)
+      size_t kv_len;
+      const uint32_t *kv_elts = scm_u32vector_elements (kv, &kv_len);
+      for (size_t i = 0; i < kv_len; i++)
 	{
-          bool elt = bitref_ (v_bits, v_off+(*kv_elts)*v_inc);
+          bool elt = bitref_ (v_bits, v_off+(kv_elts[i])*v_inc);
 	  if ((bit && elt) || (!bit && !elt))
 	    count++;
 	}
-
-      scm_array_handle_release (&kv_handle);
     }
   else 
     scm_wrong_type_arg_msg (NULL, 0, kv, "bitvector or u32vector");

@@ -35,7 +35,6 @@ Use SCM_VECTOR_REF, SCM_VECTOR_SET and SCM_VECTOR_LENGTH instead.
 ** scm_vector_elements / scm_vector_writable_elements take a single argument that must be a vector.
 
 Use scm_array_get_handle and scm_array_handle_elements / scm_array_handle_writable_elements on general arrays.
-
 Use scm_c_vector_length to get the length of a vector.
 
 ** scm_bitvector_elements / scm_bitvector_writable_elements take a single argument that must be a bitvector
