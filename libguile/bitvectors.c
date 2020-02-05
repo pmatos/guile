@@ -183,28 +183,6 @@ SCM_DEFINE (scm_bitvector_length, "bitvector-length", 1, 0, 0,
 }
 #undef FUNC_NAME
 
-const uint32_t *
-scm_array_handle_bit_elements (scm_t_array_handle *h)
-{
-  if (h->element_type != SCM_ARRAY_ELEMENT_TYPE_BIT)
-    scm_wrong_type_arg_msg (NULL, 0, h->array, "bit array");
-  return ((const uint32_t *) h->elements) + h->base/32;
-}
-
-uint32_t *
-scm_array_handle_bit_writable_elements (scm_t_array_handle *h)
-{
-  if (h->writable_elements != h->elements)
-    scm_wrong_type_arg_msg (NULL, 0, h->array, "mutable bit array");
-  return (uint32_t *) scm_array_handle_bit_elements (h);
-}
-
-size_t
-scm_array_handle_bit_elements_offset (scm_t_array_handle *h)
-{
-  return h->base % 32;
-}
-
 #define SCM_VALIDATE_BITVECTOR(pos, v)                          \
   do {                                                          \
     SCM_ASSERT_TYPE (IS_BITVECTOR (v), v, pos, __func__,        \

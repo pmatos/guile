@@ -127,6 +127,10 @@ scm_array_handle_set (scm_t_array_handle *h, ssize_t p, SCM v)
 
 SCM_INTERNAL void scm_init_array_handle (void);
 
+SCM_API const uint32_t *scm_array_handle_bit_elements (scm_t_array_handle *h);
+SCM_API uint32_t *scm_array_handle_bit_writable_elements (scm_t_array_handle *h);
+SCM_API size_t scm_array_handle_bit_elements_offset (scm_t_array_handle *h);
+
 SCM_API const uint32_t * scm_array1_bit_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp);
 SCM_API uint32_t * scm_array1_bit_writable_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp);
 

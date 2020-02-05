@@ -333,6 +333,10 @@ scm_array_handle_release (scm_t_array_handle *h)
    */
 }
 
+// -----------------------------------------------
+// scm_array_handle_TYPE_(writable_)elements FIXME
+// -----------------------------------------------
+
 const SCM *
 scm_array_handle_elements (scm_t_array_handle *h)
 {
@@ -352,8 +356,30 @@ scm_array_handle_writable_elements (scm_t_array_handle *h)
 }
 
 // -----------------------------------------------
-// FIXME adding scm_array1_xxx_(writable_)elements
+// scm_array1_TYPE_(writable_)elements FIXME
 // -----------------------------------------------
+
+const uint32_t *
+scm_array_handle_bit_elements (scm_t_array_handle *h)
+{
+  if (h->element_type != SCM_ARRAY_ELEMENT_TYPE_BIT)
+    scm_wrong_type_arg_msg (NULL, 0, h->array, "bit array");
+  return ((const uint32_t *) h->elements) + h->base/32;
+}
+
+uint32_t *
+scm_array_handle_bit_writable_elements (scm_t_array_handle *h)
+{
+  if (h->writable_elements != h->elements)
+    scm_wrong_type_arg_msg (NULL, 0, h->array, "mutable bit array");
+  return (uint32_t *) scm_array_handle_bit_elements (h);
+}
+
+size_t
+scm_array_handle_bit_elements_offset (scm_t_array_handle *h)
+{
+  return h->base % 32;
+}
 
 const uint32_t *
 scm_array1_bit_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp)

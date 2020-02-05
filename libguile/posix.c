@@ -65,6 +65,7 @@
 
 #include "async.h"
 #include "bitvectors.h"
+#include "array-handle.h"
 #include "dynwind.h"
 #include "extensions.h"
 #include "feature.h"

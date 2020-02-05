@@ -58,6 +58,8 @@ instead of the correct result #1@1(0 1 2 0 0). This buggy support has been remov
 
 * Rationale / TODO
 
+The ultimate goal of this patch set is to have arrays be strictly layered above typed vectors so they can be replaced by a different implementation without affecting the latter.
+
 ** Status as of 3.0.0
   
   - The _elements functions require the array handle interface even for true vectors, when all of handle, inc and off are unnecessary. This creates a burden (having to declare & release handles, etc).
