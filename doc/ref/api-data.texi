@@ -6663,13 +6663,13 @@ For example,
 @end example
 @end deffn
 
-@deftypefn {C Function} {const scm_t_uint32 *} scm_bitvector_elements (SCM vec)
+@deftypefn {C Function} {const scm_t_uint32 *} scm_bitvector_elements (SCM vec, size_t *lenp)
 Like @code{scm_vector_elements} (@pxref{Vector Accessing from C}), but
 for bitvectors.  See @code{scm_array_handle_bit_elements} for how to use the returned
 pointer.
 @end deftypefn
 
-@deftypefn {C Function} {scm_t_uint32 *} scm_bitvector_writable_elements (SCM vec)
+@deftypefn {C Function} {scm_t_uint32 *} scm_bitvector_writable_elements (SCM vec, size_t *lenp)
 Like @code{scm_bitvector_elements}, but the pointer is good for reading
 and writing.
 @end deftypefn

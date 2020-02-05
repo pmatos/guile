@@ -34,11 +34,11 @@ Use SCM_VECTOR_REF, SCM_VECTOR_SET and SCM_VECTOR_LENGTH instead.
 
 ** The vector argument to scm_vector_elements / scm_vector_writable_elements must be a true vector. Handle/inc arguments have been removed.
 
-Use scm_array_get_handle and scm_array_handle_elements / scm_array_handle_writable_elements on general arrays.
+Use scm_array_get_handle and scm_array_handle_elements / scm_array_handle_writable_elements on general #t arrays.
 
 ** The vector argument to scm_bitvector_elements / scm_bitvector_writable_elements must be a true bitvector. Handle/inc arguments have been removed.
 
-Use scm_array_get_handle and scm_array_handle_bit_elements / scm_array_handle_bit_writable_elements on bit arrays.
+Use scm_array_get_handle and scm_array_handle_bit_elements / scm_array_handle_bit_writable_elements on general bit arrays.
 Use scm_array1_bit_elements (NEW) / scm_array1_bit_writable_elements (NEW) on rank-1 bit arrays.
 
 

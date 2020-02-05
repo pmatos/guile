@@ -218,16 +218,20 @@ scm_array_handle_bit_elements_offset (scm_t_array_handle *h)
   } while (0)
 
 const uint32_t *
-scm_bitvector_elements (SCM vec)
+scm_bitvector_elements (SCM vec, size_t *lenp)
 {
   SCM_VALIDATE_BITVECTOR (1, vec);
+  if (lenp)
+    *lenp = BITVECTOR_LENGTH (vec);
   return BITVECTOR_BITS (vec);
 }
 
 uint32_t *
-scm_bitvector_writable_elements (SCM vec)
+scm_bitvector_writable_elements (SCM vec, size_t *lenp)
 {
   SCM_VALIDATE_MUTABLE_BITVECTOR (1, vec);
+  if (lenp)
+    *lenp = BITVECTOR_LENGTH (vec);
   return BITVECTOR_BITS (vec);
 }
 
@@ -250,8 +254,9 @@ bitset_ (uint32_t *bits, size_t idx, bool b)
 SCM
 scm_c_bitvector_ref (SCM vec, size_t idx)
 {
-  const uint32_t *bits = scm_bitvector_elements (vec);
-  if (idx >= BITVECTOR_LENGTH (vec))
+  size_t len;
+  const uint32_t *bits = scm_bitvector_elements (vec, &len);
+  if (idx >= len)
     scm_out_of_range (NULL, scm_from_size_t (idx));
   return scm_from_bool (bitref_(bits, idx));
 }
@@ -269,8 +274,9 @@ SCM_DEFINE (scm_bitvector_ref, "bitvector-ref", 2, 0, 0,
 void
 scm_c_bitvector_set_x (SCM vec, size_t idx, SCM val)
 {
-  uint32_t *bits = scm_bitvector_writable_elements (vec);
-  if (idx >= BITVECTOR_LENGTH (vec))
+  size_t len;
+  uint32_t *bits = scm_bitvector_writable_elements (vec, &len);
+  if (idx >= len)
     scm_out_of_range (NULL, scm_from_size_t (idx));
 
   bitset_(bits, idx, scm_is_true (val));
@@ -335,7 +341,7 @@ SCM_DEFINE (scm_list_to_bitvector, "list->bitvector", 1, 0, 0,
   size_t bit_len = scm_to_size_t (scm_length (list));
   SCM vec = scm_c_make_bitvector (bit_len, SCM_UNDEFINED);
   size_t word_len = (bit_len+31)/32;
-  uint32_t *bits = scm_bitvector_writable_elements (vec);
+  uint32_t *bits = scm_bitvector_writable_elements (vec, NULL);
   size_t i, j;
 
   for (i = 0; i < word_len && scm_is_pair (list); i++, bit_len -= 32)
@@ -745,7 +751,7 @@ scm_istr2bve (SCM str)
   const char *c_str;
   uint32_t *data;
 
-  data = scm_bitvector_writable_elements (vec);
+  data = scm_bitvector_writable_elements (vec, NULL);
   c_str = scm_i_string_chars (str);
 
   for (k = 0; k < (len + 31) / 32; k++)
