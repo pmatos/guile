@@ -47,8 +47,8 @@ SCM_API SCM scm_c_make_vector (size_t len, SCM fill);
 SCM_API size_t scm_c_vector_length (SCM vec);
 SCM_API SCM scm_c_vector_ref (SCM vec, size_t k);
 SCM_API void scm_c_vector_set_x (SCM vec, size_t k, SCM obj);
-SCM_API const SCM *scm_vector_elements (SCM vec);
-SCM_API SCM *scm_vector_writable_elements (SCM vec);
+SCM_API const SCM *scm_vector_elements (SCM vec, size_t *lenp);
+SCM_API SCM *scm_vector_writable_elements (SCM vec, size_t *lenp);
 
 #define SCM_VALIDATE_VECTOR(pos, v) \
   do { \

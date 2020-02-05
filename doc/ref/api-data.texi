@@ -6441,7 +6441,7 @@ Sets the element at position @var{idx} in the vector @var{vec} to
 @var{val}.  No type or range checking is done.
 @end deftypefn
 
-@deftypefn {C Function} {const SCM *} scm_vector_elements (SCM vec)
+@deftypefn {C Function} {const SCM *} scm_vector_elements (SCM vec, size_t *lenp)
 Return a pointer to the elements of @var{vec}.  This pointer can only be
 used to read the elements of @var{vec}.  When @var{vec} is not a vector,
 an error is signaled.
@@ -6452,8 +6452,8 @@ The following example shows the typical way to use this function.  It
 creates a list of all elements of @var{vec} (in reverse order).
 
 @example
-size_t len = scm_c_vector_length (vec);
-const SCM *elt = scm_vector_elements (vec);
+size_t len;
+const SCM *elt = scm_vector_elements (vec, &len);
 
 SCM list = SCM_EOL;
 for (size_t i = 0; i < len; ++i)
@@ -6462,7 +6462,7 @@ for (size_t i = 0; i < len; ++i)
 
 @end deftypefn
 
-@deftypefn {C Function} {SCM *} scm_vector_writable_elements (SCM vec, scm_t_array_handle *handle, size_t *lenp, ssize_t *incp)
+@deftypefn {C Function} {SCM *} scm_vector_writable_elements (SCM vec, size_t *lenp)
 Like @code{scm_vector_elements} but the pointer can be used to modify
 the vector.
 
@@ -6472,8 +6472,8 @@ The following example shows the typical way to use this function.  It
 fills a vector with @code{#t} (but see @code{vector-fill!}).
 
 @example
-size_t len = scm_c_vector_length (vec);
-SCM *elt = scm_vector_writable_elements (vec);
+size_t len;
+SCM *elt = scm_vector_writable_elements (vec, &len);
 
 for (size_t i = 0; i < len; ++i)
   elt[i] = SCM_BOOL_T;

@@ -577,7 +577,7 @@ SCM_DEFINE (scm_stable_sort_x, "stable-sort!", 2, 0, 0,
         }
 
       SCM temp = scm_c_make_vector (len, SCM_UNDEFINED);
-      SCM *temp_elts = scm_vector_writable_elements (temp);
+      SCM *temp_elts = scm_vector_writable_elements (temp, NULL);
 
       scm_merge_vector_step (vec_elts, temp_elts, less, 0, len-1, inc);
 

@@ -56,19 +56,23 @@ scm_is_vector (SCM obj)
 }
 
 const SCM *
-scm_vector_elements (SCM vec)
+scm_vector_elements (SCM vec, size_t *lenp)
 #define FUNC_NAME "scm_vector_elements"
 {
   SCM_VALIDATE_VECTOR (1, vec);
+  if (lenp)
+    *lenp = SCM_I_VECTOR_LENGTH (vec);
   return SCM_I_VECTOR_ELTS (vec);
 }
 #undef FUNC_NAME
 
 SCM *
-scm_vector_writable_elements (SCM vec)
+scm_vector_writable_elements (SCM vec, size_t *lenp)
 #define FUNC_NAME "scm_vector_writable_elements"
 {
   SCM_VALIDATE_MUTABLE_VECTOR (1, vec);
+  if (lenp)
+    *lenp = SCM_I_VECTOR_LENGTH (vec);
   return SCM_I_VECTOR_WELTS (vec);
 }
 #undef FUNC_NAME
