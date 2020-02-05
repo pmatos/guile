@@ -349,51 +349,20 @@ SCM_DEFINE (scm_vector_move_left_x, "vector-move-left!", 5, 0, 0,
 	    "@var{start1} is greater than @var{start2}.")
 #define FUNC_NAME s_scm_vector_move_left_x
 {
-  scm_t_array_handle handle1;
-  scm_array_get_handle (vec1, &handle1);
-  if (1 != scm_array_handle_rank (&handle1))
-    {
-      scm_array_handle_release (&handle1);
-      SCM_WRONG_TYPE_ARG (1, vec1);
-    }
-  else
-    {
-      scm_t_array_handle handle2;
-      scm_array_get_handle (vec2, &handle2);
-      if (1 != scm_array_handle_rank (&handle2))
-        {
-          scm_array_handle_release (&handle1);
-          scm_array_handle_release (&handle2);
-          SCM_WRONG_TYPE_ARG (4, vec2);
-        }
-      else
-        {
-          const SCM *elts1 = scm_array_handle_elements (&handle1);
-          SCM *elts2 = scm_array_handle_writable_elements (&handle2);
-          scm_t_array_dim *dims1 = scm_array_handle_dims (&handle1);
-          scm_t_array_dim *dims2 = scm_array_handle_dims (&handle2);
-          size_t len1 = dims1->ubnd + 1 - dims1->lbnd;
-          size_t len2 = dims2->ubnd + 1 - dims2->lbnd;
-          ssize_t inc1 = dims1->inc;
-          ssize_t inc2 = dims2->inc;
+  size_t len1, len2;
+  const SCM *elts1 = scm_vector_elements (vec1, &len1);
+  SCM *elts2 = scm_vector_writable_elements (vec2, &len2);
 
-          size_t i, j, e;
-          i = scm_to_unsigned_integer (start1, 0, len1);
-          e = scm_to_unsigned_integer (end1, i, len1);
-          SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
-          j = scm_to_unsigned_integer (start2, 0, len2);
-          SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
+  size_t i, j, e;
+  i = scm_to_unsigned_integer (start1, 0, len1);
+  e = scm_to_unsigned_integer (end1, i, len1);
+  SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
+  j = scm_to_unsigned_integer (start2, 0, len2);
+  SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
   
-          i *= inc1;
-          e *= inc1;
-          j *= inc2;
-          for (; i < e; i += inc1, j += inc2)
-            elts2[j] = elts1[i];
+  for (; i < e; ++i, ++j)
+    elts2[j] = elts1[i];
 
-          scm_array_handle_release (&handle2);
-          scm_array_handle_release (&handle1);
-        }
-    }
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
@@ -409,57 +378,26 @@ SCM_DEFINE (scm_vector_move_right_x, "vector-move-right!", 5, 0, 0,
 	    "@var{start1} is less than @var{start2}.")
 #define FUNC_NAME s_scm_vector_move_right_x
 {
-  scm_t_array_handle handle1;
-  scm_array_get_handle (vec1, &handle1);
-  if (1 != scm_array_handle_rank (&handle1))
-    {
-      scm_array_handle_release (&handle1);
-      SCM_WRONG_TYPE_ARG (1, vec1);
-    }
-  else
-    {
-      scm_t_array_handle handle2;
-      scm_array_get_handle (vec2, &handle2);
-      if (1 != scm_array_handle_rank (&handle2))
-        {
-          scm_array_handle_release (&handle1);
-          scm_array_handle_release (&handle2);
-          SCM_WRONG_TYPE_ARG (4, vec2);
-        }
-      else
-        {
-          const SCM *elts1 = scm_array_handle_elements (&handle1);
-          SCM *elts2 = scm_array_handle_writable_elements (&handle2);
-          scm_t_array_dim *dims1 = scm_array_handle_dims (&handle1);
-          scm_t_array_dim *dims2 = scm_array_handle_dims (&handle2);
-          size_t len1 = dims1->ubnd + 1 - dims1->lbnd;
-          size_t len2 = dims2->ubnd + 1 - dims2->lbnd;
-          ssize_t inc1 = dims1->inc;
-          ssize_t inc2 = dims2->inc;
+  size_t len1, len2;
+  const SCM *elts1 = scm_vector_elements (vec1, &len1);
+  SCM *elts2 = scm_vector_writable_elements (vec2, &len2);
 
-          size_t i, j, e;
-          i = scm_to_unsigned_integer (start1, 0, len1);
-          e = scm_to_unsigned_integer (end1, i, len1);
-          SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
-          j = scm_to_unsigned_integer (start2, 0, len2);
-          SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
+  size_t i, j, e;
+  i = scm_to_unsigned_integer (start1, 0, len1);
+  e = scm_to_unsigned_integer (end1, i, len1);
+  SCM_ASSERT_RANGE (SCM_ARG3, end1, (e-i) <= len2);
+  j = scm_to_unsigned_integer (start2, 0, len2);
+  SCM_ASSERT_RANGE (SCM_ARG5, start2, j <= len2 - (e - i));
   
-          j += (e - i);
+  j += (e - i);
   
-          i *= inc1;
-          e *= inc1;
-          j *= inc2;
-          while (i < e)
-            {
-              e -= inc1;
-              j -= inc2;
-              elts2[j] = elts1[e];
-            }
-
-          scm_array_handle_release (&handle2);
-          scm_array_handle_release (&handle1);
-        }
+  while (i < e)
+    {
+      --e;
+      --j;
+      elts2[j] = elts1[e];
     }
+
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME

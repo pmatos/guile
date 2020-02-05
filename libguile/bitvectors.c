@@ -689,7 +689,6 @@ SCM_DEFINE (scm_bit_count_star, "bit-count*", 3, 0, 0,
               count++;
 	}
     }
-  /* FIXME This requires a true u32vector so handle, inc, etc. are superfluous */
   else if (scm_is_true (scm_u32vector_p (kv)))
     {
       size_t kv_len;
