@@ -2174,13 +2174,12 @@ SCM_DEFINE (scm_setaffinity, "setaffinity", 2, 0, 0,
 #define FUNC_NAME s_scm_setaffinity
 {
   cpu_set_t cs;
-  scm_t_array_handle handle;
   const uint32_t *c_mask;
   size_t len, off, cpu;
   ssize_t inc;
   int err;
 
-  c_mask = scm_bitvector_elements (mask, &handle, &off, &len, &inc);
+  c_mask = scm_array1_bit_elements (mask, &len, &inc, &off);
 
   CPU_ZERO (&cs);
   for (cpu = 0; cpu < len; cpu++)

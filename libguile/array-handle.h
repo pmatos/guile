@@ -97,7 +97,6 @@ SCM_API void scm_array_handle_release (scm_t_array_handle *h);
 SCM_API const SCM* scm_array_handle_elements (scm_t_array_handle *h);
 SCM_API SCM* scm_array_handle_writable_elements (scm_t_array_handle *h);
 
-
 SCM_INLINE SCM scm_array_handle_ref (scm_t_array_handle *h, ssize_t pos);
 SCM_INLINE void scm_array_handle_set (scm_t_array_handle *h, ssize_t pos, SCM val);
 
@@ -126,8 +125,9 @@ scm_array_handle_set (scm_t_array_handle *h, ssize_t p, SCM v)
 
 #endif
 
-
 SCM_INTERNAL void scm_init_array_handle (void);
 
+SCM_API const uint32_t * scm_array1_bit_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp);
+SCM_API uint32_t * scm_array1_bit_writable_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp);
 
 #endif  /* SCM_ARRAY_HANDLE_H */

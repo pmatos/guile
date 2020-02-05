@@ -34,33 +34,36 @@ Use SCM_VECTOR_REF, SCM_VECTOR_SET and SCM_VECTOR_LENGTH instead.
 
 ** scm_vector_elements / scm_vector_writable_elements take a single argument that must be a vector.
 
-Use scm_array_get_handle and scm_array_handle_elements /
-scm_array_handle_writable_elements on general arrays.
+Use scm_array_get_handle and scm_array_handle_elements / scm_array_handle_writable_elements on general arrays.
 
 Use scm_c_vector_length to get the length of a vector.
+
+** scm_bitvector_elements / scm_bitvector_writable_elements take a single argument that must be a bitvector
+
+Use scm_array_get_handle and scm_array_handle_bit_elements / scm_array_handle_bit_writable_elements on bit arrays.
+Use scm_array1_bit_elements (NEW) / scm_array1_bit_writable_elements (NEW) on rank-1 bit arrays.
 
 
 * Rationale / TODO
 
-** Fix API for scm_VECTOR_TYPE_elements scm_VECTOR_TYPE_writable_elements to [(SCM v) -> pointer]
+** Status as of 3.0.0
+  
+  - The _elements functions require the array handle interface even for true vectors, even though the handle is unnecessary. This creates a burden (having to declare, release, etc).
+  - The srfi-4 _elements functions don't accept arbitrary rank-1 xxxarray even though they require the array handle interface (inc, handle are superfluous).
 
-  - incp is always one on these types, so it isn't needed
-  - no need to release an array handle for VECTOR_TYPE
+** Plan
+
+  - Provide scm_VTYPE_(writable_)elements with signature [(SCM) -> pointer] for all vector types.
+  - Provide scm_array1_VTYPE_(writable_)elements with signature [(SCM, &handle, ...) -> pointer] for all vector types. These replace the old scm_VTYPE_(writable_)elements but will be available on the array API and not on the xxxvector APIs.
   - remove the dependence of vector.c bitvector.c bytevector.c etc. on array-handle.h
+  - remove the double dependence of array-ref -> VECTOR-TYPE-ref -> array_handle
+    use seen in scm_array_get_handle.
+  - bug: scm_bitvector_elements doesn't select for type = bit
+  - bug: bit-set*! already requires second arg to be true bitvector
+  - bug: setaffinity in posix.c failed to release the mask handle
 
-** Fix API for scm_vector_elements scm_vector_writable_elements to [(SCM v) -> pointer]
 
-  - the matching functions for srfi-4 VECTOR_TYPEs have never allowed passing
-    non-VECTOR-TYPE rank-1 arrays. There is no reason for these to allow it; if
-    v is an array, use the array interface.
-
-** Fix API for scm_bitvector_elements scm_bitvector_writable_elements to [(SCM v) -> pointer]
-
-   - same as for scm_vector_elements scm_vector_writable_elements.
-
-** Remove scm_is_simple_vector, fix scm_is_array_p, rename SIMPLE_VECTOR  to VECTOR, etc.
-
-  - just cleaning house
+* Other
 
 ** vector-move-right!, vector-move-left!, either
 

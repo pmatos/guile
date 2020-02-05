@@ -351,6 +351,72 @@ scm_array_handle_writable_elements (scm_t_array_handle *h)
   return (SCM *) scm_array_handle_elements (h);
 }
 
+// -----------------------------------------------
+// FIXME adding scm_array1_xxx_(writable_)elements
+// -----------------------------------------------
+
+const uint32_t *
+scm_array1_bit_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp)
+{
+  scm_t_array_handle h;
+  scm_array_get_handle (vec, &h);
+  if (1 != scm_array_handle_rank (&h))
+    {
+      scm_array_handle_release (&h);
+      scm_wrong_type_arg_msg (NULL, 0, vec, "rank 1 bit array");
+    }
+  else if (scm_is_bitvector (h.array))
+    {
+      scm_t_array_dim *dim = scm_array_handle_dims (&h);
+      if (offp)
+        *offp = scm_array_handle_bit_elements_offset (&h);
+      if (lenp)
+        *lenp = dim->ubnd - dim->lbnd + 1;
+      if (incp)
+        *incp = dim->inc;
+      
+      const uint32_t * val = ((const uint32_t *) h.elements) + h.base/32;
+      scm_array_handle_release (&h);
+      return val;
+    }
+  else
+    {
+      scm_array_handle_release (&h);
+      scm_wrong_type_arg_msg (NULL, 0, vec, "rank 1 bit array");
+    }
+}
+
+uint32_t *
+scm_array1_bit_writable_elements (SCM vec, size_t *lenp, ssize_t *incp, size_t *offp)
+{
+  scm_t_array_handle h;
+  scm_array_get_handle (vec, &h);
+  if (1 != scm_array_handle_rank (&h))
+    {
+      scm_array_handle_release (&h);
+      scm_wrong_type_arg_msg (NULL, 0, vec, "rank 1 mutable bit array");
+    }
+  else if (scm_i_is_mutable_bitvector (h.array))
+    {
+      scm_t_array_dim *dim = scm_array_handle_dims (&h);
+      if (offp)
+        *offp = scm_array_handle_bit_elements_offset (&h);
+      if (lenp)
+        *lenp = dim->ubnd - dim->lbnd + 1;
+      if (incp)
+        *incp = dim->inc;
+
+      uint32_t * val = ((uint32_t *) h.elements) + h.base/32;
+      scm_array_handle_release (&h);
+      return val;
+    }
+  else
+    {
+      scm_array_handle_release (&h);
+      scm_wrong_type_arg_msg (NULL, 0, vec, "rank 1 mutable bit array");
+    }
+}
+
 void
 scm_init_array_handle (void)
 {
