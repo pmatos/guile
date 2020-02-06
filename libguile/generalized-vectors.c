@@ -29,6 +29,7 @@
 
 #include "generalized-vectors.h"
 #include "array-handle.h"
+#include "bytevectors.h"
 #include "bitvectors.h"
 #include "strings.h"
 #include "vectors.h"
@@ -44,7 +45,7 @@ struct scm_t_vector_ctor
 static struct scm_t_vector_ctor vector_ctors[VECTOR_CTORS_N_STATIC_ALLOC];
 static int num_vector_ctors_registered = 0;
 
-void
+static void
 scm_i_register_vector_constructor (SCM type, SCM (*ctor)(SCM, SCM))
 {
   if (num_vector_ctors_registered >= VECTOR_CTORS_N_STATIC_ALLOC)
@@ -83,6 +84,10 @@ SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_CHAR, scm_make_string)
 void
 scm_init_generalized_vectors ()
 {
+  scm_i_register_vector_constructor
+    (scm_i_array_element_types[SCM_ARRAY_ELEMENT_TYPE_VU8],
+     scm_make_bytevector);
+
 #define REGISTER(tag, TAG)                                      \
   scm_i_register_vector_constructor                             \
     (scm_i_array_element_types[SCM_ARRAY_ELEMENT_TYPE_##TAG],   \

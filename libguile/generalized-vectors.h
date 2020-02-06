@@ -29,7 +29,6 @@
 /* Generalized vectors */
 
 SCM_API SCM scm_make_generalized_vector (SCM type, SCM len, SCM fill);
-SCM_INTERNAL void scm_i_register_vector_constructor (SCM type, SCM (*ctor)(SCM, SCM));
 
 SCM_INTERNAL void scm_init_generalized_vectors (void);
 

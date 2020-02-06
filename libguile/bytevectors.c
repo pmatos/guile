@@ -37,12 +37,12 @@
 
 #include <gmp.h>
 
+/* FIXME want to remove this dependence out. See bitvectors.h */
 #include "array-handle.h"
 #include "arrays.h"
 #include "boolean.h"
 #include "dynwind.h"
 #include "extensions.h"
-#include "generalized-vectors.h"
 #include "gsubr.h"
 #include "list.h"
 #include "numbers.h"
@@ -2138,10 +2138,6 @@ scm_bootstrap_bytevectors (void)
                             "scm_init_bytevectors",
 			    (scm_t_extension_init_func) scm_init_bytevectors,
 			    NULL);
-
-  scm_i_register_vector_constructor
-    (scm_i_array_element_types[SCM_ARRAY_ELEMENT_TYPE_VU8],
-     scm_make_bytevector);
 }
 
 void
