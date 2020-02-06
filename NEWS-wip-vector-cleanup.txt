@@ -56,6 +56,11 @@ These functions weren't advertised to work on non-vector arrays. They did try to
 instead of the correct result #1@1(0 1 2 0 0). This buggy support has been removed.
 
 
+* Compatible changes
+
+** vector-copy! from (srfi :43) is provided in core.
+
+
 * Rationale / TODO
 
 The ultimate goal of this patch set is to have arrays be strictly layered above typed vectors so they can be replaced by a different implementation without affecting the latter.

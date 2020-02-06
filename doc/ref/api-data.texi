@@ -6390,6 +6390,19 @@ returned by @code{vector-fill!} is unspecified.
 Return a copy of @var{vec}.
 @end deffn
 
+@deffn {Scheme Procedure} vector-copy! target tstart source [sstart [send]]
+@deffnx {C Function} scm_vector_copy_x (target tstart source, sstart, send)
+Copy a block of elements from @var{source} to @var{target}, both of
+which must be vectors, starting in @var{target} at @var{tstart} and
+starting in @var{source} at @var{sstart}, ending when (@var{send} -
+@var{sstart}) elements have been copied.  It is an error for
+@var{target} to have a length less than (@var{tstart} + @var{send} -
+@var{sstart}).  @var{sstart} defaults to 0 and @var{send} defaults to
+the length of @var{source}.
+
+This function is also provided as part of @ref{SRFI-43}.
+@end deffn
+
 @deffn {Scheme Procedure} vector-move-left! vec1 start1 end1 vec2 start2
 @deffnx {C Function} scm_vector_move_left_x (vec1, start1, end1, vec2, start2)
 Copy elements from @var{vec1}, positions @var{start1} to @var{end1},

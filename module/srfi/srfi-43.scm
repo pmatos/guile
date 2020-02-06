@@ -22,7 +22,7 @@
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-8)
   #:re-export (make-vector vector vector? vector-ref vector-set!
-                           vector-length vector-fill!)
+                           vector-length vector-fill! vector-copy!)
   #:replace (vector-copy list->vector vector->list)
   #:export (vector-empty? vector= vector-unfold vector-unfold-right
                           vector-reverse-copy
@@ -35,7 +35,7 @@
                           vector-binary-search
                           vector-any vector-every
                           vector-swap! vector-reverse!
-                          vector-copy! vector-reverse-copy!
+                          vector-reverse-copy!
                           reverse-vector->list
                           reverse-list->vector))
 
@@ -900,57 +900,8 @@ START defaults to 0 and END defaults to the length of VEC."
        (assert-valid-range start end len 'vector-reverse!)
        (%vector-reverse! vec start end)))))
 
-(define-syntax-rule (define-vector-copier! copy! docstring inner-proc)
-  (define copy!
-    (let ((%copy! inner-proc))
-      (case-lambda
-        docstring
-        ((target tstart source)
-         (assert-vector target 'copy!)
-         (assert-vector source 'copy!)
-         (let ((tlen (vector-length target))
-               (slen (vector-length source)))
-           (assert-valid-start tstart tlen 'copy!)
-           (unless (>= tlen (+ tstart slen))
-             (error-from 'copy! "would write past end of target"))
-           (%copy! target tstart source 0 slen)))
-
-        ((target tstart source sstart)
-         (assert-vector target 'copy!)
-         (assert-vector source 'copy!)
-         (let ((tlen (vector-length target))
-               (slen (vector-length source)))
-           (assert-valid-start tstart tlen 'copy!)
-           (assert-valid-start sstart slen 'copy!)
-           (unless (>= tlen (+ tstart (- slen sstart)))
-             (error-from 'copy! "would write past end of target"))
-           (%copy! target tstart source sstart slen)))
-
-        ((target tstart source sstart send)
-         (assert-vector target 'copy!)
-         (assert-vector source 'copy!)
-         (let ((tlen (vector-length target))
-               (slen (vector-length source)))
-           (assert-valid-start tstart tlen 'copy!)
-           (assert-valid-range sstart send slen 'copy!)
-           (unless (>= tlen (+ tstart (- send sstart)))
-             (error-from 'copy! "would write past end of target"))
-           (%copy! target tstart source sstart send)))))))
-
-(define-vector-copier! vector-copy!
-  "(vector-copy! target tstart source [sstart [send]]) -> unspecified
-
-Copy a block of elements from SOURCE to TARGET, both of which must be
-vectors, starting in TARGET at TSTART and starting in SOURCE at
-SSTART, ending when SEND - SSTART elements have been copied.  It is an
-error for TARGET to have a length less than TSTART + (SEND - SSTART).
-SSTART defaults to 0 and SEND defaults to the length of SOURCE."
-  (lambda (target tstart source sstart send)
-    (if (< tstart sstart)
-        (vector-move-left!  source sstart send target tstart)
-        (vector-move-right! source sstart send target tstart))))
-
-(define-vector-copier! vector-reverse-copy!
+(define vector-reverse-copy!
+  (case-lambda
   "(vector-reverse-copy! target tstart source [sstart [send]]) -> unspecified
 
 Like vector-copy!, but copy the elements in the reverse order.  It is
@@ -958,13 +909,25 @@ an error if TARGET and SOURCE are identical vectors and the TARGET and
 SOURCE ranges overlap; however, if TSTART = SSTART,
 vector-reverse-copy! behaves as (vector-reverse! TARGET TSTART SEND)
 would."
-  (lambda (target tstart source sstart send)
-    (if (and (eq? target source) (= tstart sstart))
+   ((target tstart source)
+    (vector-reverse-copy! target tstart source 0 (vector-length source)))
+   ((target tstart source sstart)
+    (vector-reverse-copy! target tstart source sstart (vector-length source)))
+   ((target tstart source sstart send)
+    (assert-vector target 'copy!)
+    (assert-vector source 'copy!)
+    (let ((tlen (vector-length target))
+          (slen (vector-length source)))
+      (assert-valid-start tstart tlen 'copy!)
+      (assert-valid-range sstart send slen 'copy!)
+      (unless (>= tlen (+ tstart (- send sstart)))
+        (error-from 'copy! "would write past end of target"))
+      (if (and (eq? target source) (= tstart sstart))
         (%vector-reverse! target sstart send)
         (let loop ((i tstart) (j (- send 1)))
           (when (>= j sstart)
             (vector-set! target i (vector-ref source j))
-            (loop (+ i 1) (- j 1)))))))
+            (loop (+ i 1) (- j 1)))))))))
 
 (define vector->list
   (let ()

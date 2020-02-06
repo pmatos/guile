@@ -335,8 +335,35 @@ scm_i_vector_equal_p (SCM x, SCM y)
   return SCM_BOOL_T;
 }
 
-// These functions are used by vector-copy!
-// FIXME split into vector- and array- (?)
+SCM_DEFINE (scm_vector_copy_x, "vector-copy!", 3, 2, 0,
+            (SCM target, SCM tstart, SCM source, SCM sstart, SCM send),
+            "Copy a block of elements from @var{source} to @var{target}, "
+            "both of which must be vectors, starting in @var{target} at "
+            "@var{tstart} and starting in @var{source} at @var{sstart}, ending "
+            "when @var{send} - @var{sstart} elements have been copied.\n\n"
+            "It is an error for @var{target} to have a length less than "
+            "@var{tstart} + (@var{send} - @var{sstart}).  @var{sstart} defaults "
+            "to 0 and @var{send} defaults to the length of @var{source}.\n\n"
+            "If @var{target} and @var{source} are the same vector, then copying takes "
+            "place as though the elements in @var{source} are first copied into a "
+            "temporary vector, and that temporary vector is then copied to @var{target}.")
+#define FUNC_NAME s_scm_vector_copy_x
+{
+  size_t slen, tlen;
+  const SCM *s = scm_vector_elements (source, &slen);
+  SCM *t = scm_vector_writable_elements (target, &tlen);
+
+  size_t t0, s0, len;
+  t0 = scm_to_unsigned_integer (tstart, 0, tlen);
+  s0 = (SCM_UNBNDP (sstart)) ? 0 : scm_to_unsigned_integer (sstart, 0, slen);
+  len = ((SCM_UNBNDP (send)) ? slen : scm_to_unsigned_integer (send, s0, slen)) - s0;
+  SCM_ASSERT_RANGE (SCM_ARG3, source, t0+len <= tlen);
+
+  memmove(t + t0, s + s0, len * sizeof(SCM));
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
 
 SCM_DEFINE (scm_vector_move_left_x, "vector-move-left!", 5, 0, 0, 
             (SCM vec1, SCM start1, SCM end1, SCM vec2, SCM start2),

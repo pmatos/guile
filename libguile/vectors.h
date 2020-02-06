@@ -36,11 +36,13 @@ SCM_API SCM scm_vector_set_x (SCM v, SCM k, SCM obj);
 SCM_API SCM scm_make_vector (SCM k, SCM fill);
 SCM_API SCM scm_vector_to_list (SCM v);
 SCM_API SCM scm_vector_fill_x (SCM v, SCM fill_x);
+SCM_API SCM scm_vector_copy (SCM vec);
+SCM_API SCM scm_vector_copy_x (SCM target, SCM tstart,
+                               SCM source, SCM sstart, SCM send);
 SCM_API SCM scm_vector_move_left_x (SCM vec1, SCM start1, SCM end1,
 				    SCM vec2, SCM start2);
 SCM_API SCM scm_vector_move_right_x (SCM vec1, SCM start1, SCM end1, 
 				     SCM vec2, SCM start2);
-SCM_API SCM scm_vector_copy (SCM vec);
 
 SCM_API int scm_is_vector (SCM obj);
 SCM_API SCM scm_c_make_vector (size_t len, SCM fill);
