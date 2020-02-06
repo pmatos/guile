@@ -31,10 +31,6 @@
 SCM_API SCM scm_make_generalized_vector (SCM type, SCM len, SCM fill);
 SCM_INTERNAL void scm_i_register_vector_constructor (SCM type, SCM (*ctor)(SCM, SCM));
 
-#define SCM_VECTOR_IMPLEMENTATION(type, ctor)                   \
-  SCM_SNARF_INIT (scm_i_register_vector_constructor             \
-                  (scm_i_array_element_types[type], ctor))
-
 SCM_INTERNAL void scm_init_generalized_vectors (void);
 
 #endif  /* SCM_GENERALIZED_VECTORS_H */

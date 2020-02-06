@@ -29,9 +29,10 @@
 
 #include "generalized-vectors.h"
 #include "array-handle.h"
-#include "vectors.h"
 #include "bitvectors.h"
 #include "strings.h"
+#include "vectors.h"
+#include "srfi-4.h"
 
 struct scm_t_vector_ctor
 {
@@ -70,6 +71,10 @@ SCM_DEFINE (scm_make_generalized_vector, "make-generalized-vector", 2, 1, 0,
 }
 #undef FUNC_NAME
 
+#define SCM_VECTOR_IMPLEMENTATION(type, ctor)                   \
+  SCM_SNARF_INIT (scm_i_register_vector_constructor             \
+                  (scm_i_array_element_types[type], ctor))
+
 
 SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_SCM, scm_make_vector)
 SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_BIT, scm_make_bitvector)
@@ -78,5 +83,23 @@ SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_CHAR, scm_make_string)
 void
 scm_init_generalized_vectors ()
 {
+#define REGISTER(tag, TAG)                                      \
+  scm_i_register_vector_constructor                             \
+    (scm_i_array_element_types[SCM_ARRAY_ELEMENT_TYPE_##TAG],   \
+     scm_make_##tag##vector)
+
+  REGISTER (u8, U8); 
+  REGISTER (s8, S8); 
+  REGISTER (u16, U16);
+  REGISTER (s16, S16);
+  REGISTER (u32, U32);
+  REGISTER (s32, S32);
+  REGISTER (u64, U64);
+  REGISTER (s64, S64);
+  REGISTER (f32, F32);
+  REGISTER (f64, F64);
+  REGISTER (c32, C32);
+  REGISTER (c64, C64);
+  
 #include "generalized-vectors.x"
 }
