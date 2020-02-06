@@ -37,7 +37,6 @@
 #include "chars.h"
 #include "deprecation.h"
 #include "error.h"
-#include "generalized-vectors.h"
 #include "gsubr.h"
 #include "numbers.h"
 #include "pairs.h"
@@ -2493,8 +2492,6 @@ scm_i_get_substring_spec (size_t len,
     *cend = scm_to_unsigned_integer (end, *cstart, len);
 }
 		  
-SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_CHAR, scm_make_string)
-
 void
 scm_init_strings ()
 {

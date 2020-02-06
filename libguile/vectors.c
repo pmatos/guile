@@ -34,10 +34,6 @@
 #include "vectors.h"
 #include <string.h>
 
-// You're next
-#include "array-handle.h"
-#include "generalized-vectors.h"
-
 
 
 #define VECTOR_MAX_LENGTH (SCM_T_BITS_MAX >> 8)
@@ -428,9 +424,6 @@ SCM_DEFINE (scm_vector_move_right_x, "vector-move-right!", 5, 0, 0,
   return SCM_UNSPECIFIED;
 }
 #undef FUNC_NAME
-
-
-SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_SCM, scm_make_vector)
 
 void
 scm_init_vectors ()

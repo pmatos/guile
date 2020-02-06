@@ -25,21 +25,21 @@
 #endif
 
 #include <string.h>
+#include <stdbool.h>
 
-#include "array-handle.h"
-#include "arrays.h"
 #include "boolean.h"
-#include "generalized-vectors.h"
 #include "gsubr.h"
 #include "list.h"
 #include "numbers.h"
 #include "pairs.h"
 #include "ports.h"
-#include "srfi-4.h"
-#include <stdbool.h>
-
 #include "bitvectors.h"
 
+/* FIXME move functions using these (operating on rank-1 bit arrays, not
+   bitvectors) to a separate source file
+*/
+#include "arrays.h"
+#include "srfi-4.h"
 
 /* Bit vectors. Would be nice if they were implemented on top of bytevectors,
  * but alack, all we have is this crufty C.
@@ -755,8 +755,6 @@ scm_istr2bve (SCM str)
   scm_remember_upto_here_1 (str);
   return res;
 }
-
-SCM_VECTOR_IMPLEMENTATION (SCM_ARRAY_ELEMENT_TYPE_BIT, scm_make_bitvector)
 
 void
 scm_init_bitvectors ()

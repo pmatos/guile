@@ -22,6 +22,8 @@
    <https://www.gnu.org/licenses/>.  */
 
 
+/* FIXME move array-handle functions to array-handle.[hc] */
+
 #include "libguile/array-handle.h"
 
 SCM_API SCM scm_make_srfi_4_vector (SCM type, SCM len, SCM fill);
