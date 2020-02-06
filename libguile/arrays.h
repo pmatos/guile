@@ -36,6 +36,37 @@ SCM_API SCM scm_make_generalized_vector (SCM type, SCM len, SCM fill);
 
 /** Arrays */
 
+#define SCM_VALIDATE_ARRAY(pos, v) \
+  do { \
+    SCM_ASSERT (SCM_HEAP_OBJECT_P (v) \
+                && scm_is_true (scm_array_p (v)), \
+                v, pos, FUNC_NAME); \
+  } while (0)
+
+SCM_API int scm_is_array (SCM obj);
+SCM_API SCM scm_array_p (SCM v);
+
+SCM_API int scm_is_typed_array (SCM obj, SCM type);
+SCM_API SCM scm_typed_array_p (SCM v, SCM type);
+
+SCM_API size_t scm_c_array_length (SCM ra);
+SCM_API SCM scm_array_length (SCM ra);
+
+SCM_API SCM scm_array_dimensions (SCM ra);
+SCM_API SCM scm_array_type (SCM ra);
+SCM_API SCM scm_array_type_code (SCM ra);
+SCM_API SCM scm_array_in_bounds_p (SCM v, SCM args);
+
+SCM_API SCM scm_c_array_ref_1 (SCM v, ssize_t idx0);
+SCM_API SCM scm_c_array_ref_2 (SCM v, ssize_t idx0, ssize_t idx1);
+
+SCM_API void scm_c_array_set_1_x (SCM v, SCM obj, ssize_t idx0);
+SCM_API void scm_c_array_set_2_x (SCM v, SCM obj, ssize_t idx0, ssize_t idx1);
+
+SCM_API SCM scm_array_ref (SCM v, SCM args);
+SCM_API SCM scm_array_set_x (SCM v, SCM obj, SCM args);
+SCM_API SCM scm_array_to_list (SCM v);
+
 SCM_API SCM scm_make_array (SCM fill, SCM bounds);
 SCM_API SCM scm_make_typed_array (SCM type, SCM fill, SCM bounds);
 SCM_API SCM scm_from_contiguous_typed_array (SCM type, SCM bounds,

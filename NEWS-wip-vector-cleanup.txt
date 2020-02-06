@@ -15,9 +15,9 @@ Use array->list and array-copy (from (ice-9 arrays)) on general arrays.
 
 Use scm_is_vector instead.
 
-** libguile/generalized-vectors.[hc] has been removed.
+** libguile/generalized-vectors.[hc] libguile/generalized-arrays.[hc] and have been removed.
 
-If you were including libguile/generalized-vectors.h directly for any reason, just include libguile.h instead.
+If you were including these headers directly for any reason, just include libguile.h instead.
 
 
 * Backward incompatible changes

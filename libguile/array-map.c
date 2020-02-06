@@ -30,13 +30,11 @@
 #include <string.h>
 
 #include "arrays.h"
-#include "bitvectors.h"
 #include "boolean.h"
 #include "chars.h"
 #include "eq.h"
 #include "eval.h"
 #include "feature.h"
-#include "generalized-arrays.h"
 #include "gsubr.h"
 #include "list.h"
 #include "numbers.h"

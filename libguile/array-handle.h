@@ -72,7 +72,7 @@ typedef struct scm_t_array_handle {
      solution would be, well, nice.
    */
   size_t base;
-  size_t ndims; /* ndims == the rank of the array */
+  size_t ndims; /* the rank of the array */
   scm_t_array_dim *dims;
   scm_t_array_dim dim0;
   scm_t_array_element_type element_type;
