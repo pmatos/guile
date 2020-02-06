@@ -35,7 +35,6 @@
 #include "arrays.h"
 #include "feature.h"
 #include "generalized-arrays.h"
-#include "generalized-vectors.h"
 #include "gsubr.h"
 #include "list.h"
 #include "modules.h"

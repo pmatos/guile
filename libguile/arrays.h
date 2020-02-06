@@ -31,6 +31,8 @@
    Also see ....
  */
 
+/* FIXME Superfluous residue from generalized-vector.h - deprecate */
+SCM_API SCM scm_make_generalized_vector (SCM type, SCM len, SCM fill);
 
 /** Arrays */
 

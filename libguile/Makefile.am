@@ -164,7 +164,6 @@ libguile_@GUILE_EFFECTIVE_VERSION@_la_SOURCES =				\
 	gc.c					\
 	gettext.c				\
 	generalized-arrays.c			\
-	generalized-vectors.c			\
 	goops.c					\
 	gsubr.c					\
 	guardians.c				\
@@ -279,7 +278,6 @@ DOT_X_FILES =					\
 	gc.x					\
 	gettext.x				\
 	generalized-arrays.x			\
-	generalized-vectors.x			\
 	goops.x					\
 	gsubr.x					\
 	guardians.x				\
@@ -387,7 +385,6 @@ DOT_DOC_FILES = 				\
 	gc.doc					\
 	gettext.doc				\
 	generalized-arrays.doc			\
-	generalized-vectors.doc			\
 	goops.doc				\
 	gsubr.doc				\
 	guardians.doc				\
@@ -635,7 +632,6 @@ modinclude_HEADERS =				\
 	gc-inline.h				\
 	gettext.h				\
 	generalized-arrays.h			\
-	generalized-vectors.h			\
 	goops.h					\
 	gsubr.h					\
 	guardians.h				\
