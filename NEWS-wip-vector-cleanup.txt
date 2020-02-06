@@ -15,6 +15,10 @@ Use array->list and array-copy (from (ice-9 arrays)) on general arrays.
 
 Use scm_is_vector instead.
 
+** libguile/generalized-vectors.[hc] has been removed.
+
+If you were including libguile/generalized-vectors.h directly for any reason, just include libguile.h instead.
+
 
 * Backward incompatible changes
 
@@ -70,12 +74,13 @@ The ultimate goal of this patch set is to have arrays be strictly layered above 
   - The _elements functions require the array handle interface even for true vectors, when all of handle, inc and off are unnecessary. This creates a burden (having to declare & release handles, etc).
   - The srfi-4 _elements functions don't accept arbitrary rank-1 xxxarray even though they require the array handle interface (inc, handle are superfluous).
 
-** Plan [3/7]
+** Plan [4/8]
 
   - [X] Provide scm_VTYPE_(writable_)elements with signature [(SCM) -> pointer] for all vector types.
   - [ ] Provide scm_array1_VTYPE_(writable_)elements with signature [(SCM, &handle, ...) -> pointer] for all vector types. These replace the old scm_VTYPE_(writable_)elements but will be available on the array API and not on the xxxvector APIs.
-  - [ ] Remove the dependence of vector.c bitvector.c srfi-4.c etc. on array-handle.h
+  - [X] Remove the dependence of vector.c on array-handle-h
   - [X] Remove the dependence of VECTOR-TYPE-ref -> array_handle use seen in scm_array_get_handle.
+  - [ ] Remove the dependence of bitvector.c srfi-4.c etc. on array-handle.h
   - [X] Bug: setaffinity in posix.c failed to release the mask handle
   - [ ] Bug: scm_bitvector_elements doesn't select for type = bit
   - [ ] Bug: bit-set*! already requires second arg to be true bitvector
