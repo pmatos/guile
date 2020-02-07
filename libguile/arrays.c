@@ -604,7 +604,6 @@ SCM_DEFINE (scm_make_typed_array, "make-typed-array", 2, 0, 1,
   SCM ra;
 
   ra = scm_i_shap2ra (bounds);
-  SCM_SET_ARRAY_CONTIGUOUS_FLAG (ra);
   s = SCM_I_ARRAY_DIMS (ra);
   k = SCM_I_ARRAY_NDIM (ra);
 
@@ -636,29 +635,6 @@ SCM_DEFINE (scm_make_array, "make-array", 1, 0, 1,
   return scm_make_typed_array (SCM_BOOL_T, fill, bounds);
 }
 #undef FUNC_NAME
-
-/* see scm_from_contiguous_array */
-static void
-scm_i_ra_set_contp (SCM ra)
-{
-  size_t k = SCM_I_ARRAY_NDIM (ra);
-  if (k)
-    {
-      ssize_t inc = SCM_I_ARRAY_DIMS (ra)[k - 1].inc;
-      while (k--)
-	{
-	  if (inc != SCM_I_ARRAY_DIMS (ra)[k].inc)
-	    {
-	      SCM_CLR_ARRAY_CONTIGUOUS_FLAG (ra);
-	      return;
-	    }
-	  inc *= (SCM_I_ARRAY_DIMS (ra)[k].ubnd
-		  - SCM_I_ARRAY_DIMS (ra)[k].lbnd + 1);
-	}
-    }
-  SCM_SET_ARRAY_CONTIGUOUS_FLAG (ra);
-}
-
 
 SCM_DEFINE (scm_make_shared_array, "make-shared-array", 2, 0, 1,
            (SCM oldra, SCM mapfunc, SCM dims),
@@ -772,7 +748,6 @@ SCM_DEFINE (scm_make_shared_array, "make-shared-array", 2, 0, 1,
 	return scm_make_generalized_vector (scm_array_type (ra), SCM_INUM0,
                                             SCM_UNDEFINED);
     }
-  scm_i_ra_set_contp (ra);
   return ra;
 }
 #undef FUNC_NAME
@@ -1043,7 +1018,6 @@ SCM_DEFINE (scm_transpose_array, "transpose-array", 1, 0, 1,
 	}
       if (ndim > 0)
 	SCM_MISC_ERROR ("bad argument list", SCM_EOL);
-      scm_i_ra_set_contp (res);
       return res;
     }
 }

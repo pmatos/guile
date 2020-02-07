@@ -89,16 +89,8 @@ SCM_API SCM scm_array_rank (SCM ra);
 
 /* internal. */
 
-/* see scm_from_contiguous_array  for these three */
-#define SCM_I_ARRAY_FLAG_CONTIGUOUS (1 << 0)  
-#define SCM_SET_ARRAY_CONTIGUOUS_FLAG(x) \
-  (SCM_SET_CELL_WORD_0 ((x), SCM_CELL_WORD_0 (x) | (SCM_I_ARRAY_FLAG_CONTIGUOUS << 16)))
-#define SCM_CLR_ARRAY_CONTIGUOUS_FLAG(x) \
-  (SCM_SET_CELL_WORD_0 ((x), SCM_CELL_WORD_0 (x) & ~(SCM_I_ARRAY_FLAG_CONTIGUOUS << 16)))
-
 #define SCM_I_ARRAYP(a)	    SCM_TYP16_PREDICATE (scm_tc7_array, a)
 #define SCM_I_ARRAY_NDIM(x)  ((size_t) (SCM_CELL_WORD_0 (x)>>17))
-#define SCM_I_ARRAY_CONTP(x) (SCM_CELL_WORD_0 (x) & (SCM_I_ARRAY_FLAG_CONTIGUOUS << 16))
 
 #define SCM_I_ARRAY_V(a)    SCM_CELL_OBJECT_1 (a)
 #define SCM_I_ARRAY_BASE(a) ((size_t) SCM_CELL_WORD_2 (a))
