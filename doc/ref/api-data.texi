@@ -6459,8 +6459,6 @@ Return a pointer to the elements of @var{vec}.  This pointer can only be
 used to read the elements of @var{vec}.  When @var{vec} is not a vector,
 an error is signaled.
 
-For use with general arrays, see @code{scm_array_handle_elements}.
-
 The following example shows the typical way to use this function.  It
 creates a list of all elements of @var{vec} (in reverse order).
 
@@ -6473,13 +6471,12 @@ for (size_t i = 0; i < len; ++i)
   list = scm_cons (elt[i], list);
 @end example
 
+For use with general arrays, see @code{scm_array_handle_elements}.
 @end deftypefn
 
 @deftypefn {C Function} {SCM *} scm_vector_writable_elements (SCM vec, size_t *lenp)
 Like @code{scm_vector_elements} but the pointer can be used to modify
 the vector.
-
-For use with general arrays, see @code{scm_array_handle_writable_elements}.
 
 The following example shows the typical way to use this function.  It
 fills a vector with @code{#t} (but see @code{vector-fill!}).
@@ -6492,6 +6489,7 @@ for (size_t i = 0; i < len; ++i)
   elt[i] = SCM_BOOL_T;
 @end example
 
+For use with general arrays, see @code{scm_array_handle_writable_elements}.
 @end deftypefn
 
 @node Uniform Numeric Vectors
