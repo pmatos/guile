@@ -79,7 +79,7 @@
 	  
 	  endianness native-endianness bytevector? make-bytevector 
 	  bytevector-length bytevector=? bytevector-fill! bytevector-copy! 
-	  bytevector-copy uniform-array->bytevector bytevector-u8-ref 
+	  bytevector-copy bytevector-u8-ref 
 	  bytevector-s8-ref bytevector-u8-set! bytevector-s8-set! 
 	  bytevector->u8-list u8-list->bytevector bytevector-uint-ref 
 	  bytevector-uint-set! bytevector-sint-ref bytevector-sint-set!

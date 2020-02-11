@@ -5,7 +5,7 @@ TBA to NEWS for this branch.
 * Forward incompatible changes
 
 Applying these changes will make your program work with this version of
-Guile and continue working with older versions, at least back to 2.2.
+Guile and continue working with older versions (at least back to 2.2).
 
 ** vector->list and vector-copy require a true vector argument.
 
@@ -23,6 +23,10 @@ If you were including these headers directly for any reason, just include libgui
 
 This function was undocumented. Instead, use scm_make_typed_array and
 the array handle functions to copy data to the new array.
+
+** uniform-array->bytevector has been moved from (rnrs bytevectors) / (rnrs) to core.
+
+This function is undocumented.
 
 
 * Backward incompatible changes

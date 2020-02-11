@@ -33,7 +33,6 @@
 #include <unistr.h>
 #include <string.h>
 #include <alloca.h>
-#include <assert.h>
 
 #include <gmp.h>
 
@@ -644,50 +643,6 @@ SCM_DEFINE (scm_bytevector_copy, "bytevector-copy", 1, 0, 0,
   memcpy (c_copy, c_bv, c_len);
 
   return copy;
-}
-#undef FUNC_NAME
-
-SCM_DEFINE (scm_uniform_array_to_bytevector, "uniform-array->bytevector",
-            1, 0, 0, (SCM array),
-	    "Return a newly allocated bytevector whose contents\n"
-            "will be copied from the uniform array @var{array}.")
-#define FUNC_NAME s_scm_uniform_array_to_bytevector
-{
-  SCM contents, ret;
-  size_t len, sz, byte_len;
-  scm_t_array_handle h;
-  const void *elts;
-  
-  contents = scm_array_contents (array, SCM_BOOL_T);
-  if (scm_is_false (contents))
-    scm_wrong_type_arg_msg (FUNC_NAME, 0, array, "uniform contiguous array");
-
-  scm_array_get_handle (contents, &h);
-  assert (h.base == 0);
-
-  elts = h.elements;
-  len = h.dims->inc * (h.dims->ubnd - h.dims->lbnd + 1);
-  sz = scm_array_handle_uniform_element_bit_size (&h);
-  if (sz >= 8 && ((sz % 8) == 0))
-    byte_len = len * (sz / 8);
-  else if (sz < 8)
-    /* Elements of sub-byte size (bitvectors) are addressed in 32-bit
-       units.  */
-    byte_len = ((len * sz + 31) / 32) * 4;
-  else
-    /* an internal guile error, really */
-    SCM_MISC_ERROR ("uniform elements larger than 8 bits must fill whole bytes", SCM_EOL);
-
-  ret = make_bytevector (byte_len, SCM_ARRAY_ELEMENT_TYPE_VU8);
-  if (byte_len != 0)
-    /* Empty arrays may have elements == NULL.  We must avoid passing
-       NULL to memcpy, even if the length is zero, to avoid undefined
-       behavior. */
-    memcpy (SCM_BYTEVECTOR_CONTENTS (ret), elts, byte_len);
-
-  scm_array_handle_release (&h);
-
-  return ret;
 }
 #undef FUNC_NAME
 

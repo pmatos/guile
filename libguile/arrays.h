@@ -66,6 +66,7 @@ SCM_API void scm_c_array_set_2_x (SCM v, SCM obj, ssize_t idx0, ssize_t idx1);
 SCM_API SCM scm_array_ref (SCM v, SCM args);
 SCM_API SCM scm_array_set_x (SCM v, SCM obj, SCM args);
 SCM_API SCM scm_array_to_list (SCM v);
+SCM_API SCM scm_uniform_array_to_bytevector (SCM a);
 
 SCM_API SCM scm_make_array (SCM fill, SCM bounds);
 SCM_API SCM scm_make_typed_array (SCM type, SCM fill, SCM bounds);
