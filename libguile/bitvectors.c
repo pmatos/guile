@@ -36,7 +36,7 @@
 #include "bitvectors.h"
 
 /* FIXME move functions using these (operating on rank-1 bit arrays, not
-   bitvectors) to a separate source file
+   bitvectors) to a separate source file.
 */
 #include "arrays.h"
 #include "srfi-4.h"
@@ -257,7 +257,7 @@ scm_c_bitvector_set_x (SCM vec, size_t idx, SCM val)
   if (idx >= len)
     scm_out_of_range (NULL, scm_from_size_t (idx));
 
-  bitset_(bits, idx, scm_is_true (val));
+  bitset_ (bits, idx, scm_is_true (val));
 }
 
 SCM_DEFINE (scm_bitvector_set_x, "bitvector-set!", 3, 0, 0,
@@ -303,7 +303,7 @@ SCM_DEFINE (scm_bitvector_fill_x, "bitvector-fill!", 2, 0, 0,
     {
       size_t i;
       for (i = 0; i < len; i++)
-        bitset_(bits, off+i*inc, scm_is_true(val));
+        bitset_ (bits, off+i*inc, scm_is_true(val));
     }
 
   return SCM_UNSPECIFIED;
@@ -319,7 +319,7 @@ SCM_DEFINE (scm_list_to_bitvector, "list->bitvector", 1, 0, 0,
   size_t bit_len = scm_to_size_t (scm_length (list));
   SCM vec = scm_c_make_bitvector (bit_len, SCM_UNDEFINED);
   size_t word_len = (bit_len+31)/32;
-  uint32_t *bits = scm_bitvector_writable_elements (vec, NULL);
+  uint32_t *bits = BITVECTOR_BITS (vec);
   size_t i, j;
 
   for (i = 0; i < word_len && scm_is_pair (list); i++, bit_len -= 32)
@@ -478,8 +478,7 @@ SCM_DEFINE (scm_bit_position, "bit-position", 3, 0, 0,
       size_t word_len = (len + 31) / 32;
       uint32_t last_mask =  ((uint32_t)-1) >> (32*word_len - len);
       size_t first_word = first_bit / 32;
-      uint32_t first_mask =
-	((uint32_t)-1) << (first_bit - 32*first_word);
+      uint32_t first_mask = ((uint32_t)-1) << (first_bit - 32*first_word);
       uint32_t w;
       
       for (size_t i = first_word; i < word_len; i++)
@@ -499,13 +498,11 @@ SCM_DEFINE (scm_bit_position, "bit-position", 3, 0, 0,
   else
     {
       for (size_t i = first_bit; i < len; i++)
-	{
-	  if (bit == bitref_ (bits, off+i*inc))
-	    {
-	      res = scm_from_size_t (i);
-	      break;
-	    }
-	}
+        if (bit == bitref_ (bits, off+i*inc))
+          {
+            res = scm_from_size_t (i);
+            break;
+          }
     }
 
   return res;

@@ -36,9 +36,8 @@
 
 #include <gmp.h>
 
-/* FIXME want to remove this dependence out. See bitvectors.h */
+/* FIXME want to remove this dependence. See bitvectors.h */
 #include "array-handle.h"
-#include "arrays.h"
 #include "boolean.h"
 #include "dynwind.h"
 #include "extensions.h"
