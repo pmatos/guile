@@ -122,20 +122,16 @@ SCM_DEFINE (scm_vector, "vector", 0, 0, 1,
 	    "@end lisp")
 #define FUNC_NAME s_scm_vector
 {
-  SCM res;
-  SCM *data;
-  long i, len;
-
+  long len;
   SCM_VALIDATE_LIST_COPYLEN (1, l, len);
+  
+  SCM res = scm_c_make_vector (len, SCM_UNSPECIFIED);
+  SCM *data = SCM_I_VECTOR_WELTS (res);
 
-  res = scm_c_make_vector (len, SCM_UNSPECIFIED);
-  data = SCM_I_VECTOR_WELTS (res);
-  i = 0;
-  while (scm_is_pair (l) && i < len) 
+  for (long i=0; i < len; ++i)
     {
       data[i] = SCM_CAR (l);
       l = SCM_CDR (l);
-      i += 1;
     }
 
   return res;
