@@ -162,10 +162,7 @@ scm_c_vector_ref (SCM v, size_t k)
 #define FUNC_NAME s_scm_vector_ref
 {
   SCM_VALIDATE_VECTOR (1, v);
-
-  if (k >= SCM_I_VECTOR_LENGTH (v))
-    scm_out_of_range (NULL, scm_from_size_t (k));
-
+  SCM_ASSERT_RANGE (2, scm_from_size_t (k), k < SCM_I_VECTOR_LENGTH (v));
   return SCM_VECTOR_REF (v, k);
 }
 #undef FUNC_NAME
@@ -193,10 +190,7 @@ scm_c_vector_set_x (SCM v, size_t k, SCM obj)
 #define FUNC_NAME s_scm_vector_set_x
 {
   SCM_VALIDATE_MUTABLE_VECTOR (1, v);
-
-  if (k >= SCM_I_VECTOR_LENGTH (v))
-    scm_out_of_range (NULL, scm_from_size_t (k)); 
-
+  SCM_ASSERT_RANGE (2, scm_from_size_t (k), k < SCM_I_VECTOR_LENGTH (v));
   SCM_VECTOR_SET (v, k, obj);
 }
 #undef FUNC_NAME
@@ -228,13 +222,9 @@ SCM
 scm_c_make_vector (size_t k, SCM fill)
 #define FUNC_NAME s_scm_make_vector
 {
-  SCM vector;
-  size_t j;
-
   SCM_ASSERT_RANGE (1, scm_from_size_t (k), k <= VECTOR_MAX_LENGTH);
-
-  vector = make_vector (k);
-  for (j = 0; j < k; ++j)
+  SCM vector = make_vector (k);
+  for (size_t j = 0; j < k; ++j)
     SCM_VECTOR_SET (vector, j, fill);
 
   return vector;
