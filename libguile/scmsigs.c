@@ -320,6 +320,23 @@ scm_sigaction (SCM signum, SCM handler, SCM flags)
   return scm_sigaction_for_thread (signum, handler, flags, SCM_UNDEFINED);
 }
 
+#if __MINGW32__
+
+SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
+           (SCM signum, SCM handler, SCM flags, SCM thread),
+            "sigaction stub")
+#define FUNC_NAME s_scm_sigaction_for_thread
+{
+  (void) signum;
+  (void) handler;
+  (void) flags;
+  (void) thread;
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
+#else /* !__MINGW32__ */
+
 /* user interface for installation of signal handlers.  */
 SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
            (SCM signum, SCM handler, SCM flags, SCM thread),
@@ -514,6 +531,8 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
 #endif
 }
 #undef FUNC_NAME
+
+#endif /* !__MINGW32__ */
 
 SCM_DEFINE (scm_restore_signals, "restore-signals", 0, 0, 0,
             (void),

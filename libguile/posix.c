@@ -61,7 +61,9 @@
 
 #ifdef __MINGW32__
 # include "posix-w32.h"
-#endif
+# define SIGHUP 1
+# define SIGPIPE 13
+#endif /* __MINGW32__ */
 
 #include "async.h"
 #include "bitvectors.h"
