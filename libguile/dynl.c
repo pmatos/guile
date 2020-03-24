@@ -67,14 +67,68 @@ static scm_i_pthread_mutex_t ltdl_lock = SCM_I_PTHREAD_MUTEX_INITIALIZER;
 static char *system_extensions_path;
 
 static void *
+sysdep_dynl_link_search (const char *fname, const char *subr, char *library_path)
+{
+  GModule *handle = NULL;
+
+  if (library_path == NULL || strlen(library_path) == 0)
+    return NULL;
+
+  char *fname_attempt
+    = scm_gc_malloc_pointerless (strlen (library_path)
+                                 + strlen (fname) + 2,
+                                 "dynl fname_attempt");
+  char *path;  /* remaining path to search */
+  char *end;   /* end of current path component */
+  char *s;
+
+  /* Iterate over the components of SYSTEM_EXTENSIONS_PATH */
+  for (path = library_path;
+       *path != '\0';
+       path = (*end == '\0') ? end : (end + 1))
+    {
+      /* Find end of path component */
+      end = strchr (path, LT_PATHSEP_CHAR);
+      if (end == NULL)
+        end = strchr (path, '\0');
+
+      /* Skip empty path components */
+      if (path == end)
+        continue;
+
+      /* Construct FNAME_ATTEMPT, starting with path component */
+      s = fname_attempt;
+      memcpy (s, path, end - path);
+      s += end - path;
+
+      /* Append directory separator, but avoid duplicates */
+      if (s[-1] != '/'
+#ifdef LT_DIRSEP_CHAR
+          && s[-1] != LT_DIRSEP_CHAR
+#endif
+          )
+        *s++ = '/';
+
+      /* Finally, append FNAME (including null terminator) */
+      strcpy (s, fname);
+
+      /* Try to load it, and terminate the search if successful */
+      handle = g_module_open (fname_attempt, 0);
+      if (handle != NULL)
+        break;
+    }
+  return handle;
+}
+
+static void *
 sysdep_dynl_link (const char *fname, const char *subr)
 {
   GModule *handle;
 
   /* Try the literal filename first or, if NULL, the program itself */
   handle = g_module_open (fname, 0);
-  
-  if (handle == NULL
+
+  if (handle == NULL && fname != NULL
 #ifdef LT_DIRSEP_CHAR
       && strchr (fname, LT_DIRSEP_CHAR) == NULL
 #endif
@@ -82,49 +136,18 @@ sysdep_dynl_link (const char *fname, const char *subr)
     {
       /* FNAME contains no directory separators and was not in the
          usual library search paths, so now we search for it in
-         SYSTEM_EXTENSIONS_PATH. */
-      char *fname_attempt
-        = scm_gc_malloc_pointerless (strlen (system_extensions_path)
-                                     + strlen (fname) + 2,
-                                     "dynl fname_attempt");
-      char *path;  /* remaining path to search */
-      char *end;   /* end of current path component */
-      char *s;
-
-      /* Iterate over the components of SYSTEM_EXTENSIONS_PATH */
-      for (path = system_extensions_path;
-           *path != '\0';
-           path = (*end == '\0') ? end : (end + 1))
+         LTDL_LIBRARY_PATH, LD_LIBRARY_PATH, and SYSTEM_EXTENSIONS_PATH. */
+      handle = sysdep_dynl_link_search (fname, subr, getenv("LTDL_LIBRARY_PATH"));
+      if (!handle)
+        handle = sysdep_dynl_link_search (fname, subr, getenv("LD_LIBRARY_PATH"));
+      if (!handle)
+        handle = sysdep_dynl_link_search (fname, subr, system_extensions_path);
+      if (!handle)
         {
-          /* Find end of path component */
-          end = strchr (path, LT_PATHSEP_CHAR);
-          if (end == NULL)
-            end = strchr (path, '\0');
-          
-          /* Skip empty path components */
-          if (path == end)
-            continue;
+          SCM fn;
 
-          /* Construct FNAME_ATTEMPT, starting with path component */
-          s = fname_attempt;
-          memcpy (s, path, end - path);
-          s += end - path;
-
-          /* Append directory separator, but avoid duplicates */
-          if (s[-1] != '/'
-#ifdef LT_DIRSEP_CHAR
-              && s[-1] != LT_DIRSEP_CHAR
-#endif
-              )
-            *s++ = '/';
-
-          /* Finally, append FNAME (including null terminator) */
-          strcpy (s, fname);
-
-          /* Try to load it, and terminate the search if successful */
-          handle = g_module_open (fname_attempt, 0);
-          if (handle != NULL)
-            break;
+          fn = fname != NULL ? scm_from_locale_string (fname) : SCM_BOOL_F;
+          scm_misc_error (subr, "module ~S not found in search paths", scm_list_1 (fn));
         }
     }
 
@@ -135,7 +158,7 @@ sysdep_dynl_link (const char *fname, const char *subr)
 
       fn = fname != NULL ? scm_from_locale_string (fname) : SCM_BOOL_F;
       msg = scm_from_locale_string (g_module_error ());
-      scm_misc_error (subr, "file: ~S, message: ~S", scm_list_2 (fn, msg));
+      scm_misc_error (subr, "module ~S not found, message: ~S", scm_list_2 (fn, msg));
     }
 
   return (void *) handle;
@@ -149,7 +172,7 @@ sysdep_dynl_unlink (void *handle, const char *subr)
       scm_misc_error (subr, (char *) g_module_error (), SCM_EOL);
     }
 }
-   
+
 static void *
 sysdep_dynl_value (const char *symb, void *handle, const char *subr)
 {
@@ -257,7 +280,7 @@ SCM_DEFINE (scm_dynamic_link, "dynamic-link", 0, 1, 0,
 #undef FUNC_NAME
 
 
-SCM_DEFINE (scm_dynamic_object_p, "dynamic-object?", 1, 0, 0, 
+SCM_DEFINE (scm_dynamic_object_p, "dynamic-object?", 1, 0, 0,
             (SCM obj),
 	    "Return @code{#t} if @var{obj} is a dynamic object handle,\n"
 	    "or @code{#f} otherwise.")
@@ -268,7 +291,7 @@ SCM_DEFINE (scm_dynamic_object_p, "dynamic-object?", 1, 0, 0,
 #undef FUNC_NAME
 
 
-SCM_DEFINE (scm_dynamic_unlink, "dynamic-unlink", 1, 0, 0, 
+SCM_DEFINE (scm_dynamic_unlink, "dynamic-unlink", 1, 0, 0,
             (SCM dobj),
 	    "Unlink a dynamic object from the application, if possible.  The\n"
 	    "object must have been linked by @code{dynamic-link}, with \n"
@@ -330,7 +353,7 @@ SCM_DEFINE (scm_dynamic_pointer, "dynamic-pointer", 2, 0, 0,
 #undef FUNC_NAME
 
 
-SCM_DEFINE (scm_dynamic_func, "dynamic-func", 2, 0, 0, 
+SCM_DEFINE (scm_dynamic_func, "dynamic-func", 2, 0, 0,
             (SCM name, SCM dobj),
 	    "Return a ``handle'' for the function @var{name} in the\n"
 	    "shared object referred to by @var{dobj}.  The handle\n"
@@ -347,7 +370,7 @@ SCM_DEFINE (scm_dynamic_func, "dynamic-func", 2, 0, 0,
 #undef FUNC_NAME
 
 
-SCM_DEFINE (scm_dynamic_call, "dynamic-call", 2, 0, 0, 
+SCM_DEFINE (scm_dynamic_call, "dynamic-call", 2, 0, 0,
             (SCM func, SCM dobj),
 	    "Call a C function in a dynamic object.  Two styles of\n"
 	    "invocation are supported:\n\n"
