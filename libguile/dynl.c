@@ -1,6 +1,6 @@
 /* dynl.c - dynamic linking
 
-   Copyright 1990-2003,2008-2011,2017-2018
+   Copyright 1990-2003,2008-2011,2017-2018,2020
      Free Software Foundation, Inc.
 
    This file is part of Guile.
@@ -50,6 +50,13 @@
 
 #include "dynl.h"
 
+#ifdef _WIN32
+#define LT_PATHSEP_CHAR ';'
+#define LT_DIRSEP_CHAR '\\'
+#else
+#define LT_PATHSEP_CHAR ':'
+#define LT_DIRSEP_CHAR '/'
+#endif
 
 /* From the libtool manual: "Note that libltdl is not threadsafe,
    i.e. a multithreaded application has to use a mutex for libltdl.".
@@ -62,66 +69,62 @@ static char *system_extensions_path;
 static void *
 sysdep_dynl_link (const char *fname, const char *subr)
 {
-  lt_dlhandle handle;
+  GModule *handle;
 
   /* Try the literal filename first or, if NULL, the program itself */
-  handle = lt_dlopen (fname);
-  if (handle == NULL)
+  handle = g_module_open (fname, 0);
+  
+  if (handle == NULL
+#ifdef LT_DIRSEP_CHAR
+      && strchr (fname, LT_DIRSEP_CHAR) == NULL
+#endif
+      && strchr (fname, '/') == NULL)
     {
-      handle = lt_dlopenext (fname);
+      /* FNAME contains no directory separators and was not in the
+         usual library search paths, so now we search for it in
+         SYSTEM_EXTENSIONS_PATH. */
+      char *fname_attempt
+        = scm_gc_malloc_pointerless (strlen (system_extensions_path)
+                                     + strlen (fname) + 2,
+                                     "dynl fname_attempt");
+      char *path;  /* remaining path to search */
+      char *end;   /* end of current path component */
+      char *s;
 
-      if (handle == NULL
-#ifdef LT_DIRSEP_CHAR
-          && strchr (fname, LT_DIRSEP_CHAR) == NULL
-#endif
-          && strchr (fname, '/') == NULL)
+      /* Iterate over the components of SYSTEM_EXTENSIONS_PATH */
+      for (path = system_extensions_path;
+           *path != '\0';
+           path = (*end == '\0') ? end : (end + 1))
         {
-          /* FNAME contains no directory separators and was not in the
-             usual library search paths, so now we search for it in
-             SYSTEM_EXTENSIONS_PATH. */
-          char *fname_attempt
-            = scm_gc_malloc_pointerless (strlen (system_extensions_path)
-                                         + strlen (fname) + 2,
-                                         "dynl fname_attempt");
-          char *path;  /* remaining path to search */
-          char *end;   /* end of current path component */
-          char *s;
+          /* Find end of path component */
+          end = strchr (path, LT_PATHSEP_CHAR);
+          if (end == NULL)
+            end = strchr (path, '\0');
+          
+          /* Skip empty path components */
+          if (path == end)
+            continue;
 
-          /* Iterate over the components of SYSTEM_EXTENSIONS_PATH */
-          for (path = system_extensions_path;
-               *path != '\0';
-               path = (*end == '\0') ? end : (end + 1))
-            {
-              /* Find end of path component */
-              end = strchr (path, LT_PATHSEP_CHAR);
-              if (end == NULL)
-                end = strchr (path, '\0');
+          /* Construct FNAME_ATTEMPT, starting with path component */
+          s = fname_attempt;
+          memcpy (s, path, end - path);
+          s += end - path;
 
-              /* Skip empty path components */
-              if (path == end)
-                continue;
-
-              /* Construct FNAME_ATTEMPT, starting with path component */
-              s = fname_attempt;
-              memcpy (s, path, end - path);
-              s += end - path;
-
-              /* Append directory separator, but avoid duplicates */
-              if (s[-1] != '/'
+          /* Append directory separator, but avoid duplicates */
+          if (s[-1] != '/'
 #ifdef LT_DIRSEP_CHAR
-                  && s[-1] != LT_DIRSEP_CHAR
+              && s[-1] != LT_DIRSEP_CHAR
 #endif
-                  )
-                *s++ = '/';
+              )
+            *s++ = '/';
 
-              /* Finally, append FNAME (including null terminator) */
-              strcpy (s, fname);
+          /* Finally, append FNAME (including null terminator) */
+          strcpy (s, fname);
 
-              /* Try to load it, and terminate the search if successful */
-              handle = lt_dlopenext (fname_attempt);
-              if (handle != NULL)
-                break;
-            }
+          /* Try to load it, and terminate the search if successful */
+          handle = g_module_open (fname_attempt, 0);
+          if (handle != NULL)
+            break;
         }
     }
 
@@ -131,7 +134,7 @@ sysdep_dynl_link (const char *fname, const char *subr)
       SCM msg;
 
       fn = fname != NULL ? scm_from_locale_string (fname) : SCM_BOOL_F;
-      msg = scm_from_locale_string (lt_dlerror ());
+      msg = scm_from_locale_string (g_module_error ());
       scm_misc_error (subr, "file: ~S, message: ~S", scm_list_2 (fn, msg));
     }
 
@@ -141,9 +144,9 @@ sysdep_dynl_link (const char *fname, const char *subr)
 static void
 sysdep_dynl_unlink (void *handle, const char *subr)
 {
-  if (lt_dlclose ((lt_dlhandle) handle))
+  if (g_module_close ((GModule *) handle))
     {
-      scm_misc_error (subr, (char *) lt_dlerror (), SCM_EOL);
+      scm_misc_error (subr, (char *) g_module_error (), SCM_EOL);
     }
 }
    
@@ -152,8 +155,7 @@ sysdep_dynl_value (const char *symb, void *handle, const char *subr)
 {
   void *fptr;
 
-  fptr = lt_dlsym ((lt_dlhandle) handle, symb);
-  if (!fptr)
+  if (!g_module_symbol ((GModule *) handle, symb, &fptr))
     scm_misc_error (subr, "Symbol not found: ~a",
                     scm_list_1 (scm_from_locale_string (symb)));
   return fptr;
@@ -163,8 +165,6 @@ static void
 sysdep_dynl_init ()
 {
   char *env;
-
-  lt_dlinit ();
 
   /* Initialize 'system_extensions_path' from
      $GUILE_SYSTEM_EXTENSIONS_PATH, or if that's not set:
