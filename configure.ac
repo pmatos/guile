@@ -105,13 +105,6 @@ AC_PROG_LIBTOOL
 
 AM_CONDITIONAL([HAVE_SHARED_LIBRARIES], [test "x$enable_shared" = "xyes"])
 
-dnl Check for libltdl.
-AC_LIB_HAVE_LINKFLAGS([ltdl], [], [#include <ltdl.h>],
-  [lt_dlopenext ("foo");])
-if test "x$HAVE_LIBLTDL" != "xyes"; then
-  AC_MSG_ERROR([GNU libltdl (Libtool) not found, see README.])
-fi
-
 AC_CHECK_PROG(have_makeinfo, makeinfo, yes, no)
 AM_CONDITIONAL(HAVE_MAKEINFO, test "$have_makeinfo" = yes)
 
@@ -689,6 +682,12 @@ dnl interface isn't exposed in Guile's API.
 PKG_CHECK_MODULES(LIBFFI, libffi)
 AC_SUBST(LIBFFI_CFLAGS)
 AC_SUBST(LIBFFI_LIBS)
+
+dnl GModule is needed for dynamic loading of modules
+PKG_CHECK_MODULES([GMODULE], [gmodule-2.0])
+AC_SUBST([GMODULE_CFLAGS])
+AC_SUBST([GMODULE_LIBS])
+
 
 dnl figure out approriate ffi type for size_t
 AC_CHECK_SIZEOF(size_t)

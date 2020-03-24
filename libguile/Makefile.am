@@ -38,7 +38,7 @@ DEFAULT_INCLUDES =
 ## building.  Also look for Gnulib headers in `lib'.
 AM_CPPFLAGS = -DBUILDING_LIBGUILE=1 -I$(top_srcdir) -I$(top_builddir) \
 	      -I$(top_srcdir)/lib -I$(top_builddir)/lib -iquote$(builddir) \
-	      $(LIBFFI_CFLAGS)
+	      $(LIBFFI_CFLAGS) $(GMODULE_CFLAGS)
 
 if ENABLE_JIT
 AM_CPPFLAGS += -I$(top_srcdir)/libguile/lightening
@@ -546,7 +546,7 @@ noinst_HEADERS += vm-engine.c
 libguile_@GUILE_EFFECTIVE_VERSION@_la_DEPENDENCIES = @LIBLOBJS@
 
 libguile_@GUILE_EFFECTIVE_VERSION@_la_LIBADD =		\
-  @LIBLOBJS@ $(gnulib_library) $(LTLIBGMP) $(LTLIBLTDL)
+  @LIBLOBJS@ $(gnulib_library) $(LTLIBGMP) $(GMODULE_LIBS)
 
 # Libtool version info.
 version_info = @LIBGUILE_INTERFACE_CURRENT@:@LIBGUILE_INTERFACE_REVISION@:@LIBGUILE_INTERFACE_AGE@

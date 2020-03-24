@@ -33,7 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <ltdl.h>
+#include <gmodule.h>
 
 #include "deprecation.h"
 #include "dynwind.h"
