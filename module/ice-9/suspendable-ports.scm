@@ -68,8 +68,12 @@
 (define (wait-for-writable port) ((current-write-waiter) port))
 
 (define (read-bytes port dst start count)
+  (define (socket? port)
+    (string-prefix? "#<input-output: socket" (format #f "~a" port)))
   (cond
-   (((port-read port) port dst start count)
+   ((and (or (not (socket? port))
+             (pair? (car (select (list port) '() '() 0 0))))
+         ((port-read port) port dst start count))
     => (lambda (read)
          (unless (<= 0 read count)
            (error "bad return from port read function" read))
