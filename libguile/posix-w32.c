@@ -685,6 +685,10 @@ start_child (const char *exec_file, char **argv,
   cmdline = prepare_cmdline (exec_file, (const char * const *)argv,
                              bin_sh_replaced);
 
+  /* When running in WINE, chances are we hit ENOENT (possibly
+     translated to ENOEXEC).  */
+  errno = 0;
+
   /* All set and ready to fly.  Launch the child process.  */
   if (!CreateProcess (progfile, cmdline, NULL, NULL, TRUE, 0, env_block, NULL,
                       &si, &pi))
