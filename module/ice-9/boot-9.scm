@@ -6,12 +6,12 @@
 ;;;; modify it under the terms of the GNU Lesser General Public
 ;;;; License as published by the Free Software Foundation; either
 ;;;; version 3 of the License, or (at your option) any later version.
-;;;; 
+;;;;
 ;;;; This library is distributed in the hope that it will be useful,
 ;;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ;;;; Lesser General Public License for more details.
-;;;; 
+;;;;
 ;;;; You should have received a copy of the GNU Lesser General Public
 ;;;; License along with this library; if not, write to the Free Software
 ;;;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
@@ -325,6 +325,7 @@ If returning early, return the return value of F."
 ;; let format alias simple-format until the more complete version is loaded
 
 (define format simple-format)
+(define exception-format simple-format)
 
 ;; this is scheme wrapping the C code so the final pred call is a tail call,
 ;; per SRFI-13 spec
@@ -762,7 +763,7 @@ information is unavailable."
                        ((not (car args)) 1)
                        (else 0))))
      (else
-      (format (current-error-port) "guile: uncaught throw to ~a: ~a\n"
+      (exception-format (current-error-port) "guile: uncaught throw to ~a: ~a\n"
               key args)
       (primitive-exit 1))))
 
@@ -865,8 +866,8 @@ for key @var{k}, then invoke @var{thunk}."
           (let ((filename (or (cadr source) "<unnamed port>"))
                 (line (caddr source))
                 (col (cdddr source)))
-            (format port "~a:~a:~a: " filename (1+ line) col))
-          (format port "ERROR: "))))
+            (exception-format port "~a:~a:~a: " filename (1+ line) col))
+          (exception-format port "ERROR: "))))
 
   (set! set-exception-printer!
         (lambda (key proc)
@@ -875,7 +876,7 @@ for key @var{k}, then invoke @var{thunk}."
   (set! print-exception
         (lambda (port frame key args)
           (define (default-printer)
-            (format port "Throw to key `~a' with args `~s'." key args))
+            (exception-format port "Throw to key `~a' with args `~s'." key args))
 
           (when frame
             (print-location frame port)
@@ -884,7 +885,7 @@ for key @var{k}, then invoke @var{thunk}."
                           (lambda () (frame-procedure-name frame))
                           (lambda _ #f))))
               (when name
-                (format port "In procedure ~a:\n" name))))
+                (exception-format port "In procedure ~a:\n" name))))
 
           (catch #t
             (lambda ()
@@ -893,7 +894,7 @@ for key @var{k}, then invoke @var{thunk}."
                     (printer port key args default-printer)
                     (default-printer))))
             (lambda (k . args)
-              (format port "Error while printing exception.")))
+              (exception-format port "Error while printing exception.")))
           (newline port)
           (force-output port))))
 
@@ -907,38 +908,38 @@ for key @var{k}, then invoke @var{thunk}."
     (apply (case-lambda
              ((subr msg args . rest)
               (if subr
-                  (format port "In procedure ~a: " subr))
-              (apply format port msg (or args '())))
+                  (exception-format port "In procedure ~a: " subr))
+              (apply exception-format port msg (or args '())))
              (_ (default-printer)))
            args))
 
   (define (syntax-error-printer port key args default-printer)
     (apply (case-lambda
              ((who what where form subform . extra)
-              (format port "Syntax error:\n")
+              (exception-format port "Syntax error:\n")
               (if where
                   (let ((file (or (assq-ref where 'filename) "unknown file"))
                         (line (and=> (assq-ref where 'line) 1+))
                         (col (assq-ref where 'column)))
-                    (format port "~a:~a:~a: " file line col))
-                  (format port "unknown location: "))
+                    (exception-format port "~a:~a:~a: " file line col))
+                  (exception-format port "unknown location: "))
               (if who
-                  (format port "~a: " who))
-              (format port "~a" what)
+                  (exception-format port "~a: " who))
+              (exception-format port "~a" what)
               (if subform
-                  (format port " in subform ~s of ~s" subform form)
+                  (exception-format port " in subform ~s of ~s" subform form)
                   (if form
-                      (format port " in form ~s" form))))
+                      (exception-format port " in form ~s" form))))
              (_ (default-printer)))
            args))
 
   (define (keyword-error-printer port key args default-printer)
     (let ((message (cadr args))
           (faulty  (car (cadddr args)))) ; I won't do it again, I promise.
-      (format port "~a: ~s" message faulty)))
+      (exception-format port "~a: ~s" message faulty)))
 
   (define (getaddrinfo-error-printer port key args default-printer)
-    (format port "In procedure getaddrinfo: ~a" (gai-strerror (car args))))
+    (exception-format port "In procedure getaddrinfo: ~a" (gai-strerror (car args))))
 
   (set-exception-printer! 'goops-error scm-error-printer)
   (set-exception-printer! 'host-not-found scm-error-printer)
@@ -1066,11 +1067,11 @@ VALUE."
        (lambda (key . args)
          (for-each (lambda (s)
                      (if (not (string-null? s))
-                         (format (current-warning-port) ";;; ~a\n" s)))
+                         (exception-format (current-warning-port) ";;; ~a\n" s)))
                    (string-split
                     (call-with-output-string
                      (lambda (port)
-                       (format port template arg ...)
+                       (exception-format port template arg ...)
                        (print-exception port #f key args)))
                     #\newline))
          #f)))))
@@ -1200,7 +1201,7 @@ VALUE."
         (let lp ((i 0))
           (if (< i n)
               (cons (datum->syntax
-                     x 
+                     x
                      (string->symbol
                       (string (integer->char (+ (char->integer #\a) i)))))
                     (lp (1+ i)))
@@ -1229,7 +1230,7 @@ VALUE."
                 (if (= (length args) nfields)
                     (apply make-struct/no-tail rtd args)
                     (scm-error 'wrong-number-of-args
-                               (format #f "make-~a" type-name)
+                               (exception-format #f "make-~a" type-name)
                                "Wrong number of arguments" '() #f)))))))))
 
   (define (default-record-printer s p)
@@ -1284,7 +1285,7 @@ VALUE."
                                             f
                                             #f))
                                       (record-type-fields rtd)))))))
-          
+
 (define (record-predicate rtd)
   (lambda (obj) (and (struct? obj) (eq? rtd (struct-vtable obj)))))
 
@@ -1863,7 +1864,7 @@ name extensions listed in %load-extensions."
                                  (map (lambda (x)
                                         (if (symbol? x) x (syntax->datum x)))
                                       fragments))))
-         
+
          (define (getter rtd type-name field slot)
            #`(define #,(make-id rtd type-name '- field)
                (let ((rtd #,rtd))
@@ -2741,7 +2742,7 @@ deterministic."
   (let ((f (module-filename m)))
     (if f
         (save-module-excursion
-         (lambda () 
+         (lambda ()
            ;; Re-set the initial environment, as in try-module-autoload.
            (set-current-module (make-fresh-user-module))
            (primitive-load-path f)
@@ -2856,7 +2857,7 @@ error if selected binding does not exist in the used module."
     (or (symbol? x) (and (pair? x) (symbol? (car x)) (symbol? (cdr x)))))
   (define (valid-autoload? x)
     (and (pair? x) (list-of symbol? (car x)) (list-of symbol? (cdr x))))
-  
+
   ;; We could add a #:no-check arg, set by the define-module macro, if
   ;; these checks are taking too much time.
   ;;
@@ -2909,7 +2910,7 @@ error if selected binding does not exist in the used module."
       (let ((iface (resolve-interface transformer))
             (sym (car (last-pair transformer))))
         (set-module-transformer! module (module-ref iface sym))))
-    
+
     (run-hook module-defined-hook module)
     module))
 
@@ -3229,7 +3230,7 @@ but it fails to load."
               (let lp ()
                 (call-with-prompt
                  continue-tag
-                 (lambda () 
+                 (lambda ()
                    (define-syntax #,(datum->syntax #'while 'continue)
                      (lambda (x)
                        (syntax-case x ()
@@ -3271,7 +3272,7 @@ but it fails to load."
              (eqv? (string-ref (symbol->string dat) 0) #\:))))
     (define (->keyword sym)
       (symbol->keyword (string->symbol (substring (symbol->string sym) 1))))
-    
+
     (define (parse-iface args)
       (let loop ((in args) (out '()))
         (syntax-case in ()
@@ -3348,7 +3349,7 @@ but it fails to load."
         ((kw val . args)
          (syntax-violation 'define-module "unknown keyword or bad argument"
                            #'kw #'val))))
-    
+
     (syntax-case x ()
       ((_ (name name* ...) arg ...)
        (and-map symbol? (syntax->datum #'(name name* ...)))
@@ -3390,7 +3391,7 @@ but it fails to load."
              (eqv? (string-ref (symbol->string dat) 0) #\:))))
     (define (->keyword sym)
       (symbol->keyword (string->symbol (substring (symbol->string sym) 1))))
-    
+
     (define (quotify-iface args)
       (let loop ((in args) (out '()))
         (syntax-case in ()
@@ -3417,7 +3418,7 @@ but it fails to load."
            (with-syntax (((quoted-arg ...) (quotify-iface #'(arg ...))))
              (lp #'in (cons #`(list '(name name* ...) quoted-arg ...)
                             out)))))))
-    
+
     (syntax-case x ()
       ((_ spec ...)
        (with-syntax (((quoted-args ...) (quotify #'(spec ...))))
@@ -3565,7 +3566,7 @@ but it fails to load."
 
 (define duplicate-handlers
   (let ((m (make-module 7)))
-    
+
     (define (check module name int1 val1 int2 val2 var val)
       (scm-error 'misc-error
                  #f
@@ -3575,7 +3576,7 @@ but it fails to load."
                        (module-name int1)
                        (module-name int2))
                  #f))
-    
+
     (define (warn module name int1 val1 int2 val2 var val)
       (format (current-warning-port)
               "WARNING: ~A: `~A' imported from both ~A and ~A\n"
@@ -3584,7 +3585,7 @@ but it fails to load."
               (module-name int1)
               (module-name int2))
       #f)
-     
+
     (define (replace module name int1 val1 int2 val2 var val)
       (let ((old (or (and var (object-property var 'replace) var)
                      (module-variable int1 name)))
@@ -3595,7 +3596,7 @@ but it fails to load."
                  old)
             (and (object-property new 'replace)
                  new))))
-    
+
     (define (warn-override-core module name int1 val1 int2 val2 var val)
       (and (eq? int1 the-scm-module)
            (begin
@@ -3605,16 +3606,16 @@ but it fails to load."
                      (module-name int2)
                      name)
              (module-local-variable int2 name))))
-     
+
     (define (first module name int1 val1 int2 val2 var val)
       (or var (module-local-variable int1 name)))
-     
+
     (define (last module name int1 val1 int2 val2 var val)
       (module-local-variable int2 name))
-     
+
     (define (noop module name int1 val1 int2 val2 var val)
       #f)
-    
+
     (set-module-name! m 'duplicate-handlers)
     (set-module-kind! m 'interface)
     (module-define! m 'check check)
