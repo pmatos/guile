@@ -598,12 +598,21 @@ SCM_DEFINE (scm_load_thunk_from_memory, "load-thunk-from-memory", 1, 0, 0,
   size_t len;
   SCM bv, constants;
 
-  SCM_VALIDATE_CONS (1, obj);
-  bv = scm_car (obj);
-  constants = scm_cdr (obj);
-  SCM_ASSERT (scm_is_bytevector (bv)
-              && (scm_is_vector (constants) || scm_is_false (constants)),
-              obj, 1, FUNC_NAME);
+  if (scm_is_pair (obj))
+    {
+      SCM_VALIDATE_CONS (1, obj);
+      bv = scm_car (obj);
+      constants = scm_cdr (obj);
+      SCM_ASSERT (scm_is_bytevector (bv)
+                  && (scm_is_vector (constants) || scm_is_false (constants)),
+                  obj, 1, FUNC_NAME);
+    }
+  else
+    {
+      SCM_VALIDATE_BYTEVECTOR (1, obj);
+      bv = obj;
+      constants = SCM_BOOL_F;
+    }
 
   data = (char *) SCM_BYTEVECTOR_CONTENTS (bv);
   len = SCM_BYTEVECTOR_LENGTH (bv);
