@@ -760,10 +760,7 @@
 (defun backtrace-frame (nframes)
   (let* ((stack (funcall (@ (guile) make-stack) t))
          (frame (stack-ref stack nframes))
-         (proc (funcall (@ (guile) frame-procedure) frame))
-         (pname (or (and (%functionp proc)
-                         (funcall (@ (guile) procedure-name) proc))
-                    proc))
+         (pname (funcall (@ (guile) frame-procedure-name) frame))
          (args (funcall (@ (guile) frame-arguments) frame)))
     (cons t (cons pname args))))
 
@@ -774,10 +771,7 @@
          (space (funcall (@ (guile) integer->char) 32)))
     (while frame
       (princ (string 32 32))
-      (let ((proc (funcall (@ (guile) frame-procedure) frame)))
-        (prin1 (or (and (%functionp proc)
-                        (funcall (@ (guile) procedure-name) proc))
-                   proc)))
+      (prin1 (funcall (@ (guile) frame-procedure-name) frame))
       (prin1 (funcall (@ (guile) frame-arguments) frame))
       (terpri)
       (setq frame (funcall (@ (guile) frame-previous) frame)))
