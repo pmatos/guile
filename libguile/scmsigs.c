@@ -41,6 +41,11 @@
 
 #include <full-write.h>
 
+#ifdef __MINGW32__
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+#endif
+
 #include "async.h"
 #include "boolean.h"
 #include "dynwind.h"
@@ -263,6 +268,30 @@ scm_i_ensure_signal_delivery_thread ()
 }
 
 #endif /* !SCM_USE_PTHREAD_THREADS */
+
+#ifdef __MINGW32__
+
+static BOOL
+mingw_take_signal (DWORD ctrl_signal)
+{
+  switch (ctrl_signal)
+    {
+    case CTRL_C_EVENT:
+      take_signal (SIGINT);
+      break;
+    case CTRL_BREAK_EVENT:
+      take_signal (SIGTERM);
+      break;
+    }
+  return TRUE;
+}
+
+static void
+install_mingw_take_signal ()
+{
+  SetConsoleCtrlHandler ((PHANDLER_ROUTINE) mingw_take_signal, TRUE);
+}
+#endif /* __MINGW32__ */
 
 static void
 install_handler (int signum, SCM thread, SCM handler)
@@ -739,6 +768,10 @@ scm_init_scmsigs ()
       orig_handlers[i] = SIG_ERR;
 #endif
     }
+
+#ifdef __MINGW32__
+  install_mingw_take_signal ();
+#endif
 
   scm_c_define ("NSIG", scm_from_long (NSIG));
   scm_c_define ("SIG_IGN", scm_from_intptr_t ((intptr_t) SIG_IGN));
