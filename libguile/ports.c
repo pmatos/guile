@@ -4134,6 +4134,41 @@ SCM_DEFINE (scm_sys_make_void_port, "%make-void-port", 1, 0, 0,
 }
 #undef FUNC_NAME
 
+SCM_DEFINE (scm_set_port_binary_text_mode_x, "set-port-binary/text-mode!", 2, 0, 0,
+            (SCM port, SCM mode),
+	    "On MinGW, set the binary/text mode for @var{port}.  @var{mode} can be one\n"
+            "of the following:\n"
+	    "@table @code\n"
+	    "@item O_BINARY\n"
+	    "binary mode\n"
+	    "@item O_TEXT\n"
+	    "text mode\n"
+	    "@end table\n\n"
+	    "Only open file ports are supported.  On POSIX, this is a no-op.")
+#define FUNC_NAME s_scm_set_port_binary_text_mode_x
+{
+  int cmode = 0;
+  int fd;
+
+  if (scm_is_integer (port))
+    fd = scm_to_int (port);
+  else
+    {
+      SCM_VALIDATE_OPFPORT (1, port);
+      fd = SCM_FPORT_FDES (port);
+    }
+
+  SCM_VALIDATE_NUMBER (2, mode);
+  cmode = scm_to_int (mode);
+
+#if __MINGW32__
+  _setmode (fd, cmode);
+#endif
+
+  return SCM_UNSPECIFIED;
+}
+#undef FUNC_NAME
+
 
 
 
@@ -4172,6 +4207,13 @@ scm_init_ports (void)
   sym_substitute = scm_from_latin1_symbol ("substitute");
   sym_escape = scm_from_latin1_symbol ("escape");
   sym_error = scm_from_latin1_symbol ("error");
+
+#ifdef O_BINARY
+  scm_c_define ("O_BINARY", scm_from_int (O_BINARY));
+#endif
+#ifdef O_TEXT
+  scm_c_define ("O_TEXT", scm_from_int (O_TEXT));
+#endif
 
   trampoline_to_c_read_subr =
     scm_c_make_gsubr ("port-read", 4, 0, 0,

@@ -1143,6 +1143,19 @@ source of data, but only the value that is returned by
 Determine whether @var{obj} is a port that is related to a file.
 @end deffn
 
+@deffn {Scheme Procedure} set-port-binary/text-mode! port mode
+On MinGW, set the binary/text mode for @var{port}.  @var{mode} can be one
+of the following:
+@table @code
+@item O_BINARY
+binary mode
+@item O_TEXT
+text mode
+@end table
+
+Only open file ports are supported.  On POSIX, this is a no-op.
+@end deffn
+
 
 @node Bytevector Ports
 @subsubsection Bytevector Ports

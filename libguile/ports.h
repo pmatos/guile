@@ -218,6 +218,7 @@ SCM_API SCM scm_drain_input (SCM port);
 SCM_API void scm_end_input (SCM port);
 SCM_API SCM scm_force_output (SCM port);
 SCM_API void scm_flush (SCM port);
+SCM_API SCM scm_set_binary_text_mode_x (SCM port, SCM mode);
 
 SCM_INTERNAL SCM scm_port_random_access_p (SCM port);
 SCM_INTERNAL SCM scm_port_read_buffering (SCM port);
