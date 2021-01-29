@@ -107,7 +107,7 @@
   (make-parameter
    (or (parse-path "GUILE_SYSTEM_EXTENSIONS_PATH")
        (list (assq-ref %guile-build-info 'libdir)
-             (assq-ref %guile-build-info 'extensionsdir)))))
+             (assq-ref %guile-build-info 'extensiondir)))))
 
 ;; There are a few messy situations here related to libtool.
 ;;
