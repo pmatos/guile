@@ -734,7 +734,6 @@ AC_CHECK_TYPE([struct ip_mreq])
 GUILE_HEADER_LIBC_WITH_UNISTD
 
 AC_TYPE_GETGROUPS
-AC_TYPE_SIGNAL
 AC_TYPE_MODE_T
 
 # On mingw -lm is empty, so this test is unnecessary, but it's
