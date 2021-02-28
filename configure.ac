@@ -1197,7 +1197,7 @@ int main () { return (isnan(x) != 0); }]])],
 AC_FUNC_ALLOCA
 if test "$ALLOCA" = "alloca.o"
 then
-  AC_ERROR([No native alloca found.])
+  AC_MSG_ERROR([No native alloca found.])
 fi
 
 # Reasons for checking:
