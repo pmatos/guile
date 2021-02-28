@@ -65,17 +65,11 @@
 
 
 
-/* SIGRETTYPE is the type that signal handlers return.  See <signal.h> */
+/* SIGRETTYPE is the type that signal handlers return.  See <signal.h>.
+   We used to use Autoconf macro 'AC_TYPE_SIGNAL' to define 'RETSIGTYPE',
+   and then define SIGRETTYPE to that, but that's no longer necessary.  */
 
-#ifdef RETSIGTYPE
-# define SIGRETTYPE RETSIGTYPE
-#else
-# ifdef STDC_HEADERS
-#  define SIGRETTYPE void
-# else
-#  define SIGRETTYPE int
-# endif
-#endif
+#define SIGRETTYPE void
 
 
 
