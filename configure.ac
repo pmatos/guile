@@ -73,8 +73,6 @@ AC_CANONICAL_HOST
 
 AB_INIT
 
-AC_LIBTOOL_WIN32_DLL
-
 AC_PROG_INSTALL
 AC_PROG_CC
 AC_PROG_CPP
@@ -87,8 +85,7 @@ AC_PROG_CC
 # for per-target cflags in the libguile subdir
 AM_PROG_CC_C_O
 
-AC_LIBTOOL_DLOPEN
-AC_PROG_LIBTOOL
+LT_INIT([win32-dll dlopen])
 AC_CHECK_LIB([ltdl], [lt_dlinit], ,
   [AC_MSG_ERROR([libltdl not found.  See README.])])
 AC_CHECK_HEADER([ltdl.h], [],
@@ -1576,7 +1573,7 @@ AC_SUBST([LIBLOBJS])
 AC_SUBST([EXTRA_DOT_DOC_FILES])
 AC_SUBST([EXTRA_DOT_X_FILES])
 
-dnl See also top_builddir in info node: (libtool)AC_PROG_LIBTOOL
+dnl See also top_builddir in info node: (libtool)LT_INIT
 top_builddir_absolute=`pwd`
 AC_SUBST([top_builddir_absolute])
 top_srcdir_absolute=`(cd $srcdir && pwd)`
