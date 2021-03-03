@@ -33,11 +33,9 @@ dnl  "echo -n" since -n is not portable (see autoconf manual "Limitations of
 dnl  Builtins"), in particular on solaris it results in a literal "-n" in
 dnl  the output.
 dnl
-AC_INIT(patsubst(m4_esyscmd(. ./GUILE-VERSION && echo ${PACKAGE}),[
-]),
-        patsubst(m4_esyscmd(. ./GUILE-VERSION && echo ${GUILE_VERSION}),[
-]),
-        [bug-guile@gnu.org])
+AC_INIT([patsubst(m4_esyscmd(. ./GUILE-VERSION && echo ${PACKAGE}),
+)],[patsubst(m4_esyscmd(. ./GUILE-VERSION && echo ${GUILE_VERSION}),
+)],[bug-guile@gnu.org])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([GUILE-VERSION])
