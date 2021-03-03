@@ -95,7 +95,7 @@
 #   define finite _finite
 #  endif /* __MINGW32__ */
 # endif /* ndef GO32 */
-#endif /* def STDC_HEADERS */
+#endif /* SCM_HAVE_STDC_HEADERS */
 
 #ifdef DBL_MAX_10_EXP
 # define SCM_MAXEXP DBL_MAX_10_EXP
