@@ -157,19 +157,19 @@ main (int argc, char *argv[])
 #endif
 
   pf("\n");
-#ifdef STDC_HEADERS
+  /* The configure script used to check for and define STDC_HEADERS
+     conditionally.  Nowadays that is "obsolescent"
+     (info "(autoconf) Particular Headers")
+     but we define SCM_HAVE_STDC_HEADERS anyway for backward compat.  */
   pf ("#define SCM_HAVE_STDC_HEADERS 1 /* 0 or 1 */\n");
   pf ("#include <stdlib.h>\n");
-# if HAVE_SYS_TYPES_H
+#if HAVE_SYS_TYPES_H
   pf ("#include <sys/types.h>\n");
-# endif
-# if HAVE_SYS_STDTYPES_H
+#endif
+#if HAVE_SYS_STDTYPES_H
   pf ("#include <sys/stdtypes.h>\n");
-# endif
+#endif
   pf ("#include <stddef.h>\n");
-#else /* STDC_HEADERS */
-  pf ("#define SCM_HAVE_STDC_HEADERS 0 /* 0 or 1 */");
-#endif /* def STDC_HEADERS */
 
   pf("\n");
 #ifdef HAVE_SYS_SELECT_H

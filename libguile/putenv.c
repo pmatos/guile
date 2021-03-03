@@ -35,17 +35,7 @@
 char *malloc ();
 #endif	/* GNU C library.  */
 
-#if defined(STDC_HEADERS) || defined(HAVE_STRING_H)
 #include <string.h>
-#else
-#include <strings.h>
-#ifndef strchr
-#define strchr index
-#endif
-#ifndef memcpy
-#define memcpy(d, s, n) bcopy((s), (d), (n))
-#endif
-#endif
 
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>

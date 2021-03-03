@@ -1080,9 +1080,7 @@ AC_MSG_CHECKING([whether localtime caches TZ])
 AC_CACHE_VAL([guile_cv_localtime_cache],
 [if test x$ac_cv_func_tzset = xyes; then
 AC_RUN_IFELSE([AC_LANG_SOURCE([[#include <time.h>
-#if STDC_HEADERS
-# include <stdlib.h>
-#endif
+#include <stdlib.h>
 extern char **environ;
 unset_TZ ()
 {
