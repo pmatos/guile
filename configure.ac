@@ -82,7 +82,7 @@ AC_PROG_AWK
 
 AC_USE_SYSTEM_EXTENSIONS
 
-AC_PROG_CC_C89
+AC_PROG_CC
 
 # for per-target cflags in the libguile subdir
 AM_PROG_CC_C_O
