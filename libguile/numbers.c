@@ -110,9 +110,10 @@ verify (SCM_MOST_POSITIVE_FIXNUM <= (mp_limb_t) -1);
   (SCM_I_FIXNUM_BIT-1 <= DBL_MANT_DIG                                   \
    || ((n) ^ ((n) >> (SCM_I_FIXNUM_BIT-1))) < (1L << DBL_MANT_DIG))
 
-#if ! HAVE_DECL_MPZ_INITS
+#if (! HAVE_DECL_MPZ_INITS) || SCM_ENABLE_MINI_GMP
 
-/* GMP < 5.0.0 lacks `mpz_inits' and `mpz_clears'.  Provide them.  */
+/* GMP < 5.0.0 and mini-gmp lack `mpz_inits' and `mpz_clears'.  Provide
+   them.  */
 
 #define VARARG_MPZ_ITERATOR(func)		\
   static void					\
@@ -398,7 +399,15 @@ scm_i_big2dbl_2exp (SCM b, long *expon_p)
 
   {
     long expon;
-    double signif = mpz_get_d_2exp (&expon, SCM_I_BIG_MPZ (b));
+    double signif;
+#if SCM_ENABLE_MINI_GMP
+    int iexpon;
+    signif = mpz_get_d (SCM_I_BIG_MPZ (b));
+    signif = frexp (signif, &iexpon);
+    expon = (long) iexpon;
+#else
+    signif = mpz_get_d_2exp (&expon, SCM_I_BIG_MPZ (b));
+#endif
     scm_remember_upto_here_1 (b);
     *expon_p = expon + shift;
     return signif;

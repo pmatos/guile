@@ -35,7 +35,13 @@
 #include <alloca.h>
 #include <assert.h>
 
+#include "scm.h"
+
+#if SCM_ENABLE_MINI_GMP
+#include "mini-gmp.h"
+#else
 #include <gmp.h>
+#endif
 
 #include "array-handle.h"
 #include "arrays.h"

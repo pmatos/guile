@@ -22,7 +22,12 @@
 
 
 
+#include "libguile/scm.h"
+#if SCM_ENABLE_MINI_GMP
+#include "libguile/mini-gmp.h"
+#else
 #include <gmp.h>
+#endif
 
 #include "libguile/error.h"
 #include "libguile/gc.h"

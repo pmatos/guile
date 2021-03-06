@@ -31,7 +31,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "scm.h"
+
+#if SCM_ENABLE_MINI_GMP
+#include "mini-gmp.h"
+#else
 #include <gmp.h>
+#endif
 
 /* Everybody has an init function.  */
 #include "alist.h"

@@ -1,6 +1,6 @@
 ;;;; -*-scheme-*-
 ;;;;
-;;;; Copyright (C) 2001, 2003, 2006, 2009, 2010-2020
+;;;; Copyright (C) 2001, 2003, 2006, 2009, 2010-2021
 ;;;;   Free Software Foundation, Inc.
 ;;;;
 ;;;; This library is free software; you can redistribute it and/or
@@ -98,33 +98,6 @@
 ;;; compiled.  In this way, psyntax bootstraps off of an expanded
 ;;; version of itself.
 
-;;; This implementation of the expander sometimes uses syntactic
-;;; abstractions when procedural abstractions would suffice.  For
-;;; example, we define top-wrap and top-marked? as
-;;;
-;;;   (define-syntax top-wrap (identifier-syntax '((top))))
-;;;   (define-syntax top-marked?
-;;;     (syntax-rules ()
-;;;       ((_ w) (memq 'top (wrap-marks w)))))
-;;;
-;;; rather than
-;;;
-;;;   (define top-wrap '((top)))
-;;;   (define top-marked?
-;;;     (lambda (w) (memq 'top (wrap-marks w))))
-;;;
-;;; On the other hand, we don't do this consistently; we define
-;;; make-wrap, wrap-marks, and wrap-subst simply as
-;;;
-;;;   (define make-wrap cons)
-;;;   (define wrap-marks car)
-;;;   (define wrap-subst cdr)
-;;;
-;;; In Chez Scheme, the syntactic and procedural forms of these
-;;; abstractions are equivalent, since the optimizer consistently
-;;; integrates constants and small procedures.  This will be true of
-;;; Guile as well, once we implement a proper inliner.
-
 
 ;;; Implementation notes:
 
@@ -169,7 +142,8 @@
       (make-syntax (module-ref (current-module) 'make-syntax))
       (syntax-expression (module-ref (current-module) 'syntax-expression))
       (syntax-wrap (module-ref (current-module) 'syntax-wrap))
-      (syntax-module (module-ref (current-module) 'syntax-module)))
+      (syntax-module (module-ref (current-module) 'syntax-module))
+      (syntax-sourcev (module-ref (current-module) 'syntax-sourcev)))
 
   (define-syntax define-expansion-constructors
     (lambda (x)
@@ -294,9 +268,19 @@
           (lambda ()
             ((variable-ref v))))))
 
+    (define (sourcev-filename s) (vector-ref s 0))
+    (define (sourcev-line s) (vector-ref s 1))
+    (define (sourcev-column s) (vector-ref s 2))
+    (define (sourcev->alist sourcev)
+      (define (maybe-acons k v tail) (if v (acons k v tail) tail))
+      (and sourcev
+           (maybe-acons 'filename (sourcev-filename sourcev)
+                        `((line . ,(sourcev-line sourcev))
+                          (column . ,(sourcev-column sourcev))))))
+
     (define (decorate-source e s)
-      (if (and s (supports-source-properties? e))
-          (set-source-properties! e s))
+      (when (and s (supports-source-properties? e))
+        (set-source-properties! e (sourcev->alist s)))
       e)
 
     (define (maybe-name-value! name val)
@@ -307,25 +291,25 @@
 
     ;; output constructors
     (define build-void
-      (lambda (source)
-        (make-void source)))
+      (lambda (sourcev)
+        (make-void (sourcev->alist sourcev))))
 
     (define build-call
-      (lambda (source fun-exp arg-exps)
-        (make-call source fun-exp arg-exps)))
+      (lambda (sourcev fun-exp arg-exps)
+        (make-call (sourcev->alist sourcev) fun-exp arg-exps)))
   
     (define build-conditional
-      (lambda (source test-exp then-exp else-exp)
-        (make-conditional source test-exp then-exp else-exp)))
+      (lambda (sourcev test-exp then-exp else-exp)
+        (make-conditional (sourcev->alist sourcev) test-exp then-exp else-exp)))
   
     (define build-lexical-reference
-      (lambda (type source name var)
-        (make-lexical-ref source name var)))
+      (lambda (type sourcev name var)
+        (make-lexical-ref (sourcev->alist sourcev) name var)))
   
     (define build-lexical-assignment
-      (lambda (source name var exp)
+      (lambda (sourcev name var exp)
         (maybe-name-value! name exp)
-        (make-lexical-set source name var exp)))
+        (make-lexical-set (sourcev->alist sourcev) name var exp)))
   
     (define (analyze-variable mod var modref-cont bare-cont)
       (if (not mod)
@@ -347,32 +331,32 @@
               (else (syntax-violation #f "bad module kind" var mod))))))
 
     (define build-global-reference
-      (lambda (source var mod)
+      (lambda (sourcev var mod)
         (analyze-variable
          mod var
          (lambda (mod var public?) 
-           (make-module-ref source mod var public?))
+           (make-module-ref (sourcev->alist sourcev) mod var public?))
          (lambda (mod var)
-           (make-toplevel-ref source mod var)))))
+           (make-toplevel-ref (sourcev->alist sourcev) mod var)))))
 
     (define build-global-assignment
-      (lambda (source var exp mod)
+      (lambda (sourcev var exp mod)
         (maybe-name-value! var exp)
         (analyze-variable
          mod var
          (lambda (mod var public?) 
-           (make-module-set source mod var public? exp))
+           (make-module-set (sourcev->alist sourcev) mod var public? exp))
          (lambda (mod var)
-           (make-toplevel-set source mod var exp)))))
+           (make-toplevel-set (sourcev->alist sourcev) mod var exp)))))
 
     (define build-global-definition
-      (lambda (source mod var exp)
+      (lambda (sourcev mod var exp)
         (maybe-name-value! var exp)
-        (make-toplevel-define source (and mod (cdr mod)) var exp)))
+        (make-toplevel-define (sourcev->alist sourcev) (and mod (cdr mod)) var exp)))
 
     (define build-simple-lambda
       (lambda (src req rest vars meta exp)
-        (make-lambda src
+        (make-lambda (sourcev->alist src)
                      meta
                      ;; hah, a case in which kwargs would be nice.
                      (make-lambda-case
@@ -381,7 +365,7 @@
 
     (define build-case-lambda
       (lambda (src meta body)
-        (make-lambda src meta body)))
+        (make-lambda (sourcev->alist src) meta body)))
 
     (define build-lambda-case
       ;; req := (name ...)
@@ -395,31 +379,31 @@
       ;; the body of a lambda: anything, already expanded
       ;; else: lambda-case | #f
       (lambda (src req opt rest kw inits vars body else-case)
-        (make-lambda-case src req opt rest kw inits vars body else-case)))
+        (make-lambda-case (sourcev->alist src) req opt rest kw inits vars body else-case)))
 
     (define build-primcall
       (lambda (src name args)
-        (make-primcall src name args)))
+        (make-primcall (sourcev->alist src) name args)))
     
     (define build-primref
       (lambda (src name)
-        (make-primitive-ref src name)))
+        (make-primitive-ref (sourcev->alist src) name)))
     
     (define (build-data src exp)
-      (make-const src exp))
+      (make-const (sourcev->alist src) exp))
 
     (define build-sequence
       (lambda (src exps)
         (if (null? (cdr exps))
             (car exps)
-            (make-seq src (car exps) (build-sequence #f (cdr exps))))))
+            (make-seq (sourcev->alist src) (car exps) (build-sequence #f (cdr exps))))))
 
     (define build-let
       (lambda (src ids vars val-exps body-exp)
         (for-each maybe-name-value! ids val-exps)
         (if (null? vars)
             body-exp
-            (make-let src ids vars val-exps body-exp))))
+            (make-let (sourcev->alist src) ids vars val-exps body-exp))))
 
     (define build-named-let
       (lambda (src ids vars val-exps body-exp)
@@ -431,7 +415,7 @@
             (maybe-name-value! f-name proc)
             (for-each maybe-name-value! ids val-exps)
             (make-letrec
-             src #f
+             (sourcev->alist src) #f
              (list f-name) (list f) (list proc)
              (build-call src (build-lexical-reference 'fun src f-name f)
                          val-exps))))))
@@ -442,7 +426,7 @@
             body-exp
             (begin
               (for-each maybe-name-value! ids val-exps)
-              (make-letrec src in-order? ids vars val-exps body-exp)))))
+              (make-letrec (sourcev->alist src) in-order? ids vars val-exps body-exp)))))
 
 
     (define-syntax-rule (build-lexical-var src id)
@@ -452,13 +436,18 @@
 
     (define-syntax no-source (identifier-syntax #f))
 
+    (define (datum-sourcev datum)
+      (let ((props (source-properties datum)))
+        (and (pair? props)
+             (vector (assq-ref props 'filename)
+                     (assq-ref props 'line)
+                     (assq-ref props 'column)))))
+
     (define source-annotation
       (lambda (x)
-        (let ((props (source-properties
-                      (if (syntax? x)
-                          (syntax-expression x)
-                          x))))
-          (and (pair? props) props))))
+        (if (syntax? x)
+            (syntax-sourcev x)
+            (datum-sourcev x))))
 
     (define-syntax-rule (arg-check pred? e who)
       (let ((x e))
@@ -627,11 +616,7 @@
     (define-structure (ribcage symnames marks labels))
 
     (define-syntax empty-wrap (identifier-syntax '(())))
-
     (define-syntax top-wrap (identifier-syntax '((top))))
-
-    (define-syntax-rule (top-marked? w)
-      (memq 'top (wrap-marks w)))
 
     ;; Marks must be comparable with "eq?" and distinct from pairs and
     ;; the symbol top.  We do not use integers so that marks will remain
@@ -792,7 +777,7 @@
          ((syntax? id)
           (let ((id (syntax-expression id))
                 (w1 (syntax-wrap id))
-                (mod (syntax-module id)))
+                (mod (or (syntax-module id) mod)))
             (let ((marks (join-marks (wrap-marks w) (wrap-marks w1))))
               (call-with-values (lambda () (search id (wrap-subst w) marks mod))
                 (lambda (new-id marks)
@@ -934,15 +919,15 @@
             (resolve-identifier (syntax-expression n)
                                 (syntax-wrap n)
                                 r
-                                (syntax-module n)
+                                (or (syntax-module n) mod)
                                 resolve-syntax-parameters?))))
          ((symbol? n)
-          (resolve-global n (if (syntax? id)
-                                (syntax-module id)
+          (resolve-global n (or (and (syntax? id)
+                                     (syntax-module id))
                                 mod)))
          ((string? n)
-          (resolve-lexical n (if (syntax? id)
-                                 (syntax-module id)
+          (resolve-lexical n (or (and (syntax? id)
+                                      (syntax-module id))
                                  mod)))
          (else
           (error "unexpected id-var-name" id w n)))))
@@ -1042,19 +1027,23 @@
 
     (define wrap
       (lambda (x w defmod)
-        (cond
-         ((and (null? (wrap-marks w)) (null? (wrap-subst w))) x)
-         ((syntax? x)
-          (make-syntax
-           (syntax-expression x)
-           (join-wraps w (syntax-wrap x))
-           (syntax-module x)))
-         ((null? x) x)
-         (else (make-syntax x w defmod)))))
+        (source-wrap x w #f defmod)))
 
-    (define source-wrap
-      (lambda (x w s defmod)
-        (wrap (decorate-source x s) w defmod)))
+    (define (wrap-syntax x w defmod)
+      (make-syntax (syntax-expression x)
+                   w
+                   (or (syntax-module x) defmod)
+                   (syntax-sourcev x)))
+    (define (source-wrap x w s defmod)
+      (cond
+       ((and (null? (wrap-marks w))
+             (null? (wrap-subst w))
+             (not defmod)
+             (not s))
+        x)
+       ((syntax? x) (wrap-syntax x (join-wraps w (syntax-wrap x)) defmod))
+       ((null? x) x)
+       (else (make-syntax x w defmod (or s (datum-sourcev x))))))
 
     ;; expanding
 
@@ -1095,7 +1084,7 @@
               ;; the special case of names that are pairs.  See the
               ;; comments in id-var-name for more.
               (extend-ribcage! ribcage id
-                               (cons (syntax-module id)
+                               (cons (or (syntax-module id) mod)
                                      (wrap var top-wrap mod)))))
           (define (macro-introduced-identifier? id)
             (not (equal? (wrap-marks (syntax-wrap id)) '(top))))
@@ -1266,7 +1255,7 @@
         ;; we twingle the definition of eval-when to the bindings of
         ;; eval, load, expand, and compile, which is totally unintended.
         ;; So do a symbolic match instead.
-        (let ((result (strip when-list empty-wrap)))
+        (let ((result (strip when-list)))
           (let lp ((l result))
             (if (null? l)
                 result
@@ -1348,7 +1337,7 @@
                        ;; need to make sure the fmod information is
                        ;; propagated back correctly -- hence this
                        ;; consing.
-                       (values 'global-call (make-syntax fval w fmod)
+                       (values 'global-call (make-syntax fval w fmod fs)
                                e e w s mod)))
                   ((macro)
                    (syntax-type (expand-macro fval e r w s rib mod)
@@ -1441,8 +1430,8 @@
                                     (if (syntax? value)
                                         (syntax-expression value)
                                         value)
-                                    (if (syntax? value)
-                                        (syntax-module value)
+                                    (or (and (syntax? value)
+                                             (syntax-module value))
                                         mod))
             e r w s mod))
           ((primitive-call)
@@ -1452,7 +1441,7 @@
                               value
                               (map (lambda (e) (expand e r w mod))
                                    #'(e ...))))))
-          ((constant) (build-data s (strip (source-wrap e w s mod) empty-wrap)))
+          ((constant) (build-data s (strip e)))
           ((global) (build-global-reference s value mod))
           ((call) (expand-call (expand (car e) r w mod) e r w s mod))
           ((begin-form)
@@ -1536,18 +1525,21 @@
                      (let ((ms (wrap-marks w)) (ss (wrap-subst w)))
                        (if (and (pair? ms) (eq? (car ms) the-anti-mark))
                            ;; output is from original text
-                           (make-syntax
-                            (syntax-expression x)
-                            (make-wrap (cdr ms) (if rib (cons rib (cdr ss)) (cdr ss)))
-                            (syntax-module x))
+                           (wrap-syntax
+                            x
+                            (make-wrap (cdr ms)
+                                       (if rib
+                                           (cons rib (cdr ss))
+                                           (cdr ss)))
+                            mod)
                            ;; output introduced by macro
-                           (make-syntax
-                            (decorate-source (syntax-expression x) s)
+                           (wrap-syntax
+                            x
                             (make-wrap (cons m ms)
                                        (if rib
                                            (cons rib (cons 'shift ss))
                                            (cons 'shift ss)))
-                            (syntax-module x))))))
+                            mod)))))
                 
                   ((vector? x)
                    (let* ((n (vector-length x))
@@ -1630,7 +1622,7 @@
                    ((null? var-ids) tail)
                    ((not (car var-ids))
                     (lp (cdr var-ids) (cdr vars) (cdr vals)
-                        (make-seq src ((car vals)) tail)))
+                        (make-seq (sourcev->alist src) ((car vals)) tail)))
                    (else
                     (let ((var-ids (map (lambda (id)
                                           (if id (syntax->datum id) '_))
@@ -1640,7 +1632,8 @@
                           (vals (map (lambda (expand-expr id)
                                        (if id
                                            (expand-expr)
-                                           (make-seq src (expand-expr)
+                                           (make-seq (sourcev->alist src)
+                                                     (expand-expr)
                                                      (build-void src))))
                                      (reverse vals) (reverse var-ids))))
                       (build-letrec src #t var-ids vars vals tail)))))))
@@ -1781,8 +1774,9 @@
              (call-with-values
                  (lambda () (resolve-identifier
                              (make-syntax '#{ $sc-ellipsis }#
-                                                 (syntax-wrap e)
-                                                 (syntax-module e))
+                                          (syntax-wrap e)
+                                          (or (syntax-module e) mod)
+                                          #f)
                              empty-wrap r mod #f))
                (lambda (type value mod)
                  (if (eq? type 'ellipsis)
@@ -1998,36 +1992,19 @@
 
     ;; data
 
-    ;; strips syntax objects down to top-wrap
-    ;;
-    ;; since only the head of a list is annotated by the reader, not each pair
-    ;; in the spine, we also check for pairs whose cars are annotated in case
-    ;; we've been passed the cdr of an annotated list
+    ;; strips syntax objects, recursively.
 
-    (define strip
-      (lambda (x w)
-        (if (top-marked? w)
-            x
-            (let f ((x x))
-              (cond
-               ((syntax? x)
-                (strip (syntax-expression x) (syntax-wrap x)))
-               ((pair? x)
-                (let ((a (f (car x))) (d (f (cdr x))))
-                  (if (and (eq? a (car x)) (eq? d (cdr x)))
-                      x
-                      (cons a d))))
-               ((vector? x)
-                (let ((old (vector->list x)))
-                  (let ((new (map f old)))
-                    ;; inlined and-map with two args
-                    (let lp ((l1 old) (l2 new))
-                      (if (null? l1)
-                          x
-                          (if (eq? (car l1) (car l2))
-                              (lp (cdr l1) (cdr l2))
-                              (list->vector new)))))))
-               (else x))))))
+    (define (strip x)
+      (define (annotate proc datum)
+        (decorate-source datum (proc x)))
+      (cond
+       ((syntax? x)
+        (annotate syntax-sourcev (strip (syntax-expression x))))
+       ((pair? x)
+        (annotate datum-sourcev (cons (strip (car x)) (strip (cdr x)))))
+       ((vector? x)
+        (annotate datum-sourcev (list->vector (strip (vector->list x)))))
+       (else x)))
 
     ;; lexical variables
 
@@ -2100,9 +2077,15 @@
     (global-extend 'core 'quote
                    (lambda (e r w s mod)
                      (syntax-case e ()
-                       ((_ e) (build-data s (strip #'e w)))
+                       ((_ e) (build-data s (strip #'e)))
                        (_ (syntax-violation 'quote "bad syntax"
                                             (source-wrap e w s mod))))))
+
+    (global-extend 'core 'quote-syntax
+                   (lambda (e r w s mod)
+                     (syntax-case (source-wrap e w s mod) ()
+                       ((_ e) (build-data s #'e))
+                       (e (syntax-violation 'quote "bad syntax" #'e)))))
 
     (global-extend
      'core 'syntax
@@ -2174,6 +2157,7 @@
                       (lambda ()
                         (gen-syntax src #'(e1 e2 ...) r maps ellipsis? mod))
                     (lambda (e maps) (values (gen-vector e) maps))))
+                 (() (values '(quote ()) maps))
                  (_ (values `(quote ,e) maps))))))
 
        (define gen-ref
@@ -2344,8 +2328,9 @@
                         (let ((id (if (symbol? #'dots)
                                       '#{ $sc-ellipsis }#
                                       (make-syntax '#{ $sc-ellipsis }#
-                                                          (syntax-wrap #'dots)
-                                                          (syntax-module #'dots)))))
+                                                   (syntax-wrap #'dots)
+                                                   (syntax-module #'dots)
+                                                   (syntax-sourcev #'dots)))))
                           (let ((ids (list id))
                                 (labels (list (gen-label)))
                                 (bindings (list (make-binding 'ellipsis (source-wrap #'dots w s mod)))))
@@ -2502,7 +2487,8 @@
                                  (remodulate (syntax-expression x) mod)
                                  (syntax-wrap x)
                                  ;; hither the remodulation
-                                 mod))
+                                 mod
+                                 (syntax-sourcev x)))
                                ((vector? x)
                                 (let* ((n (vector-length x)) (v (make-vector n)))
                                   (do ((i 0 (fx+ i 1)))
@@ -2512,8 +2498,8 @@
                      (syntax-case e (@@ primitive)
                        ((_ primitive id)
                         (and (id? #'id)
-                             (equal? (cdr (if (syntax? #'id)
-                                              (syntax-module #'id)
+                             (equal? (cdr (or (and (syntax? #'id)
+                                                   (syntax-module #'id))
                                               mod))
                                      '(guile)))
                         ;; Strip the wrap from the identifier and return top-wrap
@@ -2631,7 +2617,7 @@
                                     (call-with-values
                                         (lambda () (cvt (syntax (x ...)) n ids))
                                       (lambda (p ids) (values (vector 'vector p) ids))))
-                                   (x (values (vector 'atom (strip p empty-wrap)) ids))))))
+                                   (x (values (vector 'atom (strip p)) ids))))))
                          (cvt pattern 0 '())))
 
                      (define build-dispatch-call
@@ -2759,18 +2745,26 @@
             (nonsymbol-id? x)))
 
     (set! datum->syntax
-          (lambda (id datum)
-            (make-syntax datum (syntax-wrap id)
-                                (syntax-module id))))
+          (lambda* (id datum #:key source)
+            (make-syntax datum
+                         (if id
+                             (syntax-wrap id)
+                             empty-wrap)
+                         (if id
+                             (syntax-module id)
+                             #f)
+                         (cond
+                          ((not source) (datum-sourcev datum))
+                          ((and (list? source) (and-map pair? source)) source)
+                          ((and (vector? source) (= 3 (vector-length source)))
+                           source)
+                          (else (syntax-sourcev source))))))
 
     (set! syntax->datum
           ;; accepts any object, since syntax objects may consist partially
           ;; or entirely of unwrapped, nonsymbolic data
           (lambda (x)
-            (strip x empty-wrap)))
-
-    (set! syntax-source
-          (lambda (x) (source-annotation x)))
+            (strip x)))
 
     (set! generate-temporaries
           (lambda (ls)
@@ -2800,14 +2794,15 @@
             (throw 'syntax-error who message
                    (or (source-annotation subform)
                        (source-annotation form))
-                   (strip form empty-wrap)
-                   (and subform (strip subform empty-wrap)))))
+                   (strip form)
+                   (strip subform))))
 
     (let ()
       (define (%syntax-module id)
         (arg-check nonsymbol-id? id 'syntax-module)
         (let ((mod (syntax-module id)))
-          (and (not (equal? mod '(primitive)))
+          (and mod
+               (not (equal? mod '(primitive)))
                (cdr mod))))
 
       (define* (syntax-local-binding id #:key (resolve-syntax-parameters? #t))
@@ -2826,7 +2821,7 @@
                                 (syntax-expression id)
                                 (strip-anti-mark (syntax-wrap id))
                                 r
-                                (syntax-module id)
+                                (or (syntax-module id) mod)
                                 resolve-syntax-parameters?))
              (lambda (type value mod)
                (case type
@@ -2841,9 +2836,8 @@
                       (values 'global (cons value (cdr mod)))))
                  ((ellipsis)
                   (values 'ellipsis
-                          (make-syntax (syntax-expression value)
-                                              (anti-mark (syntax-wrap value))
-                                              (syntax-module value))))
+                          (wrap-syntax value (anti-mark (syntax-wrap value))
+                                       mod)))
                  (else (values 'other #f))))))))
 
       (define (syntax-locally-bound-identifiers id)
@@ -2897,7 +2891,7 @@
             (match-each (syntax-expression e)
                         p
                         (join-wraps w (syntax-wrap e))
-                        (syntax-module e)))
+                        (or (syntax-module e) mod)))
            (else #f))))
 
       (define match-each+
@@ -2993,7 +2987,7 @@
                             (match-empty (vector-ref p 1) r)
                             (combine xr* r))))))
               ((free-id) (and (id? e) (free-id=? (wrap e w mod) (vector-ref p 1)) r))
-              ((atom) (and (equal? (vector-ref p 1) (strip e w)) r))
+              ((atom) (and (equal? (vector-ref p 1) (strip e)) r))
               ((vector)
                (and (vector? e)
                     (match (vector->list e) (vector-ref p 1) w r mod))))))))
@@ -3010,7 +3004,7 @@
              p
              (join-wraps w (syntax-wrap e))
              r
-             (syntax-module e)))
+             (or (syntax-module e) mod)))
            (else (match* e p w r mod)))))
 
       (set! $sc-dispatch
@@ -3273,7 +3267,7 @@ names."
           ;; In Guile, (cons #'a #'b) is the same as #'(a . b).
           (cons #'begin
                 (let lp ()
-                  (let ((x (read p)))
+                  (let ((x (read-syntax p)))
                     (if (eof-object? x)
                         #'()
                         (cons (datum->syntax #'filename x) (lp))))))))))))

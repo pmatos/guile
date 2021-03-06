@@ -375,11 +375,17 @@ If returning early, return the return value of F."
 (define (resolve-module . args)
   #f)
 
+;; The definition of "include" needs read-syntax.  Replaced later.
+(define (read-syntax port)
+  (let ((datum (read port)))
+    (if (eof-object? datum)
+        datum
+        (datum->syntax #f datum))))
+
 ;; API provided by psyntax
 (define syntax-violation #f)
 (define datum->syntax #f)
 (define syntax->datum #f)
-(define syntax-source #f)
 (define identifier? #f)
 (define generate-temporaries #f)
 (define bound-identifier=? #f)
@@ -863,9 +869,19 @@ VALUE."
 ;;; {Arrays}
 ;;;
 
-(define (array-shape a)
+(define (array-shape array)
+  "Return a list as long as the rank of @var{array}, where each element
+is a two-element list containing the lower and upper bounds of the
+corresponding dimension.
+
+@lisp
+(array-dimensions (make-array 'foo '(-1 3) 5)) @result{} ((-1 3) (0 5))
+@end lisp
+
+See also: @code{array-dimensions}, @code{array-rank}."
+
   (map (lambda (ind) (if (number? ind) (list 0 (+ -1 ind)) ind))
-       (array-dimensions a)))
+       (array-dimensions array)))
 
 
 
@@ -2216,6 +2232,19 @@ name extensions listed in %load-extensions."
 ;;;
 ;;; Reader code for various "#c" forms.
 ;;;
+
+(define read-hash-procedures
+  (fluid->parameter %read-hash-procedures))
+
+(define (read-hash-procedure ch)
+  (assq-ref (read-hash-procedures) ch))
+
+(define (read-hash-extend ch proc)
+  (let ((alist (read-hash-procedures)))
+    (read-hash-procedures
+     (if proc
+         (assq-set! alist ch proc)
+         (assq-remove! alist ch)))))
 
 (define read-eval? (make-fluid #f))
 (read-hash-extend #\.
@@ -4622,6 +4651,19 @@ R7RS."
 
 
 
+;;; {`read' implementation in Scheme.}
+;;;
+;;;
+
+(call-with-values (lambda ()
+                    (include-from-path "ice-9/read.scm")
+                    (values read read-syntax))
+  (lambda (read* read-syntax*)
+    (set! read read*)
+    (set! read-syntax read-syntax*)))
+
+
+
 ;;; {Threads}
 ;;;
 
@@ -4673,7 +4715,8 @@ R7RS."
                      make-syntax
                      syntax-expression
                      syntax-wrap
-                     syntax-module)))
+                     syntax-module
+                     syntax-sourcev)))
 
 
 

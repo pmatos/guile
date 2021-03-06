@@ -7,6 +7,85 @@ Please send Guile bug reports to bug-guile@gnu.org.
 
 Changes in 3.0.6 (since 3.0.5)
 
+* Notable changes
+
+** Reimplement dynamic library loading ("dlopening") without libltdl
+
+Guile used to load dynamic libraries with libltdl, a library provided by
+the Libtool project.
+
+Libltdl provided some compatibility benefits when loading shared
+libraries made with older toolchains on older operating systems.
+However, no system from the last 10 years or so appears to need such a
+thick compatibility layer.
+
+Besides being an unmaintained dependency of limited utility, libltdl
+also has the negative aspect that in its search for libraries to load,
+it could swallow useful errors for libraries that are found but not
+loadable, instead showing just errors for search path candidates that
+are not found.
+
+Guile now implements dynamic library loading directly in terms of the
+standard "dlopen" interface, providing a limited shim for platforms with
+similar functionality exposed under different names (MinGW).
+
+This change has a few practical impacts to Guile users.  There is a new
+library search path variable, `GUILE_EXTENSIONS_PATH'.  Also, errors when
+loading a library fails now have better errors.  And Guile no longer has
+a libltdl dependency.
+
+Although Guile no longer uses libltdl, for backwards compatibility Guile
+still adds `LTDL_LIBRARY_PATH' to the loadable library search path, and
+includes ad-hoc logic to support uninstalled dynamically loadable
+libraries via also adding the ".libs" subdirectories of
+`LTDL_LIBRARY_PATH' elements.  See "Foreign Libraries" in the
+documentation for a full discussion.
+
+** New `read' implementation in Scheme
+
+Guile's `read' procedure has been rewritten in Scheme.  Compared to the
+C reader (which still exists for bootstrapping reasons), the new
+implementation is more maintainable, more secure, more debuggable, all
+while faithfully reproducing all quirks from Guile's previous reader
+implemented in C.  Also, the Scheme reader is finally compatible with
+suspendable ports, allowing REPL implementations to be built with
+lightweight concurrency packages such as the third-party "Fibers"
+library.  Calls to `read' from Scheme as well as calls to `scm_read'
+from C use the new reader.
+
+The Scheme implementation is currently about 60% as fast as the
+now-inaccessible C implementation, and we hope to close the gap over
+time.  Bug reports very welcome.
+
+** Scheme compiler uses `read-syntax' for better debugging
+
+The new Scheme reader also shares implementation with the new
+`read-syntax' procedure, which annotates each datum with source location
+information.  Guile's compiler can use this to provide better
+source-level debugging for Scheme programs.  Note that this can slightly
+increase compiled file sizes, though this is mitigated by some assembler
+optimizations.
+
+** Syntax objects record source locations
+
+When compiling a file that defines a macro, the output will usually
+include a number of syntax objects as literals.  Previously, these
+literals had no source information; now they do.  This should improve
+debugging.
+
+** Optimized run-time relocations
+
+The code that patches references between statically-allocated Scheme
+data has been optimized to be about 30% shorter than before or so, which
+can significantly decrease compiled file size and run-time
+initialization latency.
+
+** Updated Gnulib
+
+The Gnulib compatibility library has been updated, for the first time
+since 2017 or so.  We expect no functional change but look forward to
+any bug reports.
+
 * New interfaces and functionality
 
 ** `call-with-port'
@@ -16,6 +95,49 @@ See "Ports" in the manual.
 ** `call-with-input-bytevector', `call-with-output-bytevector'
 
 See "Bytevector Ports" in the manual.
+
+** `GUILE_EXTENSIONS_PATH' environment variable.
+
+See "Environment Variables" in the manual.
+
+** `mkdtemp' and `mkstemp'
+
+See "File System" in the manual.  There is still `mkstemp!' but we
+recommend that new code uses `mkstemp', which does not mutate the
+contents of the "template" argument string.
+
+** `(system foreign-library)' module
+
+See the newly reorganized "Foreign Function Interface", for details.
+These new interfaces replace `dynamic-link', `dynamic-pointer' and
+similar, which will eventually be deprecated.
+
+** `read-syntax'
+
+See "Annotated Scheme Read" in the manual.
+
+** `syntax-sourcev'
+** `quote-syntax'
+
+** Optimized "eof-object?"
+
+* Bug fixes
+
+** Fix reverse-list->string docstring
+** Fix R7RS "member" result when no item found
+** Fix make-transcoded-port on input+output ports
+** Fix many bugs that prevented Guile from building on MinGW
+** Fix many bugs that prevented Guile's test suite from running on MinGW
+
+Thanks to Andrey Ivanov, Rob Browning, Erik Dominikus, Göran Weinholt,
+and Michael Gran.
+
+* New deprecations
+
+** `dynamic-unlink'
+
+This function now has no effect; Guile will not unload dynamically
+linked modules, as that can destabilize the system.
 
 * Incompatible changes
 

@@ -105,12 +105,8 @@ AC_PROG_LIBTOOL
 
 AM_CONDITIONAL([HAVE_SHARED_LIBRARIES], [test "x$enable_shared" = "xyes"])
 
-dnl Check for libltdl.
-AC_LIB_HAVE_LINKFLAGS([ltdl], [], [#include <ltdl.h>],
-  [lt_dlopenext ("foo");])
-if test "x$HAVE_LIBLTDL" != "xyes"; then
-  AC_MSG_ERROR([GNU libltdl (Libtool) not found, see README.])
-fi
+# Some systems provide dlopen via libc; others require -ldl.
+AC_SEARCH_LIBS([dlopen], [dl])
 
 AC_CHECK_PROG(have_makeinfo, makeinfo, yes, no)
 AM_CONDITIONAL(HAVE_MAKEINFO, test "$have_makeinfo" = yes)
@@ -653,22 +649,26 @@ fi
 AC_CACHE_SAVE
 
 dnl GMP tests
-AC_LIB_HAVE_LINKFLAGS([gmp],
-  [],
-  [#include <gmp.h>],
-  [mpz_import (0, 0, 0, 0, 0, 0, 0);])
 
-if test "x$HAVE_LIBGMP" != "xyes"; then
-  AC_MSG_ERROR([GNU MP 4.1 or greater not found, see README])
-fi
+SCM_I_GSC_ENABLE_MINI_GMP=0
+AC_ARG_ENABLE(mini-gmp,
+  [AS_HELP_STRING([--enable-mini-gmp],
+                  [use mini-gmp instead of the full GMP library])])
 
-dnl `mpz_inits' and `mpz_clears' appeared in GMP 5.0.0.
-save_CPPFLAGS="$CPPFLAGS"
-if test "x$LIBGMP_PREFIX" != "x"; then
-   CPPFLAGS="-I$LIBGMP_PREFIX $CPPFLAGS"
+if test "x$enable_mini_gmp" = xyes || test "x$enable_mini_gmp" = xy; then
+  SCM_I_GSC_ENABLE_MINI_GMP=1
+else
+  AC_LIB_HAVE_LINKFLAGS([gmp],[],[#include <gmp.h>], [mpz_import (0,0,0,0,0,0,0);])
+  if test "x$HAVE_LIBGMP" != "xyes"; then
+    AC_MSG_ERROR([GNU MP 4.1 or greater not found])
+  fi
+  if test "x$LIBGMP_PREFIX" != "x"; then
+    CPPFLAGS="-I$LIBGMP_PREFIX $CPPFLAGS"
+  fi
+  AC_CHECK_DECLS([mpz_inits], [], [], [[#include <gmp.h>]])
 fi
-AC_CHECK_DECLS([mpz_inits], [], [], [[#include <gmp.h>]])
-CPPFLAGS="$save_CPPFLAGS"
+AC_SUBST([SCM_I_GSC_ENABLE_MINI_GMP])
+AM_CONDITIONAL([USE_MINI_GMP], [test "x$enable_mini_gmp" = "xyes"])
 
 dnl GNU libunistring is checked for by Gnulib's `libunistring' module.
 if test "x$LTLIBUNISTRING" = "x"; then
@@ -711,6 +711,7 @@ dnl i18n tests
 #fi
 #AC_CHECK_FUNCS([bindtextdomain textdomain])
 AM_GNU_GETTEXT([external], [need-ngettext])
+AM_GNU_GETTEXT_VERSION([0.18.1])
 
 ### Some systems don't declare some functions.  On such systems, we
 ### need to at least provide our own K&R-style declarations.
