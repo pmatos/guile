@@ -54,12 +54,14 @@ AC_CHECK_FUNCS(rl_get_keymap)
 
 AC_CACHE_CHECK([for rl_getc_function pointer in readline],
 		 ac_cv_var_rl_getc_function,
-		 [AC_TRY_LINK([
+		 [AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 #include <stdio.h>
-#include <readline/readline.h>],
-			      [printf ("%ld", (long) rl_getc_function)],
-			      [ac_cv_var_rl_getc_function=yes],
-			      [ac_cv_var_rl_getc_function=no])])
+#include <readline/readline.h>
+]],[[
+printf ("%ld", (long) rl_getc_function)
+]])],
+                                 [ac_cv_var_rl_getc_function=yes],
+                                 [ac_cv_var_rl_getc_function=no])])
 if test "${ac_cv_var_rl_getc_function}" = "yes"; then
   AC_DEFINE(HAVE_RL_GETC_FUNCTION, 1,
     [Define if your readline library has the rl_getc_function variable.])
