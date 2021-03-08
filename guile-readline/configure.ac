@@ -1,4 +1,4 @@
-AC_PREREQ(2.50)
+AC_PREREQ([2.71])
 
 dnl Don't use "echo -n", which is not portable (e.g., not available on
 dnl MacOS X).  Instead, use `patsubst' to remove the newline.

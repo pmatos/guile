@@ -26,7 +26,7 @@ Boston, MA 02110-1301, USA.
 
 ]])
 
-AC_PREREQ(2.61)
+AC_PREREQ([2.71])
 
 dnl  `patsubst' here deletes the newline which "echo" prints.  We can't use
 dnl  "echo -n" since -n is not portable (see autoconf manual "Limitations of
