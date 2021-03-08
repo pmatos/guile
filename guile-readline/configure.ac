@@ -16,8 +16,9 @@ AM_INIT_AUTOMAKE([foreign no-define])
 
 AC_PROG_INSTALL
 AC_PROG_CC
-AC_LIBTOOL_WIN32_DLL
-AC_PROG_LIBTOOL
+AC_CANONICAL_HOST
+
+LT_INIT([win32-dll])
 
 dnl
 dnl Check for Winsock and other functionality on Win32 (*not* CygWin)
