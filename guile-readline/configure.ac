@@ -23,8 +23,15 @@ LT_INIT([win32-dll])
 dnl
 dnl Check for Winsock and other functionality on Win32 (*not* CygWin)
 dnl
-AC_CYGWIN
-AC_MINGW32
+case $host_os in
+  *cygwin* ) CYGWIN=yes;;
+	 * ) CYGWIN=no;;
+esac
+case $host_os in
+  *mingw32* ) MINGW32=yes;;
+	  * ) MINGW32=no;;
+esac
+
 EXTRA_DEFS=""
 if test "$MINGW32" = "yes" ; then
     if test $enable_shared = yes ; then
