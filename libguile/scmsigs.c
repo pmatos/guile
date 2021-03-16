@@ -1,4 +1,4 @@
-/* Copyright 1995-2002,2004,2006-2009,2011,2013-2014,2017-2018
+/* Copyright 1995-2002,2004,2006-2009,2011,2013-2014,2017-2018,2021
      Free Software Foundation, Inc.
 
    This file is part of Guile.
@@ -358,9 +358,9 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
     query_only = 1;
   else if (scm_is_integer (handler))
     {
-      long handler_int = scm_to_long (handler);
+      intptr_t handler_int = scm_to_intptr_t (handler);
 
-      if (handler_int == (long) SIG_DFL || handler_int == (long) SIG_IGN)
+      if (handler_int == (intptr_t) SIG_DFL || handler_int == (intptr_t) SIG_IGN)
 	{
 #ifdef HAVE_SIGACTION
 	  action.sa_handler = (SIGRETTYPE (*) (int)) handler_int;
@@ -456,7 +456,7 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
 	orig_handlers[csig] = old_action;
     }
   if (old_action.sa_handler == SIG_DFL || old_action.sa_handler == SIG_IGN)
-    old_handler = scm_from_long ((long) old_action.sa_handler);
+    old_handler = scm_from_intptr_t ((intptr_t) old_action.sa_handler);
 
   scm_dynwind_end ();
 
@@ -477,7 +477,7 @@ SCM_DEFINE (scm_sigaction_for_thread, "sigaction", 1, 3, 0,
 	orig_handlers[csig] = old_chandler;
     }
   if (old_chandler == SIG_DFL || old_chandler == SIG_IGN)
-    old_handler = scm_from_long ((long) old_chandler);
+    old_handler = scm_from_intptr_t ((intptr_t) old_chandler);
 
   scm_dynwind_end ();
 
@@ -741,8 +741,8 @@ scm_init_scmsigs ()
     }
 
   scm_c_define ("NSIG", scm_from_long (NSIG));
-  scm_c_define ("SIG_IGN", scm_from_long ((long) SIG_IGN));
-  scm_c_define ("SIG_DFL", scm_from_long ((long) SIG_DFL));
+  scm_c_define ("SIG_IGN", scm_from_intptr_t ((intptr_t) SIG_IGN));
+  scm_c_define ("SIG_DFL", scm_from_intptr_t ((intptr_t) SIG_DFL));
 #ifdef SA_NOCLDSTOP
   scm_c_define ("SA_NOCLDSTOP", scm_from_long (SA_NOCLDSTOP));
 #endif
