@@ -2060,6 +2060,16 @@ non-locally, that exit determines the continuation."
 ;;; {Load Paths}
 ;;;
 
+(eval-when (eval)
+  (define (compile-time-file-name-convention)
+    (let ((target ((@ (system base target) target-type))))
+      (cond ((equal? target %host-type)
+             (system-file-name-convention))
+            ((string-contains-ci target "mingw")
+             'windows)
+            (else
+             'posix)))))
+
 (let-syntax ((compile-time-case
               (lambda (stx)
                 (syntax-case stx ()
@@ -2077,7 +2087,9 @@ non-locally, that exit determines the continuation."
                               #'(begin form ...)
                               (next-clause #'(clauses ...))))))))))))
   ;; emacs: (put 'compile-time-case 'scheme-indent-function 1)
-  (compile-time-case (system-file-name-convention)
+  (compile-time-case (or (and (defined? 'compile-time-file-name-convention)
+                              (compile-time-file-name-convention))
+                         'posix)
     ((posix)
      (define (file-name-separator? c)
        (char=? c #\/))
