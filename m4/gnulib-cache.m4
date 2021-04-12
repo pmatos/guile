@@ -78,6 +78,7 @@
 #  func \
 #  gendocs \
 #  getaddrinfo \
+#  gethostname \
 #  getlogin \
 #  getpeername \
 #  getsockname \
@@ -177,6 +178,7 @@ gl_MODULES([
   func
   gendocs
   getaddrinfo
+  gethostname
   getlogin
   getpeername
   getsockname
