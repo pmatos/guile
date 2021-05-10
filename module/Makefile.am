@@ -29,6 +29,7 @@ $(VM_TARGETS): $(top_builddir)/libguile/vm-operations.h
 
 ice-9/boot-9.go: ice-9/boot-9.scm ice-9/quasisyntax.scm ice-9/r6rs-libraries.scm ice-9/r7rs-libraries.scm ice-9/read.scm
 ice-9/match.go: ice-9/match.scm ice-9/match.upstream.scm
+
 srfi/srfi-64.go: srfi/srfi-64.scm srfi/srfi-64/testing.scm
 $(nobase_ccache_DATA): ../bootstrap/ice-9/eval.go
 
@@ -179,6 +180,42 @@ SOURCES =					\
   language/bytecode.scm				\
   language/bytecode/spec.scm			\
 						\
+  language/cps.scm				\
+  language/cps/closure-conversion.scm		\
+  language/cps/compile-bytecode.scm		\
+  language/cps/compile-js.scm			\
+  language/cps/constructors.scm			\
+  language/cps/contification.scm		\
+  language/cps/cse.scm				\
+  language/cps/dce.scm				\
+  language/cps/effects-analysis.scm		\
+  language/cps/elide-values.scm			\
+  language/cps/handle-interrupts.scm		\
+  language/cps/intmap.scm			\
+  language/cps/intset.scm			\
+  language/cps/licm.scm				\
+  language/cps/optimize.scm			\
+  language/cps/peel-loops.scm			\
+  language/cps/primitives.scm			\
+  language/cps/prune-bailouts.scm		\
+  language/cps/prune-top-level-scopes.scm	\
+  language/cps/reify-primitives.scm		\
+  language/cps/renumber.scm			\
+  language/cps/rotate-loops.scm			\
+  language/cps/self-references.scm		\
+  language/cps/simplify.scm			\
+  language/cps/slot-allocation.scm		\
+  language/cps/spec.scm				\
+  language/cps/specialize-primcalls.scm		\
+  language/cps/specialize-numbers.scm		\
+  language/cps/split-rec.scm			\
+  language/cps/type-checks.scm			\
+  language/cps/type-fold.scm			\
+  language/cps/types.scm			\
+  language/cps/utils.scm			\
+  language/cps/verify.scm			\
+  language/cps/with-cps.scm			\
+						\
   language/ecmascript/tokenize.scm		\
   language/ecmascript/parse.scm			\
   language/ecmascript/impl.scm			\
@@ -197,6 +234,16 @@ SOURCES =					\
   language/elisp/runtime/function-slot.scm	\
   language/elisp/runtime/value-slot.scm		\
   language/elisp/spec.scm			\
+						\
+  language/javascript.scm			\
+  language/javascript/simplify.scm		\
+  language/javascript/spec.scm			\
+						\
+  language/js-il.scm				\
+  language/js-il/inlining.scm			\
+  language/js-il/compile-javascript.scm		\
+  language/js-il/runtime.js			\
+  language/js-il/spec.scm			\
 						\
   language/scheme/compile-tree-il.scm		\
   language/scheme/decompile-tree-il.scm		\
@@ -265,6 +312,7 @@ SOURCES =					\
   scripts/frisk.scm				\
   scripts/generate-autoload.scm			\
   scripts/help.scm				\
+  scripts/jslink.scm				\
   scripts/lint.scm				\
   scripts/list.scm				\
   scripts/punify.scm				\

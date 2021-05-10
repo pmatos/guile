@@ -1,6 +1,6 @@
 ;;; Continuation-passing style (CPS) intermediate language (IL)
 
-;; Copyright (C) 2015 Free Software Foundation, Inc.
+;; Copyright (C) 2015, 2017 Free Software Foundation, Inc.
 
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -25,6 +25,7 @@
   #:use-module (language cps intmap)
   #:use-module (language cps optimize)
   #:use-module (language cps compile-bytecode)
+  #:use-module (language cps compile-js)
   #:export (cps))
 
 (define (read-cps port env)
@@ -47,6 +48,7 @@
   #:title	"CPS Intermediate Language"
   #:reader	read-cps
   #:printer	write-cps
-  #:compilers   `((bytecode . ,compile-bytecode))
+  #:compilers   `((bytecode . ,compile-bytecode)
+                  (js-il . ,compile-js))
   #:for-humans? #f
   #:lowerer     make-cps-lowerer)
