@@ -44,6 +44,9 @@
                  port)
                exp port))
 
+(define (choose-compiler target optimization-level opts)
+  (cons 'bytecode compile-bytecode))
+
 (define-language cps
   #:title	"CPS Intermediate Language"
   #:reader	read-cps
@@ -51,4 +54,5 @@
   #:compilers   `((bytecode . ,compile-bytecode)
                   (js-il . ,compile-js))
   #:for-humans? #f
-  #:lowerer     make-cps-lowerer)
+  #:lowerer     make-cps-lowerer
+  #:compiler-chooser choose-compiler)
