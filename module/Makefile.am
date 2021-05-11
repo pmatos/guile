@@ -184,20 +184,19 @@ SOURCES =					\
   language/cps/closure-conversion.scm		\
   language/cps/compile-bytecode.scm		\
   language/cps/compile-js.scm			\
-  language/cps/constructors.scm			\
   language/cps/contification.scm		\
   language/cps/cse.scm				\
   language/cps/dce.scm				\
+  language/cps/devirtualize-integers.scm	\
+  language/cps/elide-arity-checks.scm		\
   language/cps/effects-analysis.scm		\
-  language/cps/elide-values.scm			\
-  language/cps/handle-interrupts.scm		\
+  language/cps/graphs.scm			\
   language/cps/intmap.scm			\
   language/cps/intset.scm			\
   language/cps/licm.scm				\
+  language/cps/loop-instrumentation.scm		\
   language/cps/optimize.scm			\
   language/cps/peel-loops.scm			\
-  language/cps/primitives.scm			\
-  language/cps/prune-bailouts.scm		\
   language/cps/prune-top-level-scopes.scm	\
   language/cps/reify-primitives.scm		\
   language/cps/renumber.scm			\
@@ -209,6 +208,7 @@ SOURCES =					\
   language/cps/specialize-primcalls.scm		\
   language/cps/specialize-numbers.scm		\
   language/cps/split-rec.scm			\
+  language/cps/switch.scm			\
   language/cps/type-checks.scm			\
   language/cps/type-fold.scm			\
   language/cps/types.scm			\
