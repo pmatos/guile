@@ -184,7 +184,7 @@
      (make-const val))
     (($ $primcall name args)
      (make-primcall name (map make-id args)))
-    (($ $closure label nfree)
+    (($ $const-fun label nfree)
      (make-closure (make-kid label) nfree))
     (($ $values (val))
      ;; FIXME:
