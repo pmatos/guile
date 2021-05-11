@@ -45,7 +45,11 @@
                exp port))
 
 (define (choose-compiler target optimization-level opts)
-  (cons 'bytecode compile-bytecode))
+  (match (language-name target)
+    ['bytecode
+     (cons 'bytecode compile-bytecode)]
+    [(or 'js-il 'javascript)
+     (cons 'js-il compile-js)]))
 
 (define-language cps
   #:title	"CPS Intermediate Language"
