@@ -72,8 +72,8 @@
   (call-allocs allocation-call-allocs)
 
   ;; A map of LABEL to /parallel moves/.  Parallel moves shuffle locals
-  ;; into position for a $call, $callk, or $values, or shuffle returned
-  ;; values back into place in a $kreceive.
+  ;; into position for a $call, $callk, $calli, or $values, or shuffle
+  ;; returned values back into place in a $kreceive.
   ;;
   ;; A set of moves is expressed as an ordered list of (SRC . DST)
   ;; moves, where SRC and DST are slots.  This may involve a temporary
@@ -231,6 +231,9 @@ is an active call."
                      (let ((args (list->intset args)))
                        (intset-subtract (if proc (intset-add args proc) args)
                                         (intmap-ref live-out label))))
+                    (($ $kargs _ _ ($ $continue _ _ ($ $calli args callee)))
+                     (intset-subtract (list->intset (cons callee args))
+                                      (intmap-ref live-out label)))
                     (($ $kargs _ _ ($ $continue k _($ $values args)))
                      (match (intmap-ref cps k)
                        (($ $ktail) (list->intset args))
@@ -475,6 +478,8 @@ are comparable with eqv?.  A tmp slot may be used."
           (add-call-shuffles label k (cons proc args) shuffles))
          (($ $callk _ proc args)
           (add-call-shuffles label k (if proc (cons proc args) args) shuffles))
+         (($ $calli args callee)
+          (add-call-shuffles label k (append args (list callee)) shuffles))
          (($ $values args)
           (add-values-shuffles label k args shuffles))
          (_ shuffles)))
@@ -518,6 +523,8 @@ are comparable with eqv?.  A tmp slot may be used."
            (($ $continue _ _ ($ $callk _ proc args))
             (let ((nclosure (if proc 1 0)))
               (call-size label (+ nclosure (length args)) size)))
+           (($ $continue _ _ ($ $calli args callee))
+            (call-size label (1+ (length args)) size))
            (($ $continue _ _ ($ $values args))
             (shuffle-size (get-shuffles label) size))
            (_ size))))
@@ -604,6 +611,8 @@ are comparable with eqv?.  A tmp slot may be used."
           (allocate-call label (cons proc args) slots))
          (($ $callk _ proc args)
           (allocate-call label (if proc (cons proc args) args) slots))
+         (($ $calli args callee)
+          (allocate-call label (append args (list callee)) slots))
          (($ $values args)
           (allocate-values label k args slots))
          (_ slots)))
@@ -802,6 +811,9 @@ are comparable with eqv?.  A tmp slot may be used."
               (allocate-call label k (cons proc args) slots call-allocs live))
              (($ $continue k src ($ $callk _ proc args))
               (allocate-call label k (if proc (cons proc args) args)
+                             slots call-allocs live))
+             (($ $continue k src ($ $calli args callee))
+              (allocate-call label k (append args (list callee))
                              slots call-allocs live))
              (($ $continue k src ($ $values args))
               (allocate-values label k args slots call-allocs))

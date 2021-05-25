@@ -123,6 +123,13 @@
            (maybe-reset-frame (+ nclosure (length args))))
          (emit-handle-interrupts asm)
          (emit-tail-call-label asm k))
+        (($ $calli args callee)
+         (for-each (match-lambda
+                    ((src . dst) (emit-mov asm (from-sp dst) (from-sp src))))
+                   (lookup-parallel-moves label allocation))
+         (maybe-reset-frame (1+ (length args)))
+         (emit-handle-interrupts asm)
+         (emit-indirect-tail-call asm))
         (($ $values args)
          (for-each (match-lambda
                     ((src . dst) (emit-mov asm (from-sp dst) (from-sp src))))

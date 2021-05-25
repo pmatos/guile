@@ -619,16 +619,14 @@
           ((imm-s64-< (s12? a) b) load-s64 (s64-< a b))
           ((eq-constant? (imm16? b) a) load-const (eq? a b))
           (_ cps))))
-      (($ $kargs names vars ($ $continue k src ($ $call proc args)))
+      (($ $kargs names vars
+          ($ $continue k src
+             (and exp (or ($ $call) ($ $callk)))))
+       ;; No need to uniquify $calli as it is always a tail call.
        (with-cps cps
          (let$ k (uniquify-receive k))
          (setk label ($kargs names vars
-                       ($continue k src ($call proc args))))))
-      (($ $kargs names vars ($ $continue k src ($ $callk k* proc args)))
-       (with-cps cps
-         (let$ k (uniquify-receive k))
-         (setk label ($kargs names vars
-                       ($continue k src ($callk k* proc args))))))
+                       ($continue k src ,exp)))))
       (_ cps)))
 
   (with-fresh-name-state cps

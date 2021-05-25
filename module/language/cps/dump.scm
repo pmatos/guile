@@ -161,6 +161,9 @@
                (arg-list
                 (cons (if proc (format-var proc) "_")
                       (map format-var args)))))
+      (($ $calli args callee)
+       (format #f "calli ~a(~a)"
+               (format-var callee) (arg-list (map format-var args))))
       (($ $primcall name param args)
        (format-primcall name param args))
       (($ $values args)

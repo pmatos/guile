@@ -620,7 +620,7 @@ the LABELS that are clobbered by the effects of LABEL."
      &no-effects)
     ((or ($ $fun) ($ $rec))
      (&allocate &unknown-memory-kinds))
-    ((or ($ $call) ($ $callk))
+    ((or ($ $call) ($ $callk) ($ $calli))
      &all-effects)
     (($ $primcall name param args)
      (primitive-effects param name args))))
