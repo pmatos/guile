@@ -1625,6 +1625,35 @@ compile_tail_call_label_slow (scm_jit_state *j, const uint32_t *vcode)
 }
 
 static void
+compile_indirect_tail_call (scm_jit_state *j)
+{
+  ASSERT_HAS_REGISTER_STATE (SP_IN_REGISTER);
+  restore_reloadable_register_state (j, FP_IN_REGISTER);
+
+  // Pop the vcode from the stack.
+  emit_sp_ref_ptr (j, T0, 0);
+  jit_addi (j->jit, SP, SP, sizeof (union scm_vm_stack_element));
+  emit_store_sp (j);
+
+  j->frame_size_min--;
+  if (j->frame_size_max != INT32_MAX)
+    j->frame_size_max--;
+
+  // See if there is mcode.  If so, jump there.
+  emit_get_ip_relative_addr (j, T1, T0, 1);
+  emit_ldxi (j, T1, T1, 0);
+  add_slow_path_patch (j, jit_beqi (j->jit, T1, 0));
+  ASSERT_HAS_REGISTER_STATE (FP_IN_REGISTER | SP_IN_REGISTER);
+  jit_jmpr (j->jit, T1);
+}
+static void
+compile_indirect_tail_call_slow (scm_jit_state *j)
+{
+  emit_store_ip (j, T0);
+  emit_exit (j);
+}
+
+static void
 compile_instrument_entry (scm_jit_state *j, void *data)
 {
 }

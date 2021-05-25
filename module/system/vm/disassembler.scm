@@ -1,6 +1,6 @@
 ;;; Guile bytecode disassembler
 
-;;; Copyright (C) 2001, 2009-2010, 2012-2015, 2017-2020 Free Software Foundation, Inc.
+;;; Copyright (C) 2001, 2009-2010, 2012-2015, 2017-2021 Free Software Foundation, Inc.
 ;;;
 ;;; This library is free software; you can redistribute it and/or
 ;;; modify it under the terms of the GNU Lesser General Public
@@ -541,7 +541,7 @@ address of that offset."
   (define non-fallthrough-set
     (static-opcode-set halt
                        throw throw/value throw/value+data
-                       tail-call tail-call-label
+                       tail-call tail-call-label indirect-tail-call
                        return-values
                        subr-call foreign-call continuation-call
                        j jtable))
@@ -613,7 +613,9 @@ address of that offset."
                                 #xfff))
                  (nlocals (ash (bytevector-u32-native-ref code pos) -20)))
              (+ nargs nlocals))))
-      ((call call-label tail-call tail-call-label expand-apply-argument)
+      ((expand-apply-argument
+        call call-label
+        indirect-tail-call tail-call tail-call-label)
        #'(lambda (code pos size) #f))
       ((shuffle-down)
        #'(lambda (code pos size)

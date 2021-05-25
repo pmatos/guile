@@ -283,6 +283,7 @@
 
             emit-call
             emit-call-label
+            emit-indirect-tail-call
             emit-tail-call
             emit-tail-call-label
             (emit-instrument-entry* . emit-instrument-entry)

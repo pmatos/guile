@@ -3478,7 +3478,22 @@ VM_NAME (scm_thread *thread)
       NEXT (4);
     }
 
-  VM_DEFINE_OP (167, unused_167, NULL, NOP)
+  /* indirect-tail-call _:24
+   *
+   * Pop a function pointer off the top of the stack and tail-call it.
+   */
+  VM_DEFINE_OP (167, indirect_tail_call, "indirect-tail-call", OP1 (X32))
+    {
+      VM_ASSERT (FRAME_LOCALS_COUNT () > 0, abort());
+
+      uint32_t *code = SP_REF_PTR (0);
+      VP->sp = sp = sp + 1;
+
+      ip = code;
+
+      NEXT (0);
+    }
+
   VM_DEFINE_OP (168, unused_168, NULL, NOP)
   VM_DEFINE_OP (169, unused_169, NULL, NOP)
   VM_DEFINE_OP (170, unused_170, NULL, NOP)
