@@ -74,6 +74,7 @@ SOURCES =					\
   language/cps/specialize-numbers.scm		\
   language/cps/split-rec.scm			\
   language/cps/switch.scm			\
+  language/cps/tailify.scm			\
   language/cps/type-checks.scm			\
   language/cps/type-fold.scm			\
   language/cps/types.scm			\
