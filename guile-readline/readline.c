@@ -379,16 +379,17 @@ SCM_DEFINE (scm_filename_completion_function, "filename-completion-function", 2,
 #define FUNC_NAME s_scm_filename_completion_function
 {
   char *s;
-  SCM ans;
   char *c_text = scm_to_locale_string (text);
 #ifdef HAVE_RL_FILENAME_COMPLETION_FUNCTION
   s = rl_filename_completion_function (c_text, scm_is_true (continuep));
 #else
   s = filename_completion_function (c_text, scm_is_true (continuep));
 #endif
-  ans = scm_take_locale_string (s);
   free (c_text);
-  return ans;
+  if (!s)
+    return SCM_BOOL_F;
+
+  return scm_take_locale_string (s);
 }
 #undef FUNC_NAME
 
@@ -430,12 +431,19 @@ static void init_bouncing_parens ();
 static void
 init_bouncing_parens ()
 {
-  if (strncmp (rl_get_keymap_name (rl_get_keymap ()), "vi", 2))
+  Keymap km = rl_get_keymap ();
+  if (km)
     {
-      rl_bind_key (')', match_paren);
-      rl_bind_key (']', match_paren);
-      rl_bind_key ('}', match_paren);
+      if (strncmp (rl_get_keymap_name (km), "vi", 2))
+        {
+          rl_bind_key (')', match_paren);
+          rl_bind_key (']', match_paren);
+          rl_bind_key ('}', match_paren);
+        }
     }
+  else
+    scm_error (scm_misc_error_key, "", "readline has not been properly initialized",
+               SCM_EOL, SCM_EOL);
 }
 
 static int

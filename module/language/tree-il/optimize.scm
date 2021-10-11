@@ -1,6 +1,6 @@
 ;;; Tree-il optimizer
 
-;; Copyright (C) 2009, 2010-2015, 2018-2020 Free Software Foundation, Inc.
+;; Copyright (C) 2009, 2010-2015, 2018-2021 Free Software Foundation, Inc.
 
 ;;;; This library is free software; you can redistribute it and/or
 ;;;; modify it under the terms of the GNU Lesser General Public
@@ -39,22 +39,27 @@
                         'proc)))))
   (let ((verify     (or (lookup #:verify-tree-il? debug verify-tree-il)
                         (lambda (exp) exp)))
+        (modulify   (lookup #:resolve-free-vars? resolve-free-vars))
         (resolve    (lookup #:resolve-primitives? primitives resolve-primitives))
         (expand     (lookup #:expand-primitives? primitives expand-primitives))
         (letrectify (lookup #:letrectify? letrectify))
         (seal?      (assq-ref opts #:seal-private-bindings?))
+        (xinline?   (assq-ref opts #:cross-module-inlining?))
         (peval      (lookup #:partial-eval? peval))
-        (eta-expand (lookup #:eta-expand? eta-expand)))
+        (eta-expand (lookup #:eta-expand? eta-expand))
+        (inlinables (lookup #:inlinable-exports? inlinable-exports)))
     (define-syntax-rule (run-pass! (proc exp arg ...))
       (when proc (set! exp (verify (proc exp arg ...)))))
     (lambda (exp env)
       (verify exp)
+      (run-pass! (modulify exp))
       (run-pass! (resolve exp env))
       (run-pass! (expand exp))
       (run-pass! (letrectify exp #:seal-private-bindings? seal?))
       (run-pass! (fix-letrec exp))
-      (run-pass! (peval exp env))
+      (run-pass! (peval exp env #:cross-module-inlining? xinline?))
       (run-pass! (eta-expand exp))
+      (run-pass! (inlinables exp))
       exp)))
 
 (define (optimize x env opts)

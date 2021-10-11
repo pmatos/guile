@@ -53,6 +53,7 @@ SOURCES =					\
   language/cps/cse.scm				\
   language/cps/dce.scm				\
   language/cps/devirtualize-integers.scm	\
+  language/cps/dump.scm				\
   language/cps/elide-arity-checks.scm		\
   language/cps/effects-analysis.scm		\
   language/cps/graphs.scm			\
@@ -90,10 +91,12 @@ SOURCES =					\
   language/tree-il/effects.scm			\
   language/tree-il/eta-expand.scm		\
   language/tree-il/fix-letrec.scm		\
+  language/tree-il/inlinable-exports.scm	\
   language/tree-il/letrectify.scm		\
   language/tree-il/optimize.scm			\
   language/tree-il/peval.scm			\
   language/tree-il/primitives.scm		\
+  language/tree-il/resolve-free-vars.scm	\
   language/tree-il/spec.scm			\
 						\
   ice-9/and-let-star.scm			\

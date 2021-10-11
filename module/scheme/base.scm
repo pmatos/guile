@@ -56,10 +56,8 @@
             bytevector bytevector-append
             string->vector vector->string
             (r7:string->utf8 . string->utf8)
-            (r7:vector-copy . vector-copy)
             (r7:vector->list . vector->list)
-            (r7:vector-fill! . vector-fill!)
-            vector-copy! vector-append vector-for-each vector-map
+            vector-append vector-for-each vector-map
             (r7:bytevector-copy . bytevector-copy)
             (r7:bytevector-copy! . bytevector-copy!)
             (r7:utf8->string . utf8->string)
@@ -116,7 +114,7 @@
    (char-ready? . u8-ready?)
    unless
    unquote unquote-splicing values
-   vector
+   vector vector-copy vector-copy! vector-fill!
    vector-length vector-ref vector-set! vector?
    when with-exception-handler write-char
    zero?))
@@ -433,41 +431,11 @@
 
 ;;; vector
 
-(define (%subvector v start end)
-  (define mlen (- end start))
-  (define out (make-vector (- end start)))
-  (define (itr r)
-    (if (= r mlen)
-      out
-      (begin
-        (vector-set! out r (vector-ref v (+ start r)))
-        (itr (+ r 1)))))
-  (itr 0))
-
-(define r7:vector-copy
-  (case-lambda*
-    ((v) (vector-copy v))
-    ((v start #:optional (end (vector-length v)))
-     (%subvector v start end))))
-
-(define* (vector-copy! target tstart source
-                       #:optional (sstart 0) (send (vector-length source)))
-  "Copy a block of elements from SOURCE to TARGET, both of which must be
-vectors, starting in TARGET at TSTART and starting in SOURCE at SSTART,
-ending when SEND - SSTART elements have been copied.  It is an error for
-TARGET to have a length less than TSTART + (SEND - SSTART).  SSTART
-defaults to 0 and SEND defaults to the length of SOURCE."
-  (let ((tlen (vector-length target))
-        (slen (vector-length source)))
-    (if (< tstart sstart)
-        (vector-move-left!  source sstart send target tstart)
-        (vector-move-right! source sstart send target tstart))))
-
 (define r7:vector->list
   (case-lambda*
     ((v) (vector->list v))
     ((v start #:optional (end (vector-length v)))
-     (vector->list (%subvector v start end)))))
+     (vector->list (vector-copy v start end)))))
 
 (define vector-map
   (case-lambda*
@@ -518,16 +486,7 @@ defaults to 0 and SEND defaults to the length of SOURCE."
   (case-lambda*
     ((v) (list->string (vector->list v)))
     ((v start #:optional (end (vector-length v)))
-     (vector->string (%subvector v start end)))))
-
-(define r7:vector-fill!
-  (case-lambda*
-    ((vec fill) (vector-fill! vec fill))
-    ((vec fill start #:optional (end (vector-length vec)))
-     (let lp ((r start))
-       (unless (= r end)
-         (vector-set! vec r fill)
-         (lp (+ r 1)))))))
+     (vector->string (vector-copy v start end)))))
 
 (define (%subbytevector bv start end)
   (define mlen (- end start))
