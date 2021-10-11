@@ -26,6 +26,7 @@
   #:use-module (language cps optimize)
   #:use-module (language cps compile-bytecode)
   #:use-module (language cps compile-js)
+  #:use-module (language cps compile-js)
   #:export (cps))
 
 (define (read-cps port env)
@@ -46,10 +47,10 @@
 
 (define (choose-compiler target optimization-level opts)
   (match (language-name target)
-    ['bytecode
-     (cons 'bytecode compile-bytecode)]
     [(or 'js-il 'javascript)
-     (cons 'js-il compile-js)]))
+     (cons 'js-il compile-js)]
+    [_
+     (cons 'bytecode compile-bytecode)]))
 
 (define-language cps
   #:title	"CPS Intermediate Language"
