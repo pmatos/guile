@@ -29,7 +29,6 @@
   #:export (compile-js))
 
 (define intmap-select (@@ (language cps compile-bytecode) intmap-select))
-(define lower-cps (@@ (language cps optimize) lower-cps))
 
 (define (compile-js exp env opts)
   ;; TODO: I should special case the compilation for the initial fun,
@@ -44,7 +43,7 @@
                                 accum))
                        (compute-reachable-functions map 0)
                        '()))
-  (values (make-program (intmap->program (lower-cps exp opts))) env env))
+  (values (make-program (intmap->program exp)) env env))
 
 
 (define (compile-fun cps kfun)
