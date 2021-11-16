@@ -528,7 +528,7 @@ AC_CHECK_HEADERS([assert.h crt_externs.h])
 #   sendfile - non-POSIX, found in glibc
 #
 AC_CHECK_FUNCS([DINFINITY DQNAN cexp chsize clog clog10 ctermid         \
-  fesetround ftime ftruncate fchown fchmod fchdir			\
+  fesetround ftime ftruncate fchown fchmod fchdir readlinkat		\
   getcwd geteuid getsid							\
   gettimeofday getuid getgid gmtime_r ioctl lstat mkdir mkdtemp mknod   \
   nice readlink rename rmdir setegid seteuid                            \
