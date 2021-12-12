@@ -24,6 +24,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <c-strcase.h>
+#include <ctype.h>
 #include <process.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +35,7 @@
 #include <fcntl.h>
 
 #include "gc.h"        /* for scm_*alloc, scm_strdup */
+#include "filename.h"
 #include "threads.h"   /* for scm_i_scm_pthread_mutex_lock */
 
 #include "posix-w32.h"
@@ -1255,4 +1257,42 @@ dlerror_w32 ()
   else
     snprintf (dlerror_str, DLERROR_LEN, "error %ld: %s", (long) dw, msg_buf);
   return dlerror_str;
+}
+
+/* Use upcase drive letter in NAME.  */
+static char *
+canonicalize_device_name (char *name)
+{
+  if (name == NULL)
+    return name;
+
+  if (HAS_DEVICE (name))
+    name[0] = toupper (name[0]);
+
+  return name;
+}
+
+/* Replace any use of '\\' by '/' in NAME.  */
+static char *
+slashify_file_name (char *name)
+{
+  if (name == NULL)
+    return name;
+
+  for (char *p = name; *p; p++)
+    if (ISSLASH (*p))
+      *p = '/';
+  return name;
+}
+
+#undef canonicalize_file_name
+
+/* Also canonicalize use of drive letter and '/' for NAME.  */
+char *
+canonicalize_file_name_mingw (const char *name)
+{
+  char *canon = canonicalize_file_name (name);
+  canonicalize_device_name (canon);
+  slashify_file_name (canon);
+  return canon;
 }

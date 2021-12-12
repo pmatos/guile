@@ -110,4 +110,7 @@ SCM_INTERNAL char *dlerror_w32 (void);
 #define RTLD_GLOBAL 4
 #define RTLD_LOCAL 8
 
+#define canonicalize_file_name canonicalize_file_name_mingw
+char *canonicalize_file_name_mingw (const char *name);
+
 #endif /* SCM_POSIX_W32_H */

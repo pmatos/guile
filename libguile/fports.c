@@ -62,6 +62,9 @@
 #include "pairs.h"
 #include "ports-internal.h"
 #include "posix.h"
+#if __MINGW32__
+#include "posix-w32.h"
+#endif
 #include "read.h"
 #include "strings.h"
 #include "symbols.h"
