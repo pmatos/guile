@@ -2062,7 +2062,7 @@ non-locally, that exit determines the continuation."
 
 (eval-when (eval)
   (define (compile-time-file-name-convention)
-    (let ((target (or "FIXME" ((@ (system base target) target-type)))))
+    (let ((target (or "mingw" "FIXME" ((@ (system base target) target-type)))))
       (cond ((equal? target %host-type)
              (system-file-name-convention))
             ((string-contains-ci target "mingw")
