@@ -84,6 +84,9 @@
 (define-public guile-3.0-mingw
   (package
     (inherit guile-3.0-patched)
+    (source (origin (inherit (package-source guile-3.0-patched))
+                    (patches
+                     (search-patches "guile-mingw-file-name-convention.patch"))))
     (name "guile-mingw")
     (native-inputs
      `(("self" ,guile-3.0-patched)

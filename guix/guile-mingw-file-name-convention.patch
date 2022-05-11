@@ -1,0 +1,32 @@
+From c51b9ff375834d4999978a50d6798289d923de53 Mon Sep 17 00:00:00 2001
+From: "Jan (janneke) Nieuwenhuizen" <janneke@gnu.org>
+Date: Wed, 11 May 2022 16:30:52 +0200
+Subject: [PATCH] REMOVEME mingw: Hardcode compile-time-file-name-convention to
+ 'mingw.
+
+FIXME Apply this patch only when compiling for mingw.
+      Temporary hack until we have a proper fix to determine
+      compile-time-file-name-convention
+
+* module/ice-9/boot-9.scm (compile-time-file-name-convention): Hardcode
+to 'mingw instead of 'posix.
+---
+ module/ice-9/boot-9.scm | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/module/ice-9/boot-9.scm b/module/ice-9/boot-9.scm
+index 198a887c1..c024cc095 100644
+--- a/module/ice-9/boot-9.scm
++++ b/module/ice-9/boot-9.scm
+@@ -2062,7 +2062,7 @@ non-locally, that exit determines the continuation."
+ 
+ (eval-when (eval)
+   (define (compile-time-file-name-convention)
+-    (let ((target (or "FIXME" ((@ (system base target) target-type)))))
++    (let ((target (or "mingw" "FIXME" ((@ (system base target) target-type)))))
+       (cond ((equal? target %host-type)
+              (system-file-name-convention))
+             ((string-contains-ci target "mingw")
+-- 
+2.35.1
+
